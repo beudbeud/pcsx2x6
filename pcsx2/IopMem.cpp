@@ -7,6 +7,7 @@
 #include "ps2/pgif.h" // for PSX kernel TTY in iopMemWrite32
 #include "SPU2/spu2.h"
 #include "DEV9/DEV9.h"
+#include "DEV9/ACSRAM.h"
 #include "IopHw.h"
 
 uptr *psxMemWLUT = nullptr;
@@ -26,6 +27,8 @@ void iopMemAlloc()
 	psxMemRLUT = psxMemWLUT + 0x2000; //(uptr*)_aligned_malloc(0x10000 * sizeof(uptr),16);
 
 	iopMem = reinterpret_cast<IopVM_MemoryAllocMess*>(SysMemory::GetIOPMem());
+	/// TODO: remove me after SRAM is handled per-game instead of per-emu
+	ACSRAM::Clear(); 
 }
 
 void iopMemRelease()
@@ -114,6 +117,14 @@ u8 iopMemRead8(u32 mem)
 	else if (t == 0x1f40)
 	{
 		return psxHw4Read8(mem);
+	}
+	else if (t == 0x1250) //ACSRAM
+	{
+		return ACSRAM::Read8(mem);
+	}
+	else if (t == 0x1400) // ACRAM
+	{
+		
 	}
 	else
 	{
