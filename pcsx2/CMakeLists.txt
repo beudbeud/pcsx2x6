@@ -315,10 +315,13 @@ set(pcsx2DEV9Sources
 	DEV9/smap.cpp
 	DEV9/sockets.cpp
 	DEV9/DEV9.cpp
-	DEV9/ACSRAM.cpp
 	DEV9/flash.cpp
 	DEV9/pcap_io.cpp
 	DEV9/net.cpp
+#ARCADE
+	DEV9/ACRAM.cpp
+	DEV9/ACSRAM.cpp
+	DEV9/ACATA.cpp
 	)
 
 # DEV9 headers
