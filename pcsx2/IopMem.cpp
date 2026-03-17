@@ -7,7 +7,10 @@
 #include "ps2/pgif.h" // for PSX kernel TTY in iopMemWrite32
 #include "SPU2/spu2.h"
 #include "DEV9/DEV9.h"
+#include "DEV9/ACATA.h"
+#include "DEV9/ACRAM.h"
 #include "DEV9/ACSRAM.h"
+#include "DEV9/ACJV.h"
 #include "IopHw.h"
 
 uptr *psxMemWLUT = nullptr;
@@ -114,19 +117,22 @@ u8 iopMemRead8(u32 mem)
 			default:
 				return psxHu8(mem);
 		}
-	}
-	else if (t == 0x1f40)
+	} else if (t == 0x1f40)
 	{
 		return psxHw4Read8(mem);
-	}
-	else if (t == 0x1250) //ACSRAM
+	} else if (t == 0x1250) //ACSRAM
 	{
 		return ACSRAM::Read8(mem);
-	}
-	else if (t == 0x1400) // ACRAM
+	} else if (t == ACRAM_RANGE) // ACRAM
 	{
+		Console.Error("ACRAM_RANGE:r08:%08X\n", mem);
+		return 0;
 		
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+		Console.Error("ACATA_RANGE:r08:%08X\n", mem);
+		return 0;
 	}
+
 	else
 	{
 		const u8* p = (const u8*)(psxMemRLUT[mem >> 16]);
@@ -146,6 +152,7 @@ u8 iopMemRead8(u32 mem)
 
 u16 iopMemRead16(u32 mem)
 {
+	u16 V;
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
@@ -160,6 +167,15 @@ u16 iopMemRead16(u32 mem)
 			default:
 				return psxHu16(mem);
 		}
+	}
+	else if (t == ACSRAM_RANGE) {
+		return ACSRAM::Read16(mem);
+	} else if (t == ACRAM_RANGE) {
+		return ACRAM::Read16(mem);
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+		V = ACATA::read16(mem);
+    	Console.Error("%-16s %08X:  %04X", "ACATA::read16", mem, V);
+		return V;
 	}
 	else
 	{
@@ -220,6 +236,9 @@ u32 iopMemRead32(u32 mem)
 			default:
 				return psxHu32(mem);
 		}
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+		Console.Error("%-16s %08X:  %08X", "ACATA::Read32", mem, ACATA::REGS[mem]);
+		return ACATA::REGS[mem];
 	} else
 	{
 		//see also Hw.c
@@ -332,6 +351,17 @@ void iopMemWrite16(u32 mem, u16 value)
 				psxHu16(mem) = value;
 				break;
 		}
+	
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+    	Console.Error("%-16s %08X = %04X", "ACATA::write16", mem, value);
+		ACATA::write16(mem, value);
+	} else if (t == JVFIRM_RANGE) {
+		//Console.Error("JVFIRM:w16:%08X", mem);
+	} else if (t == ACRAM_RANGE) {
+		ACRAM::Write16(mem, value);
+		
+	} else if (t == ACSRAM_RANGE) {
+		ACSRAM::Write16(mem, value);
 	} else
 	{
 		u8* p = (u8 *)(psxMemWLUT[mem >> 16]);
@@ -405,6 +435,8 @@ void iopMemWrite32(u32 mem, u32 value)
 				psxHu32(mem) = value;
 			break;
 		}
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+		Console.Error("%-16s %08X:  %08X", "ACATA::Write32", mem, value);
 	} else
 	{
 		//see also Hw.c
