@@ -324,6 +324,7 @@ set(pcsx2DEV9Sources
 	DEV9/ACATA.cpp
 	DEV9/ACATA_IO.cpp
 	DEV9/ACATAPI.cpp
+	DEV9/ACJV.cpp
 	)
 
 # DEV9 headers
