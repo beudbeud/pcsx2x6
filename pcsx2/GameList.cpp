@@ -143,6 +143,8 @@ const char* GameList::RegionToString(Region region, bool translate)
 		TRANSLATE_NOOP("GameList", "PAL-SW"),
 		TRANSLATE_NOOP("GameList", "PAL-SWI"),
 		TRANSLATE_NOOP("GameList", "PAL-UK"),
+		TRANSLATE_NOOP("GameList", "System246"),
+		TRANSLATE_NOOP("GameList", "System256"),
 	};
 
 	const char* name = names.at(static_cast<int>(region));
@@ -185,6 +187,8 @@ const char* GameList::RegionToFlagFilename(Region region)
 		"se",  // PAL-SW
 		"ch",  // PAL-SWI
 		"gb",  // PAL-UK
+		"246B", // SYSTEM246
+		"256", // SYSTEM256
 	};
 
 	return flag_names.at(static_cast<int>(region));
@@ -245,6 +249,11 @@ void GameList::FillBootParametersForEntry(VMBootParameters* params, const Entry*
 		params->source_type = params->filename.empty() ? CDVD_SourceType::NoDisc : CDVD_SourceType::Iso;
 		params->elf_override = entry->path;
 	}
+	else if (entry->type == GameList::EntryType::ARCADE) {
+		params->filename = entry->path;
+		params->source_type = CDVD_SourceType::NoDisc;
+		params->elf_override = entry->path;
+	}
 	else
 	{
 		params->filename.clear();
@@ -280,13 +289,16 @@ bool GameList::GetAcConfListEntry(const std::string& filename, GameList::Entry* 
 			return false;
 		}
 		
-		std::string basedir = Path::ToNativePath(Path::GetDirectory(filename));
+		std::string basedir = Path::ToNativePath(Path::GetDirectory(filename))+FS_OSPATH_SEPARATOR_CHARACTER;
+		std::string subdir = INI.GetStringValue("data", "subdir");
+		if (subdir != "") basedir = Path::AppendDirectory(basedir, subdir);
+		//Console.WriteLnFmt("basedir:'{}', subdir:'{}'", basedir, subdir);
 		std::string s_acmedia, s_imgname;
 			
 			
 		entry->path = Path::Combine(basedir, INI.GetStringValue("data", "elf"));
 		entry->serial.clear();
-		entry->region = Region::Other;
+		entry->region = INI.GetStringValue("game", "platform") == "256" ? Region::SYSTEM256 : Region::SYSTEM246;
 		entry->type = EntryType::ELF;
 		entry->compatibility_rating = CompatibilityRating::Unknown;
 		entry->crc = 0x00000000;
