@@ -122,12 +122,6 @@ u8 iopMemRead8(u32 mem)
 	} else if (t == 0x1f40)
 	{
 		return psxHw4Read8(mem);
-	} else if (t == ACRAM_RANGE) {
-		Console.Error("ACRAM_RANGE:r08:%08X\n", mem);
-		return 0;
-	} else if ((t & 0xFF00) == ACATA_RANGE) {
-		Console.Error("ACATA_RANGE:r08:%08X\n", mem);
-		return 0;
 	}
 
 	else
