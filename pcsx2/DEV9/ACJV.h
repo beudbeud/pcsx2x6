@@ -1,9 +1,12 @@
 #pragma once
-#include <map>
+#include <span>
 #include "MemoryTypes.h"
 #include "common/Pcsx2Types.h"
 #include "common/Pcsx2Defs.h"
 #include "common/ARCADE.h"
+
+class SettingsInterface;
+struct InputBindingInfo;
 
 #define ACJV_BASE_ADDDR 0x12400000
 #define ACJV_RANGE      0x1240
@@ -33,12 +36,42 @@ enum BOARDID {
 };
 
 namespace ACJV {
+    enum : u32
+    {
+        NUM_DIP_SWITCHES = 4,
+    };
+
+    static constexpr const char* CONFIG_SECTION = "JVS";
+    static constexpr const char* TRANSLATION_CONTEXT = "JVS";
+
+    struct DIPSwitchInfo
+    {
+        const char* name;
+        const char* display_name;
+        const char* toggle_bind_name;
+        bool default_value;
+    };
+
     extern bool enabled;
 
     u16 Read16(u32 addr);
     void Write16(u32 addr, u16 val);
     extern enum BOARDID CurrentBoardID;
     extern u16 ButtonState[JVS_PLAYER_COUNT];
+
+    std::span<const DIPSwitchInfo> GetDIPSwitches();
+    const DIPSwitchInfo& GetTestModeDIPSwitch();
+    const DIPSwitchInfo& GetVideoVoltageDIPSwitch();
+    const DIPSwitchInfo& GetMonitorSyncFrequencyDIPSwitch();
+    const DIPSwitchInfo& GetVideoSyncSplitDIPSwitch();
+    std::span<const InputBindingInfo> GetDIPSwitchBindings();
+
+    bool GetDIPSwitchState(u32 index);
+    void SetDIPSwitchState(u32 index, bool enabled);
+    void ToggleDIPSwitchState(u32 index);
+    void LoadConfig(const SettingsInterface& si);
+    void CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface& src_si, bool copy_settings = true, bool copy_bindings = true);
+    void SetDefaultConfiguration(SettingsInterface& si);
 }
 
 

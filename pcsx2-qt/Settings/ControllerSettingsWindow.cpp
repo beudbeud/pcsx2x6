@@ -6,8 +6,10 @@
 #include "Settings/ControllerGlobalSettingsWidget.h"
 #include "Settings/ControllerBindingWidget.h"
 #include "Settings/HotkeySettingsWidget.h"
+#include "Settings/JVSControlsWidget.h"
 
 #include "pcsx2/INISettingsInterface.h"
+#include "pcsx2/DEV9/ACJV.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Sio.h"
 #include "pcsx2/VMManager.h"
@@ -69,7 +71,7 @@ void ControllerSettingsWindow::setCategory(Category category)
 			break;
 
 		case Category::HotkeySettings:
-			m_ui.settingsCategory->setCurrentRow(5);
+			m_ui.settingsCategory->setCurrentRow(6);
 			break;
 
 		default:
@@ -130,6 +132,7 @@ void ControllerSettingsWindow::onNewProfileClicked()
 			auto lock = Host::GetSettingsLock();
 			Pad::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true, true, copy_hotkey_bindings);
 			USB::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true, true);
+			ACJV::CopyConfiguration(&temp_si, *Host::Internal::GetBaseSettingsLayer(), true, true);
 		}
 		else
 		{
@@ -138,6 +141,7 @@ void ControllerSettingsWindow::onNewProfileClicked()
 			temp_si.SetBoolValue("Pad", "UseProfileHotkeyBindings", copy_hotkey_bindings);
 			Pad::CopyConfiguration(&temp_si, *m_profile_interface, true, true, copy_hotkey_bindings);
 			USB::CopyConfiguration(&temp_si, *m_profile_interface, true, true);
+			ACJV::CopyConfiguration(&temp_si, *m_profile_interface, true, true);
 		}
 	}
 
@@ -168,6 +172,7 @@ void ControllerSettingsWindow::onApplyProfileClicked()
 		auto lock = Host::GetSettingsLock();
 		Pad::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true, true, copy_hotkey_bindings);
 		USB::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true, true);
+		ACJV::CopyConfiguration(Host::Internal::GetBaseSettingsLayer(), *m_profile_interface, true, true);
 	}
 	Host::CommitBaseSettingChanges();
 
@@ -420,6 +425,7 @@ void ControllerSettingsWindow::createWidgets()
 	m_ui.settingsCategory->clear();
 
 	m_global_settings = nullptr;
+	m_jvs_controls = nullptr;
 	m_hotkey_settings = nullptr;
 
 	{
@@ -486,6 +492,16 @@ void ControllerSettingsWindow::createWidgets()
 		item->setIcon(m_usb_bindings[port]->getIcon());
 		item->setData(Qt::UserRole, QVariant(MAX_PORTS + port));
 		m_ui.settingsCategory->addItem(item);
+	}
+
+	{
+		QListWidgetItem* item = new QListWidgetItem();
+		item->setText(tr("JVS Controls"));
+		item->setIcon(QIcon::fromTheme("buzz-controller-line"));
+		m_ui.settingsCategory->addItem(item);
+
+		m_jvs_controls = new JVSControlsWidget(m_ui.settingsContainer, this);
+		m_ui.settingsContainer->addWidget(m_jvs_controls);
 	}
 
 	// only add hotkeys if we're editing global settings

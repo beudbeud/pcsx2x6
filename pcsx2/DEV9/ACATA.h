@@ -68,7 +68,7 @@ namespace ACATA
     extern u16 R_CONTROL; // [W] Used to reset the bus or enable/disable interrupts.
     u16 read16(u32 addr);               // handle writes to ACATA MMIO
     void write16(u32 addr, u16 val);    // handle reads  to ACATA MMIO
-    u16 handle_dataR(u32 addr);          // handle reads  to 0x16000000 while ATA command
+	u16 handle_dataR(u32 addr);          // handle reads  to 0x16000000 while ATA command
     void handle_dataW(u32 addr, u16 val); // handle writes to 0x16000000 while ATA command
     void handle_cmd(u16 val);   // handle writes to 0x16070000, usually: ATA command requests
     extern ACMEDIATYPE MediaType;

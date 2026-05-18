@@ -17,6 +17,7 @@
 #include "USB/USB.h"
 #include "VMManager.h"
 #include "ps2/BiosTools.h"
+#include "DEV9/ACJV.h"
 #include "DEV9/ATA/HddCreate.h"
 #include "DEV9/pcap_io.h"
 #include "DEV9/sockets.h"
@@ -4078,6 +4079,7 @@ void FullscreenUI::ResetControllerSettings()
 				Pad::SetDefaultControllerConfig(*dsi);
 				Pad::SetDefaultHotkeyConfig(*dsi);
 				USB::SetDefaultConfiguration(dsi);
+				ACJV::SetDefaultConfiguration(*dsi);
 				ShowToast(std::string(), FSUI_STR("Controller settings reset to default."));
 			}
 		});
@@ -4113,6 +4115,7 @@ void FullscreenUI::DoLoadInputProfile()
 			SettingsInterface* dsi = GetEditingSettingsInterface();
 			Pad::CopyConfiguration(dsi, ssi, true, true, IsEditingGameSettings(dsi));
 			USB::CopyConfiguration(dsi, ssi, true, true);
+			ACJV::CopyConfiguration(dsi, ssi, true, true);
 			SetSettingsChanged(dsi);
 			ShowToast(std::string(), fmt::format(FSUI_FSTR("Input profile '{}' loaded."), title));
 			CloseChoiceDialog();
@@ -4127,6 +4130,7 @@ void FullscreenUI::DoSaveInputProfile(const std::string& name)
 	SettingsInterface* ssi = GetEditingSettingsInterface();
 	Pad::CopyConfiguration(&dsi, *ssi, true, true, IsEditingGameSettings(ssi));
 	USB::CopyConfiguration(&dsi, *ssi, true, true);
+	ACJV::CopyConfiguration(&dsi, *ssi, true, true);
 	if (dsi.Save())
 		ShowToast(std::string(), fmt::format(FSUI_FSTR("Input profile '{}' saved."), name));
 	else
@@ -4584,6 +4588,25 @@ void FullscreenUI::DrawControllerSettingsPage()
 				DrawSettingInfoSetting(bsi, section.c_str(), USB::GetConfigSubKey(type, si.name).c_str(), si, "USB");
 		}
 		ImGui::PopID();
+	}
+
+	MenuHeading(FSUI_ICONSTR(ICON_FA_SLIDERS, "JVS Controls"));
+	const std::span<const ACJV::DIPSwitchInfo> dip_switches = ACJV::GetDIPSwitches();
+	for (u32 i = 0; i < dip_switches.size(); i++)
+	{
+		const ACJV::DIPSwitchInfo& dip_switch = dip_switches[i];
+		if (DrawToggleSetting(bsi, Host::TranslateToCString(ACJV::TRANSLATION_CONTEXT, dip_switch.display_name), nullptr,
+				ACJV::CONFIG_SECTION, dip_switch.name, dip_switch.default_value, true, false))
+		{
+			ACJV::SetDIPSwitchState(i, bsi->GetBoolValue(ACJV::CONFIG_SECTION, dip_switch.name, dip_switch.default_value));
+		}
+	}
+
+	MenuHeading(FSUI_ICONSTR(ICON_FA_KEYBOARD, "JVS Control Bindings"));
+	for (const InputBindingInfo& bi : ACJV::GetDIPSwitchBindings())
+	{
+		DrawInputBindingButton(bsi, bi.bind_type, ACJV::CONFIG_SECTION, bi.name,
+			Host::TranslateToCString(ACJV::TRANSLATION_CONTEXT, bi.display_name), bi.icon_name, true);
 	}
 
 	EndMenuButtons();

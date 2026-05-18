@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include "DEV9/ACJV.h"
 #include "ImGui/ImGuiManager.h"
 #include "Input/InputManager.h"
 #include "Input/InputSource.h"
@@ -108,6 +109,7 @@ namespace InputManager
 	static float ApplySingleBindingScale(float sensitivity, float deadzone, float value);
 
 	static void AddHotkeyBindings(SettingsInterface& si, bool is_profile);
+	static void AddJVSBindings(SettingsInterface& si, bool is_profile);
 	static void AddPadBindings(SettingsInterface& si, u32 pad, bool is_profile);
 	static void AddUSBBindings(SettingsInterface& si, u32 port, bool is_profile);
 	static void UpdateContinuedVibration();
@@ -853,6 +855,21 @@ void InputManager::AddHotkeyBindings(SettingsInterface& si, bool is_profile)
 	}
 }
 
+void InputManager::AddJVSBindings(SettingsInterface& si, bool is_profile)
+{
+	for (const InputBindingInfo& bi : ACJV::GetDIPSwitchBindings())
+	{
+		const std::vector<std::string> bindings(si.GetStringList(ACJV::CONFIG_SECTION, bi.name));
+		if (bindings.empty())
+			continue;
+
+		AddBindings(bindings, InputButtonEventHandler{[dip_switch_index = static_cast<u32>(bi.bind_index)](s32 pressed) {
+			if (pressed > 0)
+				ACJV::ToggleDIPSwitchState(dip_switch_index);
+		}}, InputBindingInfo::Type::Button, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
+	}
+}
+
 void InputManager::AddPadBindings(SettingsInterface& si, u32 pad_index, bool is_profile)
 {
 	const Pad::ControllerType type = EmuConfig.Pad.Ports[pad_index].Type;
@@ -1547,6 +1564,7 @@ void InputManager::ReloadBindings(SettingsInterface& si, SettingsInterface& bind
 
 	// Hotkeys use the base configuration, except if the custom hotkeys option is enabled.
 	AddHotkeyBindings(hotkey_binding_si, is_hotkey_profile);
+	AddJVSBindings(binding_si, is_binding_profile);
 
 	// If there's an input profile, we load pad bindings from it alone, rather than
 	// falling back to the base configuration.

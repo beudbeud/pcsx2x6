@@ -105,7 +105,6 @@ void ACATA::handle_dataW(u32 addr, u16 val) { // writes at R_DATA
 
 u16 ACATA::handle_dataR(u32 addr) { // PIO read at R_DATA
     switch (ACATA::cmd_handled) {
-    case -1: break;
     case ATA_C_IDENTIFY_PACKET_DEVICE:
         if (ACATA::cmd_handledc < 256) {
             return ATA_R_IDENTIFY_PACKET_DEVICE[ACATA::cmd_handledc++];

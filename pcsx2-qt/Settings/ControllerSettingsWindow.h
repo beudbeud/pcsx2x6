@@ -18,6 +18,7 @@
 class ControllerGlobalSettingsWidget;
 class ControllerBindingWidget;
 class HotkeySettingsWidget;
+class JVSControlsWidget;
 class USBDeviceWidget;
 
 class SettingsInterface;
@@ -97,6 +98,7 @@ private:
 	ControllerGlobalSettingsWidget* m_global_settings = nullptr;
 	std::array<ControllerBindingWidget*, MAX_PORTS> m_port_bindings{};
 	std::array<USBDeviceWidget*, USB::NUM_PORTS> m_usb_bindings{};
+	JVSControlsWidget* m_jvs_controls = nullptr;
 	HotkeySettingsWidget* m_hotkey_settings = nullptr;
 
 	QList<QPair<QString, QString>> m_device_list;

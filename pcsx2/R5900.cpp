@@ -614,7 +614,7 @@ void eeloadHook()
 		if (argc > 1)
 			elfname = (char*)PSM(memRead32(cpuRegs.GPR.n.a1.UD[0] + 4)); // argv[1] in OSDSYS's invocation "EELOAD <game ELF>"
 		if (elfname.substr(0, 4) == "ac0:") {
-			Console.WriteLn("ACLOAD detected: running '%s'", elfname);
+			Console.WriteLn("ACLOAD detected: running '%s'", elfname.c_str());
 		}
 		// This code fires if the user chooses "full boot". First the Sony Computer Entertainment screen appears. This is the result
 		// of an EELOAD call that does not want to accept launch arguments (but we patch it to do so in eeloadHook2() in fast boot

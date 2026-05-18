@@ -83,6 +83,7 @@
 #include "common/ARCADE.h"
 
 #include "DEV9/ACATA.h"
+#include "DEV9/ACJV.h"
 #include "DEV9/ACSRAM.h"
 
 namespace VMManager
@@ -598,6 +599,7 @@ void VMManager::SetDefaultSettings(
 	{
 		Pad::SetDefaultControllerConfig(si);
 		USB::SetDefaultConfiguration(&si);
+		ACJV::SetDefaultConfiguration(si);
 	}
 	if (hotkeys)
 		Pad::SetDefaultHotkeyConfig(si);
@@ -616,6 +618,7 @@ void VMManager::LoadSettings()
 	SettingsInterface* si = Host::GetSettingsInterface();
 	LoadCoreSettings(*si);
 	Pad::LoadConfig(*si);
+	ACJV::LoadConfig(*si);
 	Host::LoadSettings(*si, lock);
 	InputManager::ReloadSources(*si, lock);
 	LoadInputBindings(*si, lock);

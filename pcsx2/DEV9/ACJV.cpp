@@ -1,7 +1,11 @@
 #include "common/Console.h"
 #include "ACMACROS.h"
 #include "ACJV.h"
+#include "Config.h"
+#include "Host.h"
+#include "common/SettingsInterface.h"
 #include <array>
+#include <string>
 
 enum ACJVCMD {
 	UNKNOWN = -2, // unknown CMD, should fire up a warning for developer
@@ -43,9 +47,122 @@ enum BOARDID ACJV::CurrentBoardID = RAYS_PCB;
 
 extern u16 ACJV::ButtonState[JVS_PLAYER_COUNT] = {0,0};
 
-u16 dipsw = (DIPS::TESTMODE|DIPS::VIDEO_VOLTAGE|DIPS::MONITOR_SYNCFREQ|DIPS::VIDEO_SYNC_SPLIT);
+static constexpr u16 DEFAULT_DIP_SWITCH_STATE =
+    (DIPS::TESTMODE | DIPS::VIDEO_VOLTAGE | DIPS::MONITOR_SYNCFREQ | DIPS::VIDEO_SYNC_SPLIT);
+
+static constexpr const std::array<u16, ACJV::NUM_DIP_SWITCHES> s_dip_switch_masks = {{
+	DIPS::TESTMODE,
+	DIPS::VIDEO_VOLTAGE,
+	DIPS::MONITOR_SYNCFREQ,
+	DIPS::VIDEO_SYNC_SPLIT,
+}};
+
+static constexpr const std::array<ACJV::DIPSwitchInfo, ACJV::NUM_DIP_SWITCHES> s_dip_switch_info = {{
+	{"TestMode", TRANSLATE_NOOP("JVS", "Test Mode"), "ToggleTestMode", true},
+	{"VideoVoltage", TRANSLATE_NOOP("JVS", "Video Voltage"), "ToggleVideoVoltage", true},
+	{"MonitorSyncFrequency", TRANSLATE_NOOP("JVS", "Monitor Sync Frequency"), "ToggleMonitorSyncFrequency", true},
+	{"VideoSyncSplit", TRANSLATE_NOOP("JVS", "Video Sync Split"), "ToggleVideoSyncSplit", true},
+}};
+
+static constexpr const std::array<InputBindingInfo, ACJV::NUM_DIP_SWITCHES> s_dip_switch_bindings = {{
+	{s_dip_switch_info[0].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Test Mode"), nullptr, InputBindingInfo::Type::Button, 0, GenericInputBinding::Unknown},
+	{s_dip_switch_info[1].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Video Voltage"), nullptr, InputBindingInfo::Type::Button, 1, GenericInputBinding::Unknown},
+	{s_dip_switch_info[2].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Monitor Sync Frequency"), nullptr, InputBindingInfo::Type::Button, 2, GenericInputBinding::Unknown},
+	{s_dip_switch_info[3].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Video Sync Split"), nullptr, InputBindingInfo::Type::Button, 3, GenericInputBinding::Unknown},
+}};
+
+static u16 s_dip_switch_state = DEFAULT_DIP_SWITCH_STATE;
 u32 lastRead = 0x0;
 
+std::span<const ACJV::DIPSwitchInfo> ACJV::GetDIPSwitches()
+{
+	return s_dip_switch_info;
+}
+
+const ACJV::DIPSwitchInfo& ACJV::GetTestModeDIPSwitch()
+{
+	return s_dip_switch_info[0];
+}
+
+const ACJV::DIPSwitchInfo& ACJV::GetVideoVoltageDIPSwitch()
+{
+	return s_dip_switch_info[1];
+}
+
+const ACJV::DIPSwitchInfo& ACJV::GetMonitorSyncFrequencyDIPSwitch()
+{
+	return s_dip_switch_info[2];
+}
+
+const ACJV::DIPSwitchInfo& ACJV::GetVideoSyncSplitDIPSwitch()
+{
+	return s_dip_switch_info[3];
+}
+
+std::span<const InputBindingInfo> ACJV::GetDIPSwitchBindings()
+{
+	return s_dip_switch_bindings;
+}
+
+bool ACJV::GetDIPSwitchState(u32 index)
+{
+	return (index < s_dip_switch_masks.size()) && ((s_dip_switch_state & s_dip_switch_masks[index]) != 0);
+}
+
+void ACJV::SetDIPSwitchState(u32 index, bool enabled)
+{
+	if (index >= s_dip_switch_masks.size())
+		return;
+
+	const u16 mask = s_dip_switch_masks[index];
+	if (enabled)
+		s_dip_switch_state |= mask;
+	else
+		s_dip_switch_state &= ~mask;
+}
+
+void ACJV::ToggleDIPSwitchState(u32 index)
+{
+	if (index >= s_dip_switch_masks.size())
+		return;
+
+	const u16 mask = s_dip_switch_masks[index];
+	s_dip_switch_state ^= mask;
+}
+
+void ACJV::LoadConfig(const SettingsInterface& si)
+{
+	u16 state = 0;
+	for (u32 i = 0; i < s_dip_switch_info.size(); i++)
+	{
+		const DIPSwitchInfo& dip_switch = s_dip_switch_info[i];
+		if (si.GetBoolValue(CONFIG_SECTION, dip_switch.name, dip_switch.default_value))
+			state |= s_dip_switch_masks[i];
+	}
+	s_dip_switch_state = state;
+}
+
+void ACJV::CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface& src_si, bool copy_settings, bool copy_bindings)
+{
+	if (copy_settings)
+	{
+		for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
+			dest_si->CopyBoolValue(src_si, CONFIG_SECTION, dip_switch.name);
+	}
+
+	if (copy_bindings)
+	{
+		for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
+			dest_si->CopyStringListValue(src_si, CONFIG_SECTION, dip_switch.toggle_bind_name);
+	}
+}
+
+void ACJV::SetDefaultConfiguration(SettingsInterface& si)
+{
+	si.ClearSection(CONFIG_SECTION);
+	for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
+		si.SetBoolValue(CONFIG_SECTION, dip_switch.name, dip_switch.default_value);
+}
 
 u16 ACJV::Read16(u32 addr) {
     if (addr >= ACJV_RDBASE && addr < 0x124045FE) {
@@ -454,7 +571,7 @@ void do_acjv_packet() {
 		rd16[1]      = 0x208;        // unconfirmed: firmware version
 		rd16[0x14]   = RootPacketID; // Xored with value at 0x10 in send packet, needs to be the same
 		rd16[0x21]   = wr16[0x0D];
-		rd16[0x30]  = dipsw;         // here the game polls the dip switch values?
+		rd16[0x30]  = s_dip_switch_state; // here the game polls the dip switch values?
 		u16 PacketID = wr16[0x0C];
 		if(PacketID != 0) {
 			// Console.WriteLn("ACJV::JVS: Packet ID 0x%04X", PacketID);
