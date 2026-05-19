@@ -5,16 +5,17 @@
 #include "common/Pcsx2Defs.h"
 #include <string>
 
-#define ACSRAM_ADDR_BASE 0xB2500000
-#define ACSRAM_RANGE 0x1250
-#define ACSRAM_ADDR_BASE_IOP_POV 0x12500000
-#define ACSRAM_MAX_SIZE _32kb // size of the SRAM
+#define ACSRAM_ADDR_BASE 0x12500000
+#define ACSRAM_RANGE     0x1250
+#define ACSRAM_MAX_SIZE  _32kb // size of the SRAM
 
 namespace ACSRAM
 {
-    // emulation methods
+    // dont ask me why... but for some reason, ACSRAM reads may be detected as 8bit MMIO
+    // yet the address increments as if it was 16bit.
+    // homebrew ACSRAM does not exhibit this behavior: it goes over 16bit mmio as the rest of the IRXes
+    u8 Read8(u32 addr);
     u16 Read16(u32 addr);
-
     void Write16(u32 addr, u16 val);
 
     // data
