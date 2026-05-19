@@ -12,7 +12,14 @@ namespace ACCORE {
     void Write16(u32 addr, u16 val);
 	void intr(int INTRN);
 	void Interrupt(u32 mem, u16 val);
-	
+	namespace DMA {
+        enum TT {
+            NONE = 0,
+            ATA,
+            ATAPI,
+        };
+		extern enum TT PendTrasnfType;
+	}
 	enum {
 		INTRN_ATA = 0x0,
 		INTRN_JV = 0x1,

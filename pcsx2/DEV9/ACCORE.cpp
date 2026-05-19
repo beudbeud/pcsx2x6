@@ -7,6 +7,8 @@
 
 #define ANS(addr, what) case addr: Console.Error("%-16s %08X: %04X", __FUNCTION__, addr, what); return what
 
+enum ACCORE::DMA::TT ACCORE::DMA::PendTrasnfType;
+
 u16 INTR_REG = 0;
 
 u16 ACCORE::Read16(u32 mem) {

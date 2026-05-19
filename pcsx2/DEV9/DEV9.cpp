@@ -7,6 +7,7 @@
 
 #include "IopDma.h"
 #include "ACATA.h"
+#include "ACCORE.h"
 
 #ifdef _WIN32
 #include "common/RedtapeWindows.h"
@@ -1067,12 +1068,16 @@ void DEV9readDMA8Mem(u32* pMem, int size)
 
 	size >>= 1;
 
-	DevCon.WriteLn("DEV9: *%s: size %x", __FUNCTION__, size);
-	//if (ACATA::TH::PendTrasnfType != ACATA::TH::PTRNSF::NONE) {
+	//DevCon.WriteLn("DEV9: *%s: size %x", __FUNCTION__, size);
+	if (ACCORE::DMA::PendTrasnfType == ACCORE::DMA::ATAPI) {
 		ACATA::TH::IO_Read(pMem, size);
-		ACATA::TH::PendTrasnfType = ACATA::TH::PTRNSF::NONE;
+		ACCORE::DMA::PendTrasnfType = ACCORE::DMA::NONE;
 		psxDMA8Interrupt();
-	//}
+	//} else if (ACCORE::DMA::PendTrasnfType == ACCORE::DMA::PTRNSF::ATA) { // TODOx6: impmement me
+
+	} else {
+		Console.Error("%s: requested DMA transfer of 0x%-8X bytes while no pending transfer (%d)", __FUNCTION__, size, ACCORE::DMA::PendTrasnfType);
+	}
 
 #if 0 // TODO: purely for dealing with an "itch". castrate all retail DEV9 operations out of the emu when it's on a working state if possible
 	if (dev9.dma_ctrl & SPD_DMA_TO_SMAP)

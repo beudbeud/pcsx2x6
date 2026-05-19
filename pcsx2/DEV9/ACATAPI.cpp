@@ -1,3 +1,4 @@
+#include "ACCORE.h"
 #include "ACATAPI.h"
 #include "ACATA.h"
 #include "common/Console.h"
@@ -12,7 +13,7 @@ void ACATAPI::handle_cmd(atapi_packet_t P) {
         Console.Warning("ACATAPI:READ_10: tlen:%X, lba:%X", P.pkt.transf_len, transf_lba);
         ACATA::TH::nsector = nsec;
         ACATA::TH::LBA = transf_lba;
-        if (ACATA_ISDMA) ACATA::TH::PendTrasnfType = ACATA::TH::PTRNSF::ATAPI;
+        if (ACATA_ISDMA) ACCORE::DMA::PendTrasnfType = ACCORE::DMA::ATAPI;
         }
         break;
     

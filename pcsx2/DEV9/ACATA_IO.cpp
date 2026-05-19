@@ -27,7 +27,6 @@ u32 ACATA::TH::sectorsize = ACATAPI::CONSTANTS::DVD_SECTORSIZE; //TODO: remove h
 u32 ACATA::TH::nsector;
 s64 ACATA::TH::LBA;
 
-enum ACATA::TH::PTRNSF ACATA::TH::PendTrasnfType; //pending transfer type?
 
 void ACATA::TH::IO_Thread() {
 	std::unique_lock ioWaitHandle(ioMutex);
@@ -63,7 +62,7 @@ void ACATA::TH::IO_Read(u32* addr, u32 size) {
 	u64 size2 = sectorsize*nsector;
 	if (size != (size2)) Console.Error("ACATA::TH::IO_Read> mismatch on request and read...\n%ld vs %ld (sec:%d,lba:%d)",
 			 size, (size2), sectorsize, nsector);
-	Console.WriteLn("%s: from %08X, len %08x", __FUNCTION__, pos, (size2));
+	//Console.WriteLn("%s: from %08X, len %08x", __FUNCTION__, pos, (size2));
 	if (FileSystem::FSeek64(IMAGE, pos, SEEK_SET) != 0) {
 		Console.ErrorFmt("ACATA:IO_Read: failed to seek pos:{}", pos);
 		pxAssert(false);

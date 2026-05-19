@@ -74,12 +74,6 @@ namespace ACATA
     extern ACMEDIATYPE MediaType;
     namespace TH { //dedicated namespace for thread related code
         
-        enum PTRNSF {
-            NONE = 0,
-            ATA,
-            ATAPI,
-        };
-        extern enum PTRNSF PendTrasnfType; //pending transfer type?
 	    extern std::mutex ioMutex;
         extern bool b_isIdle,
             ioWrite,
