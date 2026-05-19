@@ -14,10 +14,9 @@
  * System256 : ACRAM is no longer part of the system
  */
 
-#define ACRAM_ADDR_BASE 0xB4000000
-#define ACRAM_RANGE 0x1400
-#define ACRAM_ADDR_BASE_IOP_POV 0x14000000
-#define ACRAM_MAX_SIZE _64mb
+#define ACRAM_ADDR_BASE 0x14000000
+#define ACRAM_RANGE     0x1400
+#define ACRAM_MAX_SIZE  _64mb
 
 namespace ACRAM
 {
