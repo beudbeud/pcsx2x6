@@ -8,14 +8,13 @@
 #include "ps2/BiosTools.h"
 #include "ACMACROS.h"
 
-u8 ACSRAM::buffer[NamcoMemSize::ACSRAM];
-u8 compbuf[NamcoMemSize::ACSRAM] = {0};
+u8 ACSRAM::buffer[ACSRAM_MAX_SIZE];
+u8 compbuf[ACSRAM_MAX_SIZE] = {0};
 std::string ACSRAM::filepath = "";
 bool LockSave = false; //why? because I dont wanna wipe an SRAM image that already existed but failed to be read
 
 
 int ACSRAM::ReadFile() {
-	Console.WriteLn("%s", __FUNCTION__);
     Error error;
     FILE* FD = std::fopen(ACSRAM::filepath.c_str(), "r+b");
     if (FD) {
@@ -23,11 +22,11 @@ int ACSRAM::ReadFile() {
         // ACSRAM is per-game, and not all of them strongly check if it has valid data
         // this is even problematic on real hardware, where such games can behave erratically when ran on a machine whose ACSRAM has payload of another game
         if (std::fread(compbuf, sizeof(compbuf), 1, FD) == 1) {
-            std::memcpy(ACSRAM::buffer, compbuf, NamcoMemSize::ACSRAM);
-
+            std::memcpy(ACSRAM::buffer, compbuf, ACSRAM_MAX_SIZE);
+            Console.WriteLn(Color_StrongCyan, "%-16s OK", __FUNCTION__);
             return 1;
         } else {
-            Console.ErrorFmt("ACSRAM: Could not read all the data");
+            Console.ErrorFmt("ACSRAM: Could not read all the data. locking save");
             LockSave = true; // file opened but failed to read? forbid from saving 
         }
 	    std::fclose(FD);
@@ -47,21 +46,24 @@ int ACSRAM::WriteFile() {
         return 0;
     }
 	Error error;
-    FILE* FD = std::fopen(ACSRAM::filepath.c_str(), "w+b");
+    FILE* FD = std::fopen(ACSRAM::filepath.c_str(), "r+b");
     if (!FD) {
-        Console.ErrorFmt("ACSRAM: Could not open output image file {} '{}'", errno, strerror(errno));
-        return errno;
+        FD = std::fopen(ACSRAM::filepath.c_str(), "w+b"); 
+        if (!FD) {
+            Console.ErrorFmt("ACSRAM: Could not open output image file {} '{}'", errno, strerror(errno));
+            return errno;
+        }
     }
 
 	if (std::fread(compbuf, sizeof(compbuf), 1, FD) == 1 &&
-		std::memcmp(compbuf, ACSRAM::buffer, NamcoMemSize::ACSRAM) == 0) {
+		(std::memcmp(compbuf, ACSRAM::buffer, ACSRAM_MAX_SIZE) == 0)) {
 		DEV_LOG("ACSRAM has not changed, skip writing to disk.");
 	    std::fclose(FD);
 		return 0;
 	}
 
 	if (FileSystem::FSeek64(FD, 0, SEEK_SET) == 0 &&
-		std::fwrite(ACSRAM::buffer, NamcoMemSize::ACSRAM, 1, FD) == 1) {
+		std::fwrite(ACSRAM::buffer, ACSRAM_MAX_SIZE, 1, FD) == 1) {
 		INFO_LOG("ACSRAM saved to {}.", Path::GetFileName(ACSRAM::filepath));
 	}
 	else
@@ -75,7 +77,7 @@ int ACSRAM::WriteFile() {
 }
 
 #define OOB_REPORT(T) Console.Error("%s: out of bound index: %08X", __FUNCTION__, T);
-#define GET_SRAM_OFF(t) ((addr - ACSRAM_ADDR_BASE_IOP_POV)/2) // u8 buffer on u16 MMIO, halve the address to get real offset
+#define GET_SRAM_OFF(t) ((t - ACSRAM_ADDR_BASE)/2) // u8 buffer on u16 MMIO, halve the address to get real offset
 
 void ACSRAM::Clear(u8 fillerbyte) {
     std::memset(ACSRAM::buffer, fillerbyte, sizeof(ACSRAM::buffer));
