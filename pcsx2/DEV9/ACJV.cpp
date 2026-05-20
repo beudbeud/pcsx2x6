@@ -48,7 +48,7 @@ enum BOARDID ACJV::CurrentBoardID = RAYS_PCB;
 extern u16 ACJV::ButtonState[JVS_PLAYER_COUNT] = {0,0};
 
 static constexpr u16 DEFAULT_DIP_SWITCH_STATE =
-    (DIPS::TESTMODE | DIPS::VIDEO_VOLTAGE | DIPS::MONITOR_SYNCFREQ | DIPS::VIDEO_SYNC_SPLIT);
+    (DIPS::VIDEO_VOLTAGE | DIPS::MONITOR_SYNCFREQ | DIPS::VIDEO_SYNC_SPLIT);
 
 static constexpr const std::array<u16, ACJV::NUM_DIP_SWITCHES> s_dip_switch_masks = {{
 	DIPS::TESTMODE,
@@ -167,7 +167,7 @@ void ACJV::SetDefaultConfiguration(SettingsInterface& si)
 u16 ACJV::Read16(u32 addr) {
     if (addr >= ACJV_RDBASE && addr < 0x124045FE) {
         int x = (addr - ACJV_RDBASE)/2;
-		if (/*CurrentCMD == NONE &&*/ (x == 2 || x == 3 || x == 4)) return rdbuf.at(x)|1;// initial polling expects these addrs to not be zero
+		if (x == 2 || x == 3 || x == 4) return rdbuf.at(x)|1;// initial polling expects these addrs to not be zero
         return (u16)rdbuf.at(x);
     } else if ((addr == 0x124045FE)) {
 		return (u16)rdbuf.at((addr - ACJV_RDBASE)/2);
@@ -186,6 +186,13 @@ void ACJV::Write16(u32 addr, u16 val) {
 }
 
 #define assert(x) if (!(x)) Console.WriteLn("## ASSERT ## %s:%s:%d %s", __FILE__, __FUNCTION__, __LINE__, #x);
+
+u8 m_counter;
+u16 m_jvsSystemButtonState = 0;
+u16 m_jvsButtonState[JVS_PLAYER_COUNT] = {};
+u8 m_testButtonState = 0;
+u16 m_coin1 = 0;
+u16 m_coin2 = 0;
 
 void do_jvs_packet(const u8* input, u8* output) {
 	if (input[0] != JVS_SYNC) {
@@ -336,7 +343,6 @@ void do_jvs_packet(const u8* input, u8* output) {
 			}
 		}
 		break;
-#if 0
 		case JVS::READ_INP_SWITCH:
 		{
 			assert(inSize >= 2);
@@ -351,7 +357,7 @@ void do_jvs_packet(const u8* input, u8* output) {
 
 			(*output++) = JVS_CMD_SUCCESS;
 
-			m_counter++;
+			/*m_counter++;
 			if(m_testButtonState == 0 && m_jvsSystemButtonState == 0x03 && m_counter > 16)
 			{
 				m_testButtonState = 0x80;
@@ -361,8 +367,8 @@ void do_jvs_packet(const u8* input, u8* output) {
 			{
 				m_testButtonState = 0;
 				m_counter = 0;
-			}
-			(*output++) = m_testButtonState;
+			}*/
+			(*output++) = m_testButtonState|(s_dip_switch_state & TESTMODE);
 
 			//(*output++) = (m_jvsSystemButtonState == 0x03) ? 0x80 : 0;  //Test
 			(*output++) = static_cast<u8>(m_jvsButtonState[0]);      //Player 1
@@ -376,9 +382,7 @@ void do_jvs_packet(const u8* input, u8* output) {
 				(*dstSize) += 2;
 			}
 		}
-#endif
 		break;
-#if 0
 		case JVS::READ_INP_COIN:
 		{
 			assert(inSize != 0);
@@ -405,9 +409,7 @@ void do_jvs_packet(const u8* input, u8* output) {
 				(*dstSize) += 2;
 			}
 		}
-#endif
 		break;
-#if 0
 		case JVS::OUTPUT_COIN_NUM: // actually never received this jvs cmd
 		{
 			assert(inSize != 3);
@@ -427,10 +429,8 @@ void do_jvs_packet(const u8* input, u8* output) {
 
 			(*dstSize) += 1;
 		}
-#endif
 		break;
-#if 0
-		case JVS__DECREASE_COIN_NUM: // actually never received this jvs cmd
+		case JVS::DECREASE_COIN_NUM: // actually never received this jvs cmd
 		{
 			assert(inSize != 3);
 			u8 slotCount = (*input++);
@@ -449,7 +449,6 @@ void do_jvs_packet(const u8* input, u8* output) {
 
 			(*dstSize) += 1;
 		}
-#endif
 		break;
 		case JVS::READ_INP_ANALOG:
 		{
