@@ -10,7 +10,7 @@ void ACATAPI::handle_cmd(atapi_packet_t P) {
     u32 nsec = ATAPI_PKT_GETLEN(P);
     switch (P.pkt.opcode) {
     case ATAPICMD::READ_10: {
-        Console.Warning("ACATAPI:READ_10: tlen:%X, lba:%X", P.pkt.transf_len, transf_lba);
+        //Console.Warning("ACATAPI:READ_10: tlen:%X, lba:%X", P.pkt.transf_len, transf_lba);
         ACATA::TH::nsector = nsec;
         ACATA::TH::LBA = transf_lba;
         if (ACATA_ISDMA) ACCORE::DMA::PendTrasnfType = ACCORE::DMA::ATAPI;
