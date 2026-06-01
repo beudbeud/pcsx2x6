@@ -28,10 +28,15 @@ void ACRAM::Write16(u32 addr, u16 val) {
     u32 reg = offset & ACRAM_REG_MASK;
     u32 bank_base = bank * ACRAM_BANK_SIZE;
 
-    if (reg >= ACRAM_REG_READ && reg < ACRAM_REG_WRITE)
+    if (reg >= ACRAM_REG_READ && reg < ACRAM_REG_WRITE) {
         banks[bank].read_addr = bank_base + ((u32)val << 11); // val is a page number, <<11 = 2KB granularity
-    else if (reg >= ACRAM_REG_WRITE && reg < 0x80000)
+        return;
+    } else if (reg >= ACRAM_REG_WRITE && reg < 0x80000) {
         banks[bank].write_addr = bank_base + ((u32)val << 11);
+        return;
+    } else if (reg >= 0x20000 && reg < ACRAM_REG_READ) {
+        return; // size/config registers — control only, don't touch SDRAM
+    }
 
     u32 off = GET_RAM_OFF(addr);
     if (off < ACRAM_MAX_SIZE)
