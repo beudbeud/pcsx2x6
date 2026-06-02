@@ -1,0 +1,22 @@
+## Règles d'implémentation d'un recompilateur dynamique (dynarec/JIT)
+
+- Dans les règles ci-dessous, "CPU Guest" design le CPU émulé et "CPU Target" designe le CPU qui fait tourner l'émulateur
+- Chaque aller-retour ASM <=> C/C++ est très couteux, il est imperatif d'en éliminer le maximum possible, par tous les moyens possibles.
+- La couverture des instructions du CPU guest doit être totale et entière. Hors instructions qui changent le mode du CPU (changement de privilèges, switch thumb/arm32, ...) ou son état général (HALT, RESET, ...)
+- Chaque instruction compilée sur le CPU target doit être la plus courte possible.
+- Concernant le housekeeping:
+  - Il doit être inliné autant que possible, pas de rappel C/C++, surtout au nouveau instruction
+  - Chaque élément du housekeeping doit être poussé le plus loin possible sur la hierarchie: instruction < bloc < slice
+  - Si le JIT doit être ordonancé via un budget cycle, le compteur de cycle doit être inliné en registre CPU host, et testé en fin d'instruction, puis stocké en sortie ou en fin de bloc.
+  - Sauf cas très spécifique, les IRQ sont vérifiées en fin de bloc, y compris s'ils sont chainés. Au niveau instruction, par flag simple et uniquement si c'est impératif.
+- Accès mémoire:
+  - Les lectures/écritures RAM/ROM doivent être inlinées. Aucun appel aux C/C++, sauf rappel spécifiques sur chemin froid et après les tests de plages RAM/ROM.
+  - Si le CPU guest accède au hardware via les lectures/écritures standard, on inline les hot-path au maximum, immediatement après les tests de plages RAM/ROM.
+  - Les accès hardware doivent être analysés:
+    - On les inline autant que possible.
+    - En fonction du niveau herarchique de leur mise à jour, on vérifie si on peut élider ou précalculer.
+- Le chainage de bloc doit être activé.
+- Les boucles courtes d'attente hardware (vsync par exemple) doivent être analysées au moment de la compilation, et élidées ou précalculées autant que possible
+- Aller-retour JIT/Interpreteur:
+  - Il est imperatif que la structure registre/state/flags soit partagée entre le JIT et l'interpreteur. Aucune copie/adaptation.
+  - Le JIT ne doit rappeller l'interpreteur qu'en dernier recours (traiter les HALT/RESET par exemple), jamais sur les chemins chauds
