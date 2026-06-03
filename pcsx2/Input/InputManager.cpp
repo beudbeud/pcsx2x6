@@ -868,6 +868,84 @@ void InputManager::AddJVSBindings(SettingsInterface& si, bool is_profile)
 				ACJV::ToggleDIPSwitchState(dip_switch_index);
 		}}, InputBindingInfo::Type::Button, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
 	}
+
+	// P1 and P2 button bindings + auto-mirror from Pad1/Pad2
+	const std::span<const InputBindingInfo> player_bindings[] = {
+		ACJV::GetButtonBindings(),
+		ACJV::GetP2ButtonBindings(),
+	};
+
+	for (u32 player = 0; player < 2; player++)
+	{
+		for (const InputBindingInfo& bi : player_bindings[player])
+		{
+			const std::vector<std::string> bindings(si.GetStringList(ACJV::CONFIG_SECTION, bi.name));
+			if (bindings.empty())
+				continue;
+
+			AddBindings(bindings, InputAxisEventHandler{[player, mask = static_cast<u16>(bi.bind_index)](InputBindingKey key, float value) {
+				ACJV::SetButtonState(player, mask, value > 0.5f);
+			}}, bi.bind_type, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
+		}
+
+		// Auto-mirror PadN gamepad bindings to JVS player N via matching GenericInputBinding.
+		// Select is excluded — on real cabs Service is a separate physical button; Select maps to Coin instead.
+		const Pad::ControllerInfo* pad_ci = Pad::GetControllerInfo(EmuConfig.Pad.Ports[player].Type);
+		if (!pad_ci)
+			continue;
+
+		const std::string pad_section = Pad::GetConfigSection(player);
+		for (const InputBindingInfo& jvs_bi : player_bindings[player])
+		{
+			if (jvs_bi.generic_mapping == GenericInputBinding::Unknown ||
+				jvs_bi.generic_mapping == GenericInputBinding::Select)
+				continue;
+
+			for (const InputBindingInfo& pad_bi : pad_ci->bindings)
+			{
+				if (pad_bi.generic_mapping != jvs_bi.generic_mapping)
+					continue;
+
+				const std::vector<std::string> pad_bindings(si.GetStringList(pad_section.c_str(), pad_bi.name));
+				for (const std::string& pb : pad_bindings)
+				{
+					AddBinding(pb, InputAxisEventHandler{[player, mask = static_cast<u16>(jvs_bi.bind_index)](InputBindingKey key, float value) {
+						ACJV::SetButtonState(player, mask, value > 0.5f);
+					}});
+				}
+				break;
+			}
+		}
+
+		// Auto-mirror PadN Select -> Coin insert for player N
+		for (const InputBindingInfo& pad_bi : pad_ci->bindings)
+		{
+			if (pad_bi.generic_mapping != GenericInputBinding::Select)
+				continue;
+
+			const std::vector<std::string> pad_bindings(si.GetStringList(pad_section.c_str(), pad_bi.name));
+			for (const std::string& pb : pad_bindings)
+			{
+				AddBinding(pb, InputButtonEventHandler{[player](s32 pressed) {
+					if (pressed > 0)
+						ACJV::InsertCoin(player);
+				}});
+			}
+			break;
+		}
+	}
+
+	for (const InputBindingInfo& bi : ACJV::GetCoinBindings())
+	{
+		const std::vector<std::string> bindings(si.GetStringList(ACJV::CONFIG_SECTION, bi.name));
+		if (bindings.empty())
+			continue;
+
+		AddBindings(bindings, InputButtonEventHandler{[slot = static_cast<u32>(bi.bind_index)](s32 pressed) {
+			if (pressed > 0)
+				ACJV::InsertCoin(slot);
+		}}, InputBindingInfo::Type::Button, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
+	}
 }
 
 void InputManager::AddPadBindings(SettingsInterface& si, u32 pad_index, bool is_profile)

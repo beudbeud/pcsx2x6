@@ -65,6 +65,11 @@ namespace ACJV {
     const DIPSwitchInfo& GetMonitorSyncFrequencyDIPSwitch();
     const DIPSwitchInfo& GetVideoSyncSplitDIPSwitch();
     std::span<const InputBindingInfo> GetDIPSwitchBindings();
+    std::span<const InputBindingInfo> GetButtonBindings();
+    std::span<const InputBindingInfo> GetP2ButtonBindings();
+    std::span<const InputBindingInfo> GetCoinBindings();
+    void SetButtonState(u32 player, u16 mask, bool pressed);
+    void InsertCoin(u32 slot);
 
     bool GetDIPSwitchState(u32 index);
     void SetDIPSwitchState(u32 index, bool enabled);
@@ -122,6 +127,22 @@ enum DIPS {
     VIDEO_VOLTAGE = 0x40,
     MONITOR_SYNCFREQ = 0x20,
     VIDEO_SYNC_SPLIT = 0x10,
+};
+
+// To improve and correct when adding more JVS controls from games
+enum JVSButton : u16 {
+    JVS_BTN_START   = 0x80,
+    JVS_BTN_SERVICE = 0x40,
+    JVS_BTN_UP      = 0x20,
+    JVS_BTN_DOWN    = 0x10,
+    JVS_BTN_LEFT    = 0x08,
+    JVS_BTN_RIGHT   = 0x04,
+    JVS_BTN_1       = 0x02,
+    JVS_BTN_2       = 0x01,
+    JVS_BTN_3       = 0x8000,
+    JVS_BTN_4       = 0x4000,
+    JVS_BTN_5       = 0x2000,
+    JVS_BTN_6       = 0x1000,
 };
 
 

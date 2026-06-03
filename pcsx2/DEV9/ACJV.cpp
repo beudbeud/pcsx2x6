@@ -58,7 +58,7 @@ static constexpr const std::array<u16, ACJV::NUM_DIP_SWITCHES> s_dip_switch_mask
 }};
 
 static constexpr const std::array<ACJV::DIPSwitchInfo, ACJV::NUM_DIP_SWITCHES> s_dip_switch_info = {{
-	{"TestMode", TRANSLATE_NOOP("JVS", "Test Mode"), "ToggleTestMode", true},
+	{"TestMode", TRANSLATE_NOOP("JVS", "Test Mode"), "ToggleTestMode", false},
 	{"VideoVoltage", TRANSLATE_NOOP("JVS", "Video Voltage"), "ToggleVideoVoltage", true},
 	{"MonitorSyncFrequency", TRANSLATE_NOOP("JVS", "Monitor Sync Frequency"), "ToggleMonitorSyncFrequency", true},
 	{"VideoSyncSplit", TRANSLATE_NOOP("JVS", "Video Sync Split"), "ToggleVideoSyncSplit", true},
@@ -69,6 +69,41 @@ static constexpr const std::array<InputBindingInfo, ACJV::NUM_DIP_SWITCHES> s_di
 	{s_dip_switch_info[1].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Video Voltage"), nullptr, InputBindingInfo::Type::Button, 1, GenericInputBinding::Unknown},
 	{s_dip_switch_info[2].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Monitor Sync Frequency"), nullptr, InputBindingInfo::Type::Button, 2, GenericInputBinding::Unknown},
 	{s_dip_switch_info[3].toggle_bind_name, TRANSLATE_NOOP("JVS", "Toggle Video Sync Split"), nullptr, InputBindingInfo::Type::Button, 3, GenericInputBinding::Unknown},
+}};
+
+static constexpr const std::array<InputBindingInfo, 12> s_jvs_p1_button_bindings = {{
+	{"P1_Up",      TRANSLATE_NOOP("JVS", "P1 Up"),       nullptr, InputBindingInfo::Type::Button, JVS_BTN_UP,      GenericInputBinding::DPadUp},
+	{"P1_Down",    TRANSLATE_NOOP("JVS", "P1 Down"),     nullptr, InputBindingInfo::Type::Button, JVS_BTN_DOWN,    GenericInputBinding::DPadDown},
+	{"P1_Left",    TRANSLATE_NOOP("JVS", "P1 Left"),     nullptr, InputBindingInfo::Type::Button, JVS_BTN_LEFT,    GenericInputBinding::DPadLeft},
+	{"P1_Right",   TRANSLATE_NOOP("JVS", "P1 Right"),    nullptr, InputBindingInfo::Type::Button, JVS_BTN_RIGHT,   GenericInputBinding::DPadRight},
+	{"P1_Button1", TRANSLATE_NOOP("JVS", "P1 Button 1"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_1,       GenericInputBinding::Square},
+	{"P1_Button2", TRANSLATE_NOOP("JVS", "P1 Button 2"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_2,       GenericInputBinding::Triangle},
+	{"P1_Button3", TRANSLATE_NOOP("JVS", "P1 Button 3"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_3,       GenericInputBinding::Unknown},
+	{"P1_Button4", TRANSLATE_NOOP("JVS", "P1 Button 4"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_4,       GenericInputBinding::Cross},
+	{"P1_Button5", TRANSLATE_NOOP("JVS", "P1 Button 5"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_5,       GenericInputBinding::Circle},
+	{"P1_Button6", TRANSLATE_NOOP("JVS", "P1 Button 6"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_6,       GenericInputBinding::Unknown},
+	{"P1_Start",   TRANSLATE_NOOP("JVS", "P1 Start"),    nullptr, InputBindingInfo::Type::Button, JVS_BTN_START,   GenericInputBinding::Start},
+	{"P1_Service", TRANSLATE_NOOP("JVS", "P1 Service"),  nullptr, InputBindingInfo::Type::Button, JVS_BTN_SERVICE, GenericInputBinding::Select}, // Coins
+}};
+
+static constexpr const std::array<InputBindingInfo, 12> s_jvs_p2_button_bindings = {{
+	{"P2_Up",      TRANSLATE_NOOP("JVS", "P2 Up"),       nullptr, InputBindingInfo::Type::Button, JVS_BTN_UP,      GenericInputBinding::DPadUp},
+	{"P2_Down",    TRANSLATE_NOOP("JVS", "P2 Down"),     nullptr, InputBindingInfo::Type::Button, JVS_BTN_DOWN,    GenericInputBinding::DPadDown},
+	{"P2_Left",    TRANSLATE_NOOP("JVS", "P2 Left"),     nullptr, InputBindingInfo::Type::Button, JVS_BTN_LEFT,    GenericInputBinding::DPadLeft},
+	{"P2_Right",   TRANSLATE_NOOP("JVS", "P2 Right"),    nullptr, InputBindingInfo::Type::Button, JVS_BTN_RIGHT,   GenericInputBinding::DPadRight},
+	{"P2_Button1", TRANSLATE_NOOP("JVS", "P2 Button 1"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_1,       GenericInputBinding::Square},
+	{"P2_Button2", TRANSLATE_NOOP("JVS", "P2 Button 2"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_2,       GenericInputBinding::Triangle},
+	{"P2_Button3", TRANSLATE_NOOP("JVS", "P2 Button 3"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_3,       GenericInputBinding::Unknown},
+	{"P2_Button4", TRANSLATE_NOOP("JVS", "P2 Button 4"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_4,       GenericInputBinding::Cross},
+	{"P2_Button5", TRANSLATE_NOOP("JVS", "P2 Button 5"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_5,       GenericInputBinding::Circle},
+	{"P2_Button6", TRANSLATE_NOOP("JVS", "P2 Button 6"), nullptr, InputBindingInfo::Type::Button, JVS_BTN_6,       GenericInputBinding::Unknown},
+	{"P2_Start",   TRANSLATE_NOOP("JVS", "P2 Start"),    nullptr, InputBindingInfo::Type::Button, JVS_BTN_START,   GenericInputBinding::Start},
+	{"P2_Service", TRANSLATE_NOOP("JVS", "P2 Service"),  nullptr, InputBindingInfo::Type::Button, JVS_BTN_SERVICE, GenericInputBinding::Select},
+}};
+
+static constexpr const std::array<InputBindingInfo, 2> s_jvs_coin_bindings = {{
+	{"Coin1", TRANSLATE_NOOP("JVS", "Insert Coin P1"), nullptr, InputBindingInfo::Type::Button, 0, GenericInputBinding::Unknown},
+	{"Coin2", TRANSLATE_NOOP("JVS", "Insert Coin P2"), nullptr, InputBindingInfo::Type::Button, 1, GenericInputBinding::Unknown},
 }};
 
 static u16 s_dip_switch_state = DEFAULT_DIP_SWITCH_STATE;
@@ -102,6 +137,21 @@ const ACJV::DIPSwitchInfo& ACJV::GetVideoSyncSplitDIPSwitch()
 std::span<const InputBindingInfo> ACJV::GetDIPSwitchBindings()
 {
 	return s_dip_switch_bindings;
+}
+
+std::span<const InputBindingInfo> ACJV::GetButtonBindings()
+{
+	return s_jvs_p1_button_bindings;
+}
+
+std::span<const InputBindingInfo> ACJV::GetP2ButtonBindings()
+{
+	return s_jvs_p2_button_bindings;
+}
+
+std::span<const InputBindingInfo> ACJV::GetCoinBindings()
+{
+	return s_jvs_coin_bindings;
 }
 
 bool ACJV::GetDIPSwitchState(u32 index)
@@ -154,6 +204,12 @@ void ACJV::CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface
 	{
 		for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
 			dest_si->CopyStringListValue(src_si, CONFIG_SECTION, dip_switch.toggle_bind_name);
+		for (const InputBindingInfo& bi : s_jvs_p1_button_bindings)
+			dest_si->CopyStringListValue(src_si, CONFIG_SECTION, bi.name);
+		for (const InputBindingInfo& bi : s_jvs_p2_button_bindings)
+			dest_si->CopyStringListValue(src_si, CONFIG_SECTION, bi.name);
+		for (const InputBindingInfo& bi : s_jvs_coin_bindings)
+			dest_si->CopyStringListValue(src_si, CONFIG_SECTION, bi.name);
 	}
 }
 
@@ -162,6 +218,18 @@ void ACJV::SetDefaultConfiguration(SettingsInterface& si)
 	si.ClearSection(CONFIG_SECTION);
 	for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
 		si.SetBoolValue(CONFIG_SECTION, dip_switch.name, dip_switch.default_value);
+
+	si.SetStringValue(CONFIG_SECTION, "P1_Up",      "Keyboard/Up");
+	si.SetStringValue(CONFIG_SECTION, "P1_Down",    "Keyboard/Down");
+	si.SetStringValue(CONFIG_SECTION, "P1_Left",    "Keyboard/Left");
+	si.SetStringValue(CONFIG_SECTION, "P1_Right",   "Keyboard/Right");
+	si.SetStringValue(CONFIG_SECTION, "P1_Button1", "Keyboard/J");
+	si.SetStringValue(CONFIG_SECTION, "P1_Button2", "Keyboard/I");
+	si.SetStringValue(CONFIG_SECTION, "P1_Button3", "Keyboard/K");
+	si.SetStringValue(CONFIG_SECTION, "P1_Button4", "Keyboard/L");
+	si.SetStringValue(CONFIG_SECTION, "P1_Start",   "Keyboard/Return");
+	si.SetStringValue(CONFIG_SECTION, "P1_Service", "Keyboard/Backspace");
+	si.SetStringValue(CONFIG_SECTION, "Coin1",      "Keyboard/5");
 }
 
 u16 ACJV::Read16(u32 addr) {
@@ -193,6 +261,26 @@ u16 m_jvsButtonState[JVS_PLAYER_COUNT] = {};
 u8 m_testButtonState = 0;
 u16 m_coin1 = 0;
 u16 m_coin2 = 0;
+
+// Gamepad input -> JVS button state: set or clear a button bit for a player
+void ACJV::SetButtonState(u32 player, u16 mask, bool pressed)
+{
+	if (player >= JVS_PLAYER_COUNT)
+		return;
+	if (pressed)
+		m_jvsButtonState[player] |= mask;
+	else
+		m_jvsButtonState[player] &= ~mask;
+}
+
+// Gamepad coin button -> increment JVS coin counter for P1 (slot 0) or P2 (slot 1)
+void ACJV::InsertCoin(u32 slot)
+{
+	if (slot == 0)
+		m_coin1++;
+	else if (slot == 1)
+		m_coin2++;
+}
 
 void do_jvs_packet(const u8* input, u8* output) {
 	if (input[0] != JVS_SYNC) {
@@ -374,6 +462,8 @@ void do_jvs_packet(const u8* input, u8* output) {
 			(*output++) = static_cast<u8>(m_jvsButtonState[0]);      //Player 1
 			(*output++) = static_cast<u8>(m_jvsButtonState[0] >> 8); //Player 1
 			(*dstSize) += 4;
+			//if (m_jvsButtonState[0])
+			//	Console.WriteLn("JVS P1 buttons: %04X coin:%d", m_jvsButtonState[0], m_coin1);
 
 			if(playerCount == 2)
 			{
