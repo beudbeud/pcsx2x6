@@ -67,7 +67,11 @@ QIcon ControllerBindingWidget::getIcon() const
 void ControllerBindingWidget::populateControllerTypes()
 {
 	for (const auto& [name, display_name] : Pad::GetControllerTypeNames())
-		m_ui.controllerType->addItem(QString::fromUtf8(display_name), QString::fromUtf8(name));
+	{
+		const std::string_view sv(name);
+		if (sv == "None" || sv == "DualShock2")
+			m_ui.controllerType->addItem(QString::fromUtf8(display_name), QString::fromUtf8(name));
+	}
 }
 
 void ControllerBindingWidget::onTypeChanged()

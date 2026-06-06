@@ -38,9 +38,16 @@ enum BOARDID {
 enum class JVS_MODE {
 	DEFAULT,
 	LIGHTGUN,
+	FIGHTING,
 	DRIVE,
 	DRUM,
 	TOUCH,
+};
+
+enum class FightingLayout {
+	TEKKEN,     // Sw1,2,4,5 (skip Sw3) — TK4, TK5, TK5DR
+	STANDARD,   // Sw1,2,3,4 (sequential) — SC2, SC3, BRT, FUD, KN
+	SIX_BUTTON, // Sw1-6 — JAM, BAX
 };
 
 #define JVS_WHEEL_CHANNEL_MAX 3

@@ -108,6 +108,33 @@ static constexpr const std::array<InputBindingInfo, 12> s_jvs_p2_button_bindings
 	{"P2_Service", TRANSLATE_NOOP("JVS", "P2 Service"),  nullptr, InputBindingInfo::Type::Button, JVS_BTN_SERVICE, GenericInputBinding::Select},
 }};
 
+// Per-layout face button GenericInputBinding overrides (BTN3-6 only).
+// BTN1=Square, BTN2=Triangle are universal. Indexed by (FightingLayout - 1).
+static constexpr GenericInputBinding s_fighting_face_buttons[][4] = {
+	// BTN3,                        BTN4,                       BTN5,                       BTN6
+	{GenericInputBinding::Unknown, GenericInputBinding::Cross,  GenericInputBinding::Circle, GenericInputBinding::Unknown}, // TEKKEN
+	{GenericInputBinding::Cross,   GenericInputBinding::Circle, GenericInputBinding::Unknown,GenericInputBinding::Unknown}, // STANDARD
+	{GenericInputBinding::Cross,   GenericInputBinding::Circle, GenericInputBinding::L1,     GenericInputBinding::R1},      // SIX_BUTTON
+};
+
+static std::array<InputBindingInfo, 12> s_active_p1_bindings;
+static std::array<InputBindingInfo, 12> s_active_p2_bindings;
+
+// Copy base P1/P2 tables, select BTN3-6 face buttons from the layout.
+// Table indices: [0-3]=dpad, [4]=BTN1, [5]=BTN2, [6]=BTN3, [7]=BTN4, [8]=BTN5, [9]=BTN6, [10]=start, [11]=service
+static void UpdateFightingBindings(FightingLayout layout)
+{
+	s_active_p1_bindings = s_jvs_p1_button_bindings;
+	s_active_p2_bindings = s_jvs_p2_button_bindings;
+	const auto& face = s_fighting_face_buttons[static_cast<int>(layout)];
+	constexpr int BTN3_INDEX = 6;
+	for (int i = 0; i < 4; i++)
+	{
+		s_active_p1_bindings[BTN3_INDEX + i].generic_mapping = face[i];
+		s_active_p2_bindings[BTN3_INDEX + i].generic_mapping = face[i];
+	}
+}
+
 static constexpr const std::array<InputBindingInfo, 2> s_jvs_coin_bindings = {{
 	{"Coin1", TRANSLATE_NOOP("JVS", "Insert Coin P1"), nullptr, InputBindingInfo::Type::Button, 0, GenericInputBinding::Unknown},
 	{"Coin2", TRANSLATE_NOOP("JVS", "Insert Coin P2"), nullptr, InputBindingInfo::Type::Button, 1, GenericInputBinding::Unknown},
@@ -163,13 +190,19 @@ std::span<const InputBindingInfo> ACJV::GetDIPSwitchBindings()
 	return s_dip_switch_bindings;
 }
 
+static JVS_MODE m_jvsMode = JVS_MODE::DEFAULT;
+
 std::span<const InputBindingInfo> ACJV::GetButtonBindings()
 {
+	if (m_jvsMode == JVS_MODE::FIGHTING)
+		return s_active_p1_bindings;
 	return s_jvs_p1_button_bindings;
 }
 
 std::span<const InputBindingInfo> ACJV::GetP2ButtonBindings()
 {
+	if (m_jvsMode == JVS_MODE::FIGHTING)
+		return s_active_p2_bindings;
 	return s_jvs_p2_button_bindings;
 }
 
@@ -276,7 +309,6 @@ static u16 m_jvsButtonState[JVS_PLAYER_COUNT] = {};
 static u8 m_testButtonState = 0;
 static u16 m_coin1 = 0;
 static u16 m_coin2 = 0;
-static JVS_MODE m_jvsMode = JVS_MODE::DEFAULT;
 static u16 m_jvsScreenPosX = 0;
 static u16 m_jvsScreenPosY = 0;
 static float m_jvsLightgunDX = -1.0f;  // normalized display X (-1 = off-screen)
@@ -296,6 +328,19 @@ static const std::map<std::string, GunMapping> s_gun_mappings = {
 	{"NM00032", {JVS_BTN_3,    JVS_BTN_RIGHT, false, 0,          0,          JVS_BTN_LEFT, 0}},          // Time Crisis 4
 };
 static const GunMapping* m_gunMapping = &s_default_gun_mapping;
+
+static const std::map<std::string, FightingLayout> s_fighting_layouts = {
+	{"NM00004", FightingLayout::TEKKEN},     // Tekken 4
+	{"NM00019", FightingLayout::TEKKEN},     // Tekken 5 / 5.1
+	{"NM00026", FightingLayout::TEKKEN},     // Tekken 5 DR
+	{"NM00007", FightingLayout::STANDARD},   // Soul Calibur II
+	{"NM00031", FightingLayout::STANDARD},   // Soul Calibur III
+	{"NM00002", FightingLayout::STANDARD},   // Bloody Roar 3
+	{"NM00048", FightingLayout::STANDARD},   // Fate Unlimited Codes
+	{"NM00029", FightingLayout::STANDARD},   // Kinnikuman MGP
+	{"NM00018", FightingLayout::SIX_BUTTON}, // Capcom Fighting Jam
+	{"NM00042", FightingLayout::SIX_BUTTON}, // Sengoku Basara X
+};
 
 // Gamepad input -> JVS button state: set or clear a button bit for a player
 void ACJV::SetButtonState(u32 player, u16 mask, bool pressed)
@@ -354,6 +399,14 @@ void ACJV::SetGameId(const std::string& gameid)
 	}
 	else
 		m_gunMapping = &s_default_gun_mapping;
+
+	auto fit = s_fighting_layouts.find(gameid);
+	if (fit != s_fighting_layouts.end())
+	{
+		constexpr const char* layout_names[] = {"tekken", "standard", "6-button"};
+		Console.WriteLn("ACJV: fighting layout for %s: %s", gameid.c_str(), layout_names[static_cast<int>(fit->second)]);
+		UpdateFightingBindings(fit->second);
+	}
 
 	// TC3 has 3 I/O boards: TSS-I/O (white flash), MIU-I/O (640x224), RAYS PCB (0xFFFF).
 	// MIU-I/O chosen: no flash artifact, calibration uses JVS trigger debounce directly.

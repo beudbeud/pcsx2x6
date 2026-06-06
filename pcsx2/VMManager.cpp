@@ -1353,7 +1353,13 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 				{
 					Host::SetBaseStringSettingValue("USB1", "Type", "None");
 					Host::SetBaseStringSettingValue("USB2", "Type", "None");
-					ACJV::SetMode(JVS_MODE::DEFAULT);
+					if (jvsmode == "fighting")
+					{
+						ACJV::SetMode(JVS_MODE::FIGHTING);
+						Console.WriteLn(Color_Green, "ACGAME: jvsmode=fighting");
+					}
+					else
+						ACJV::SetMode(JVS_MODE::DEFAULT);
 				}
 
 				ACATA::SetEnv(basedir, s_imgname, s_acmedia);

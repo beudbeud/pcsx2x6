@@ -73,7 +73,8 @@ void JVSControlsWidget::bindSystemButtonWidgets()
 		const char* config_key;
 	};
 	static constexpr ButtonEntry entries[] = {
-		{"Service", "P1_Service"},
+		{"P1 Service", "P1_Service"},
+		{"P2 Service", "P2_Service"},
 		{"Insert Coin P1", "Coin1"},
 		{"Insert Coin P2", "Coin2"},
 	};

@@ -888,8 +888,9 @@ void InputManager::AddJVSBindings(SettingsInterface& si, bool is_profile)
 			}}, bi.bind_type, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
 		}
 
-		// Auto-mirror PadN gamepad bindings to JVS player N via matching GenericInputBinding.
-		// Select is excluded — on real cabs Service is a separate physical button; Select maps to Coin instead.
+		// Mirror PadN gamepad bindings to JVS player N via matching GenericInputBinding.
+		// Real S246 cabinets have no DS2 — the arcade panel wires directly to JVS.
+		// We read the user's Pad bindings and route them to JVS as the sole input path.
 		const Pad::ControllerInfo* pad_ci = Pad::GetControllerInfo(EmuConfig.Pad.Ports[player].Type);
 		if (!pad_ci)
 			continue;
@@ -917,7 +918,7 @@ void InputManager::AddJVSBindings(SettingsInterface& si, bool is_profile)
 			}
 		}
 
-		// Auto-mirror PadN Select -> Coin insert for player N
+		// Mirror PadN Select -> Coin insert for player N
 		for (const InputBindingInfo& pad_bi : pad_ci->bindings)
 		{
 			if (pad_bi.generic_mapping != GenericInputBinding::Select)
@@ -1644,10 +1645,11 @@ void InputManager::ReloadBindings(SettingsInterface& si, SettingsInterface& bind
 	AddHotkeyBindings(hotkey_binding_si, is_hotkey_profile);
 	AddJVSBindings(binding_si, is_binding_profile);
 
-	// If there's an input profile, we load pad bindings from it alone, rather than
-	// falling back to the base configuration.
-	for (u32 pad = 0; pad < Pad::NUM_CONTROLLER_PORTS; pad++)
-		AddPadBindings(binding_si, pad, is_binding_profile);
+	// S246/S256 cabinets have no DS2 controller — pad bindings are mirrored to JVS above.
+	// AddPadBindings is not called: the emulated DualShock2 receives no input,
+	// matching real hardware where the controller ports are empty.
+	// for (u32 pad = 0; pad < Pad::NUM_CONTROLLER_PORTS; pad++)
+	// 	AddPadBindings(binding_si, pad, is_binding_profile);
 
 	constexpr float ui_ctrl_range = 100.0f;
 	constexpr float pointer_sensitivity = 0.05f;
