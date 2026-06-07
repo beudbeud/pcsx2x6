@@ -657,42 +657,19 @@ namespace usb_lightgun
 
 	std::span<const SettingInfo> GunCon2Device::Settings(u32 subtype) const
 	{
-		static constexpr const SettingInfo info[] = {
-			{SettingInfo::Type::Path, "cursor_path", TRANSLATE_NOOP("USB", "Cursor Path"),
-				TRANSLATE_NOOP("USB", "Sets the crosshair image that this lightgun will use. Setting a crosshair image "
-									  "will disable the system cursor."),
-				""},
-			{SettingInfo::Type::Float, "cursor_scale", TRANSLATE_NOOP("USB", "Cursor Scale"),
-				TRANSLATE_NOOP("USB", "Scales the crosshair image set above."), "1", "0.01", "10", "0.01", TRANSLATE_NOOP("USB", "%.0f%%"),
-				nullptr, nullptr, 100.0f},
-			{SettingInfo::Type::String, "cursor_color", TRANSLATE_NOOP("USB", "Cursor Color"),
-				TRANSLATE_NOOP("USB", "Applies a color to the chosen crosshair images, can be used for multiple "
-									  "players. Specify in HTML/CSS format (e.g. #aabbcc)"),
-				"#ffffff"},
-			{SettingInfo::Type::Boolean, "custom_config", TRANSLATE_NOOP("USB", "Manual Screen Configuration"),
-				TRANSLATE_NOOP("USB",
-					"Forces the use of the screen parameters below, instead of automatic parameters if available."),
-				"false"},
-			{SettingInfo::Type::Float, "scale_x", TRANSLATE_NOOP("USB", "X Scale (Sensitivity)"),
-				TRANSLATE_NOOP("USB", "Scales the position to simulate CRT curvature."), "100", "0", "200", "0.1",
-				TRANSLATE_NOOP("USB", "%.2f%%"), nullptr, nullptr, 1.0f},
-			{SettingInfo::Type::Float, "scale_y", TRANSLATE_NOOP("USB", "Y Scale (Sensitivity)"),
-				TRANSLATE_NOOP("USB", "Scales the position to simulate CRT curvature."), "100", "0", "200", "0.1",
-				TRANSLATE_NOOP("USB", "%.2f%%"), nullptr, nullptr, 1.0f},
-			{SettingInfo::Type::Float, "center_x", TRANSLATE_NOOP("USB", "Center X"),
-				TRANSLATE_NOOP("USB", "Sets the horizontal center position of the simulated screen."), "320", "0",
-				"1024", "1", TRANSLATE_NOOP("USB", "%.0fpx"), nullptr, nullptr, 1.0f},
-			{SettingInfo::Type::Float, "center_y", TRANSLATE_NOOP("USB", "Center Y"),
-				TRANSLATE_NOOP("USB", "Sets the vertical center position of the simulated screen."), "120", "0", "1024",
-				"1", TRANSLATE_NOOP("USB", "%.0fpx"), nullptr, nullptr, 1.0f},
-			{SettingInfo::Type::Integer, "screen_width", TRANSLATE_NOOP("USB", "Screen Width"),
-				TRANSLATE_NOOP("USB", "Sets the width of the simulated screen."), "640", "1", "1024", "1", TRANSLATE_NOOP("USB", "%dpx"),
-				nullptr, nullptr, 1.0f},
-			{SettingInfo::Type::Integer, "screen_height", TRANSLATE_NOOP("USB", "Screen Height"),
-				TRANSLATE_NOOP("USB", "Sets the height of the simulated screen."), "240", "1", "1024", "1", TRANSLATE_NOOP("USB", "%dpx"),
-				nullptr, nullptr, 1.0f},
-		};
-		return info;
+		// Crosshair settings (cursor_path, cursor_scale, cursor_color) are rendered
+		// inline on the GunCon2 bindings page — see ControllerBindingWidget.cpp.
+		// Manual screen configuration is not exposed; calibration is handled
+		// automatically by the emulator.
+		//
+		// {SettingInfo::Type::Boolean, "custom_config", "Manual Screen Configuration", ...},
+		// {SettingInfo::Type::Float, "scale_x", "X Scale (Sensitivity)", ...},
+		// {SettingInfo::Type::Float, "scale_y", "Y Scale (Sensitivity)", ...},
+		// {SettingInfo::Type::Float, "center_x", "Center X", ...},
+		// {SettingInfo::Type::Float, "center_y", "Center Y", ...},
+		// {SettingInfo::Type::Integer, "screen_width", "Screen Width", ...},
+		// {SettingInfo::Type::Integer, "screen_height", "Screen Height", ...},
+		return {};
 	}
 
 	bool GunCon2Device::Freeze(USBDevice* dev, StateWrapper& sw) const

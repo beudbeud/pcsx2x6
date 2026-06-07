@@ -420,7 +420,10 @@ void ACATA::SetImgPath(const char* S) {
 void ACATA::SetEnv(std::string ata_img_path, std::string ata_img_filename, std::string Media) {
 	//ACATA::imgpath = Path::ToNativePath(Path::GetDirectory(ata_img_path));
 	Console.WarningFmt("ata_img_path '{}' | ata_img_filename '{}'", ata_img_path, ata_img_filename);
-    ACATA::imgpath = Path::Combine(ata_img_path, ata_img_filename);
+    if (Path::IsAbsolute(ata_img_filename))
+        ACATA::imgpath = ata_img_filename;
+    else
+        ACATA::imgpath = Path::Combine(ata_img_path, ata_img_filename);
     ACATA::MediaType = ACMEDIATYPE_FROM_STRING(Media);
 	Console.WarningFmt("ACENV: ata_img: '{}'", ACATA::imgpath);
 	Console.WarningFmt("mediat: '{}'", (int)ACATA::MediaType);

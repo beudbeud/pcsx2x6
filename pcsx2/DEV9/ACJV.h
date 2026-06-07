@@ -99,6 +99,8 @@ namespace ACJV {
     void SetDefaultConfiguration(SettingsInterface& si);
 
     bool IsSuppressDaemonEnabled();
+    const char* GetBoardDisplayName(BOARDID id);
+    BOARDID GetCurrentBoardID();
     void SetMode(JVS_MODE mode);
     void SetScreenPos(u16 x, u16 y);
     void SetGameId(const std::string& gameid);

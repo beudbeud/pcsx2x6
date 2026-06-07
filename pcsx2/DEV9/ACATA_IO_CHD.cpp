@@ -79,6 +79,9 @@ ACMEDIATYPE ChdImage::GetType() const
 
 u32 ChdImage::GetSectorSize() const
 {
+    // MAME CD CHDs: libchdr CD codecs already extract user data (2048) from raw sectors
+    if (m_unitBytes == 2448 || m_unitBytes == 2352)
+        return 2048;
     return m_unitBytes;
 }
 
@@ -126,10 +129,14 @@ bool ChdImage::ReadSector(u64 lba, void* buffer)
     if (!ReadHunk(hunk))
         return false;
 
-    std::memcpy(
-        buffer,
-        m_hunkBuffer.data() + offset,
-        m_unitBytes);
+    if (m_unitBytes == 2448 || m_unitBytes == 2352)
+    {
+        std::memcpy(buffer, m_hunkBuffer.data() + offset, 2048);
+    }
+    else
+    {
+        std::memcpy(buffer, m_hunkBuffer.data() + offset, m_unitBytes);
+    }
 
     return true;
 }
@@ -139,11 +146,12 @@ bool ChdImage::ReadSectors(u64 lba,
                            void* buffer)
 {
     u8* dst = static_cast<u8*>(buffer);
+    const u32 outBytes = (m_unitBytes == 2448 || m_unitBytes == 2352) ? 2048 : m_unitBytes;
 
     for (u32 i = 0; i < count; i++)
     {
         if (!ReadSector(lba + i,
-                        dst + (i * m_unitBytes)))
+                        dst + (i * outBytes)))
         {
             return false;
         }

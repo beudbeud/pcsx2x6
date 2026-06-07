@@ -46,6 +46,14 @@ std::string BOARDS[] = {
 };
 enum BOARDID ACJV::CurrentBoardID = RAYS_PCB;
 
+static constexpr const char* BOARD_DISPLAY_NAMES[] = {
+	"RAYS PCB",
+	"FCA-1 (Multipurpose)",
+	"FCB (Touch Panel)",
+	"TSS-I/O (Gun Extension)",
+	"MIU-I/O (Gun Extension)",
+};
+
 static constexpr u16 DEFAULT_DIP_SWITCH_STATE =
     (DIPS::VIDEO_VOLTAGE | DIPS::MONITOR_SYNCFREQ | DIPS::VIDEO_SYNC_SPLIT);
 
@@ -136,6 +144,18 @@ const ACJV::DIPSwitchInfo& ACJV::GetVideoSyncSplitDIPSwitch()
 bool ACJV::IsSuppressDaemonEnabled()
 {
 	return s_suppress_daemon;
+}
+
+const char* ACJV::GetBoardDisplayName(BOARDID id)
+{
+	if (id >= RAYS_PCB && id <= MIU_IO_JPN_GUN_EXTENTI)
+		return BOARD_DISPLAY_NAMES[id];
+	return "Unknown";
+}
+
+BOARDID ACJV::GetCurrentBoardID()
+{
+	return CurrentBoardID;
 }
 
 std::span<const InputBindingInfo> ACJV::GetDIPSwitchBindings()

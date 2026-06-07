@@ -19,6 +19,7 @@ public:
 
 private:
 	void bindDIPSwitchWidgets();
+	void bindSystemButtonWidgets();
 
 	Ui::JVSControlsWidget m_ui;
 	ControllerSettingsWindow* m_dialog;
