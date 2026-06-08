@@ -67,7 +67,11 @@ QIcon ControllerBindingWidget::getIcon() const
 void ControllerBindingWidget::populateControllerTypes()
 {
 	for (const auto& [name, display_name] : Pad::GetControllerTypeNames())
-		m_ui.controllerType->addItem(QString::fromUtf8(display_name), QString::fromUtf8(name));
+	{
+		const std::string_view sv(name);
+		if (sv == "None" || sv == "DualShock2")
+			m_ui.controllerType->addItem(QString::fromUtf8(display_name), QString::fromUtf8(name));
+	}
 }
 
 void ControllerBindingWidget::onTypeChanged()
@@ -1430,6 +1434,61 @@ USBBindingWidget* USBBindingWidget::createInstance(
 	{
 		Ui::USBBindingWidget_GunCon2().setupUi(widget);
 		has_template = true;
+
+		// Embed crosshair settings directly on the bindings page (no Settings subtab).
+		QGridLayout* mainLayout = qobject_cast<QGridLayout*>(widget->layout());
+		if (mainLayout)
+		{
+			QGroupBox* crosshairGroup = new QGroupBox(qApp->translate("USB", "Crosshair"), widget);
+			QGridLayout* chLayout = new QGridLayout(crosshairGroup);
+			chLayout->setColumnStretch(0, 0);
+			chLayout->setColumnStretch(1, 1);
+			SettingsInterface* sif = parent->getDialog()->getProfileSettingsInterface();
+			const std::string& config_section = parent->getConfigSection();
+			const std::string prefix = std::string(parent->getDeviceType()) + "_";
+
+			// Cursor Path
+			QLineEdit* cursorPath = new QLineEdit(crosshairGroup);
+			cursorPath->setObjectName(QStringLiteral("cursor_path"));
+			QPushButton* browseBtn = new QPushButton(qApp->translate("USB", "Browse..."), crosshairGroup);
+			ControllerSettingWidgetBinder::BindWidgetToInputProfileString(
+				sif, cursorPath, config_section, prefix + "cursor_path", "");
+			QObject::connect(browseBtn, &QPushButton::clicked, [widget, cursorPath]() {
+				const QString path(QDir::toNativeSeparators(QFileDialog::getOpenFileName(widget, qApp->translate("USB", "Select File"))));
+				if (!path.isEmpty())
+					cursorPath->setText(path);
+			});
+			QHBoxLayout* pathHBox = new QHBoxLayout();
+			pathHBox->addWidget(cursorPath, 1);
+			pathHBox->addWidget(browseBtn);
+			chLayout->addWidget(new QLabel(qApp->translate("USB", "Cursor Path"), crosshairGroup), 0, 0);
+			chLayout->addLayout(pathHBox, 0, 1);
+
+			// Cursor Scale
+			QDoubleSpinBox* cursorScale = new QDoubleSpinBox(crosshairGroup);
+			cursorScale->setObjectName(QStringLiteral("cursor_scale"));
+			cursorScale->setMinimum(1);
+			cursorScale->setMaximum(1000);
+			cursorScale->setSingleStep(1);
+			cursorScale->setSuffix(QStringLiteral("%"));
+			cursorScale->setDecimals(0);
+			ControllerSettingWidgetBinder::BindWidgetToInputProfileFloat(
+				sif, cursorScale, config_section, prefix + "cursor_scale", 1.0f, 100.0f);
+			chLayout->addWidget(new QLabel(qApp->translate("USB", "Cursor Scale"), crosshairGroup), 1, 0);
+			chLayout->addWidget(cursorScale, 1, 1);
+
+			// Cursor Color
+			QLineEdit* cursorColor = new QLineEdit(crosshairGroup);
+			cursorColor->setObjectName(QStringLiteral("cursor_color"));
+			ControllerSettingWidgetBinder::BindWidgetToInputProfileString(
+				sif, cursorColor, config_section, prefix + "cursor_color", "#ffffff");
+			chLayout->addWidget(new QLabel(qApp->translate("USB", "Cursor Color"), crosshairGroup), 2, 0);
+			chLayout->addWidget(cursorColor, 2, 1);
+
+			// Insert crosshair group before the vertical spacer (last item)
+			int spacerRow = mainLayout->rowCount();
+			mainLayout->addWidget(crosshairGroup, spacerRow, 0, 1, mainLayout->columnCount());
+		}
 	}
 	else if (type == "RealPlay")
 	{

@@ -18,6 +18,7 @@
 #include "common/ProgressCallback.h"
 #include "common/ScopedGuard.h"
 #include "common/StringUtil.h"
+#include "common/ARCADE.h"
 
 #include <algorithm>
 #include <array>
@@ -60,6 +61,7 @@ namespace GameList
 	static bool GetIsoSerialAndCRC(const std::string& path, s32* disc_type, std::string* serial, u32* crc);
 	static Region ParseDatabaseRegion(const std::string_view db_region);
 	static bool GetElfListEntry(const std::string& path, GameList::Entry* entry);
+	static bool GetAcConfListEntry(const std::string& path, GameList::Entry* entry);
 	static bool GetIsoListEntry(const std::string& path, GameList::Entry* entry);
 
 	static bool GetGameListEntryFromCache(const std::string& path, GameList::Entry* entry);
@@ -143,6 +145,8 @@ const char* GameList::RegionToString(Region region, bool translate)
 		TRANSLATE_NOOP("GameList", "PAL-SW"),
 		TRANSLATE_NOOP("GameList", "PAL-SWI"),
 		TRANSLATE_NOOP("GameList", "PAL-UK"),
+		TRANSLATE_NOOP("GameList", "System246"),
+		TRANSLATE_NOOP("GameList", "System256"),
 	};
 
 	const char* name = names.at(static_cast<int>(region));
@@ -185,6 +189,8 @@ const char* GameList::RegionToFlagFilename(Region region)
 		"se",  // PAL-SW
 		"ch",  // PAL-SWI
 		"gb",  // PAL-UK
+		"246B", // SYSTEM246
+		"256", // SYSTEM256
 	};
 
 	return flag_names.at(static_cast<int>(region));
@@ -228,7 +234,7 @@ const char* GameList::EntryCompatibilityRatingToString(CompatibilityRating ratin
 
 bool GameList::IsScannableFilename(const std::string_view path)
 {
-	return VMManager::IsDiscFileName(path) || VMManager::IsElfFileName(path);
+	return VMManager::IsDiscFileName(path) || VMManager::IsElfFileName(path) || VMManager::isArcadeManifest(path);
 }
 
 void GameList::FillBootParametersForEntry(VMBootParameters* params, const Entry* entry)
@@ -244,6 +250,37 @@ void GameList::FillBootParametersForEntry(VMBootParameters* params, const Entry*
 		params->filename = VMManager::GetDiscOverrideFromGameSettings(entry->path);
 		params->source_type = params->filename.empty() ? CDVD_SourceType::NoDisc : CDVD_SourceType::Iso;
 		params->elf_override = entry->path;
+	}
+	else if (entry->type == GameList::EntryType::ARCADE) {
+		params->filename = entry->path;
+		//params->source_type = CDVD_SourceType::NoDisc;
+		
+		INISettingsInterface INI(entry->path);
+		if (INI.Load()){
+			ArcadeBootParams P;
+			std::string card, basedir, subdir;
+
+			basedir = Path::ToNativePath(Path::GetDirectory(entry->path))+FS_OSPATH_SEPARATOR_CHARACTER;
+			subdir = INI.GetStringValue("data", "subdir");
+			if (subdir != "") basedir = Path::AppendDirectory(basedir, subdir);
+			P.cards[0] = INI.GetStringValue("data", "dongle");
+			P.cards[1] = INI.GetStringValue("data", "card");
+			P.mediapath = INI.GetStringValue("data", "mediasrc");
+			P.MediaType = ACMEDIATYPE_FROM_STRING(INI.GetStringValue("data", "media"));
+			params->elf_override = Path::Combine(basedir, INI.GetStringValue("data", "elf"));
+			P.sram_path = Path::Combine(basedir, INI.GetStringValue("data", "sram", "sram.bin"));
+			params->arcade = P;
+			/*if ((card = INI.GetStringValue("data", "dongle", "")) != "") {
+				Host::SetBaseStringSettingValue("MemoryCards", "Slot1_Filename", card.c_str());
+				Console.WriteLnFmt("ARCADE: setting dongle to: '{}'", card);
+			}
+			if ((card = INI.GetStringValue("data", "card", "")) != "") {
+				Host::SetBaseStringSettingValue("MemoryCards", "Slot2_Filename", card.c_str());
+				Console.WriteLnFmt("ARCADE: setting card   to: '{}'", card);
+			}*/
+		} else {
+			Console.Error("cannot read arcade game config '%s'", entry->path.c_str());
+		}
 	}
 	else
 	{
@@ -269,6 +306,34 @@ bool GameList::GetIsoSerialAndCRC(const std::string& path, s32* disc_type, std::
 	*disc_type = DoCDVDdetectDiskType();
 	cdvdGetDiscInfo(serial, nullptr, nullptr, crc, nullptr);
 	DoCDVDclose();
+	return true;
+}
+
+bool GameList::GetAcConfListEntry(const std::string& filename, GameList::Entry* entry)
+{
+		INISettingsInterface INI(filename);
+		if (!INI.Load()){
+			Console.Error("cannot read arcade game config '%s'", filename.c_str());
+			return false;
+		}
+		
+		std::string basedir = Path::ToNativePath(Path::GetDirectory(filename))+FS_OSPATH_SEPARATOR_CHARACTER;
+		std::string subdir = INI.GetStringValue("data", "subdir");
+		if (subdir != "") basedir = Path::AppendDirectory(basedir, subdir);
+		//Console.WriteLnFmt("basedir:'{}', subdir:'{}'", basedir, subdir);
+		std::string s_acmedia, s_imgname;
+			
+			
+		entry->path = filename;
+		entry->serial.clear();
+		entry->region = INI.GetStringValue("game", "platform") == "256" ? Region::SYSTEM256 : Region::SYSTEM246;
+		entry->type = EntryType::ARCADE;
+		entry->compatibility_rating = CompatibilityRating::Unknown;
+		entry->crc = 0x00000000;
+		entry->total_size = 0;
+		entry->title = INI.GetStringValue("game", "name");
+		entry->serial = INI.GetStringValue("game", "gameid");
+
 	return true;
 }
 
@@ -441,6 +506,8 @@ bool GameList::PopulateEntryFromPath(const std::string& path, GameList::Entry* e
 {
 	if (VMManager::IsElfFileName(path.c_str()))
 		return GetElfListEntry(path, entry);
+	else if (VMManager::isArcadeManifest(path.c_str()))
+		return GetAcConfListEntry(path, entry);
 	else
 		return GetIsoListEntry(path, entry);
 }

@@ -9,6 +9,7 @@
 #include "R5900.h"
 #include "ps2/BiosTools.h"
 #include "VMManager.h"
+#include "DEV9/ACJV.h"
 
 #include <ctype.h>
 #include <fmt/format.h>
@@ -1229,6 +1230,40 @@ namespace R3000A
 		}
 	} // namespace loadcore
 
+	// HLE workaround: suppress the DAEMON module's sec_checker thread on S246/S256 arcade.
+	// sec_checker (priority 126) races with mcman for the mcman_io_sema during card detection,
+	// causing dongle file opens (mc0:ACCORE etc.) to fail with fd=-6.
+	// On real hardware the race doesn't manifest due to different IOP scheduling granularity.
+	// This should be revisited if IOP thread scheduling accuracy improves.
+	// Toggled via JVS > Extra > "Suppress DAEMON security thread" (ON by default).
+	namespace thbase
+	{
+		static bool s_suppress_next_start = false;
+
+		int CreateThread_HLE()
+		{
+			if (ACJV::IsSuppressDaemonEnabled())
+			{
+				u32 priority = iopMemRead32(a0 + 16);
+				if (priority >= 126)
+					s_suppress_next_start = true;
+			}
+			return 0;
+		}
+
+		int StartThread_HLE()
+		{
+			if (s_suppress_next_start)
+			{
+				s_suppress_next_start = false;
+				v0 = 0;
+				pc = ra;
+				return 1;
+			}
+			return 0;
+		}
+	} // namespace thbase
+
 	namespace intrman
 	{
 		// clang-format off
@@ -1352,6 +1387,10 @@ namespace R3000A
 		END_MODULE
 		MODULE(sysmem)
 			EXPORT_H( 14, Kprintf)
+		END_MODULE
+		MODULE(thbase)
+			EXPORT_H(  4, CreateThread)
+			EXPORT_H(  6, StartThread)
 		END_MODULE
 
 		// Special case with ioman and iomanX

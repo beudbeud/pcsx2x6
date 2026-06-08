@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   cut-release:
-    if: github.repository == 'PCSX2/pcsx2'
+    if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     name: "Create Tag and Release"
     runs-on: ubuntu-latest
     outputs:
@@ -57,8 +57,8 @@ jobs:
 
       - name: Generate Release Notes
         env:
-          OWNER: PCSX2
-          REPO: pcsx2
+          OWNER: PS2Homebrew-arcade
+          REPO: pcsx2x6
           GITHUB_TOKEN: ${{ github.token }}
           COMMIT_SHA: ${{ github.SHA }}
         run: |
@@ -88,7 +88,7 @@ jobs:
   # Build Everything
   # Linux
   build_linux_qt:
-    if: github.repository == 'PCSX2/pcsx2'
+    if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     needs:
       - cut-release
     name: "Linux"
@@ -104,7 +104,7 @@ jobs:
     secrets: inherit
 
   build_linux_flatpak:
-    if: github.repository == 'PCSX2/pcsx2'
+    if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     needs:
       - cut-release
     name: "Linux"
@@ -121,7 +121,7 @@ jobs:
 
   # Windows
   build_windows_qt:
-    if: github.repository == 'PCSX2/pcsx2'
+    if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     needs:
       - cut-release
     name: "Windows"
@@ -138,7 +138,7 @@ jobs:
 
   # MacOS
   build_macos_qt:
-    if: github.repository == 'PCSX2/pcsx2'
+    if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     needs:
       - cut-release
     name: "MacOS"
@@ -166,7 +166,7 @@ jobs:
 
   # Upload the Artifacts
   upload_artifacts:
-    if: github.repository == 'PCSX2/pcsx2'
+    if: github.repository == 'PS2Homebrew-arcade/pcsx2x6'
     needs:
       - cut-release
       - build_linux_flatpak
@@ -202,11 +202,11 @@ jobs:
         run: |
           TAG_VAL=${{needs.cut-release.outputs.new_tag}}
           echo "TAG_VAL=${TAG_VAL}"
-          gh release list --repo PCSX2/pcsx2
+          gh release list --repo PS2Homebrew-arcade/pcsx2x6
           mkdir -p ${{ github.WORKSPACE }}/ci-artifacts/out
           TAG_VAL=${TAG_VAL} python ./.github/workflows/scripts/releases/rename-release-assets.py
           ls ${{ github.WORKSPACE }}/ci-artifacts/out
-          gh release upload "${TAG_VAL}" ${{ github.WORKSPACE }}/ci-artifacts/out/*  --repo PCSX2/pcsx2 --clobber
+          gh release upload "${TAG_VAL}" ${{ github.WORKSPACE }}/ci-artifacts/out/*  --repo PS2Homebrew-arcade/pcsx2x6 --clobber
 
       - name: Publish Release
         if: github.event_name != 'workflow_dispatch' || inputs.is_prerelease == 'true'
@@ -215,7 +215,7 @@ jobs:
         run: |
           TAG_VAL=${{needs.cut-release.outputs.new_tag}}
           echo "TAG_VAL=${TAG_VAL}"
-          gh release edit ${TAG_VAL} --draft=false --repo PCSX2/pcsx2
+          gh release edit ${TAG_VAL} --draft=true --repo PS2Homebrew-arcade/pcsx2x6
 
       - uses: actions/setup-node@v6
         with:
@@ -223,9 +223,9 @@ jobs:
 
       - name: Announce Release
         env:
-          OWNER: PCSX2
-          REPO: pcsx2
-          DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILD_WEBHOOK }}
+          OWNER: PS2Homebrew-arcade
+          REPO: pcsx2x6
+          DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILDS_CHAN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           TAG_VAL=${{needs.cut-release.outputs.new_tag}}

@@ -61,12 +61,11 @@ if (!releaseInfo.prerelease) {
 
 // Publish Webhook
 const embed = new MessageEmbed()
-  .setColor('#FF8000')
-  .setTitle('New PCSX2 Nightly Build Available!')
-  .setDescription("To download the latest or previous builds, [visit the official downloads page](https://pcsx2.net/downloads/).")
+  .setColor('#FF0000')
+  .setTitle('New PCSX2x6 Nightly Build Available!')
+  .setDescription("To download the latest or previous builds, [visit the official downloads page](https://ps2homebrew-arcade.github.io/pcsx2x6/).")
   .addFields(
     { name: 'Version', value: releaseInfo.tag_name, inline: true },
-    { name: 'Installation Steps', value: '[See Here](https://pcsx2.net/docs/category/setup)', inline: true },
     { name: 'Included Changes', value: releaseInfo.body, inline: false }
   );
 console.log(embed);

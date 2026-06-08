@@ -6,6 +6,10 @@
 #include "common/StringUtil.h"
 
 #include "IopDma.h"
+#include "ACATA.h"
+#include "ACCORE.h"
+#include "ACRAM.h"
+#include "IopHw.h"
 
 #ifdef _WIN32
 #include "common/RedtapeWindows.h"
@@ -23,6 +27,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include "DEV9.h"
+#include "ACDEV.h"
 #include "Config.h"
 #include "smap.h"
 
@@ -213,6 +218,8 @@ int DEV9irqHandler(void)
 	//dev9Ru16(SPD_R_INTR_STAT)|= dev9.irqcause;
 	//DevCon.WriteLn("DEV9: DEV9irqHandler %x, %x", dev9.irqcause, dev9.irqmask);
 	if (dev9.irqcause & dev9.irqmask)
+		return 1;
+	if (ACCORE::hasPendingInterrupt()) // S246 arcade: ATA/ATAPI interrupts go through ACCORE
 		return 1;
 	return 0;
 }
@@ -935,26 +942,14 @@ u16 DEV9read16(u32 addr)
 	}
 }
 
+
 u32 DEV9read32(u32 addr)
 {
-	if (!EmuConfig.DEV9.EthEnable && !EmuConfig.DEV9.HddEnable)
-		return 0;
-
-	if (addr >= ATA_DEV9_HDD_BASE && addr < ATA_DEV9_HDD_END)
+	if (addr >= ACDEV_BASE && addr < ACDEV_ROMDIR_POKE_END)
 	{
-		Console.Error("DEV9: ATA does not support 32bit reads %lx", addr);
+		// rom0:ACDEV is making ROMDRV look for a romdir filesystem here, this is useless, only arcade TOOLs had this
 		return 0;
 	}
-	if (addr >= SMAP_REGBASE && addr < FLASH_REGBASE)
-	{
-		//smap
-		return smap_read32(addr);
-	}
-	if ((addr >= FLASH_REGBASE) && (addr < (FLASH_REGBASE + FLASH_REGSIZE)))
-	{
-		return static_cast<u32>(FLASHread32(addr, 4));
-	}
-
 	const u32 hard = dev9Ru32(addr);
 	Console.Error("DEV9: Unknown 32bit read at address %lx value %x", addr, hard);
 	return hard;
@@ -1023,7 +1018,14 @@ void DEV9write16(u32 addr, u16 value)
 	}
 
 	dev9Ru16(addr) = value;
-	Console.Error("DEV9: *Unknown 16bit write at address %lx value %x", addr, value);
+	/**
+	 * isra: ACFLASH module writes the following sequence to this specific address: 
+	 * [0x00ff, 0x0090, 0x0090, 0x00ff] // Intel 28F640J5  probe
+	 * [0xaaaa, 0x5555, 0x9090, 0xf0f0] // Fujitsu 29F033C probe
+	 * SILENCE!
+	 * */
+	if (addr != 0x10000000) 
+		Console.Error("DEV9: *Unknown 16bit write at address %lx value %x", addr, value);
 	return;
 }
 
@@ -1065,13 +1067,36 @@ void DEV9write32(u32 addr, u32 value)
 
 void DEV9readDMA8Mem(u32* pMem, int size)
 {
-	if (!EmuConfig.DEV9.EthEnable && !EmuConfig.DEV9.HddEnable)
-		return;
+	//if (!EmuConfig.DEV9.EthEnable && !EmuConfig.DEV9.HddEnable)
+	//	return;
 
 	size >>= 1;
 
-	DevCon.WriteLn("DEV9: *DEV9readDMA8Mem: size %x", size);
+	//DevCon.WriteLn("DEV9: *%s: size %x", __FUNCTION__, size);
+	if (ACCORE::DMA::PendTrasnfType == ACCORE::DMA::ATAPI) {
+		ACATA::TH::IO_Read(pMem, size);
+		ACCORE::DMA::PendTrasnfType = ACCORE::DMA::NONE;
+		ACATA::R_STATUS = ATA_STAT_READY;
+		psxDMA8Interrupt();
+		ACCORE::intr(ACCORE::INTRN_ATA);
+	} else if (ACCORE::DMA::PendTrasnfType == ACCORE::DMA::ATA) {
+		ACATA::TH::IO_Read(pMem, size);
+		ACCORE::DMA::PendTrasnfType = ACCORE::DMA::NONE;
+		ACATA::R_STATUS = ATA_STAT_READY;
+		psxDMA8Interrupt();
+		ACCORE::intr(ACCORE::INTRN_ATA);
+	} else {
+		u32 dma_target = psxHu32(0x1410); // check if DMA targets ACRAM (0x14xxxxxx)
+		if ((dma_target & 0xFF000000) == 0x14000000) {
+			int bank = ACRAM::BankFromDmaTarget(dma_target);
+			ACRAM::DmaRead(pMem, size, bank);
+			psxDMA8Interrupt();
+		} else {
+			Console.Error("%s: requested DMA transfer of 0x%-8X bytes while no pending transfer (%d)", __FUNCTION__, size, ACCORE::DMA::PendTrasnfType);
+		}
+	}
 
+#if 0 // TODO: purely for dealing with an "itch". castrate all retail DEV9 operations out of the emu when it's on a working state if possible
 	if (dev9.dma_ctrl & SPD_DMA_TO_SMAP)
 	{
 		smap_readDMA8Mem(pMem, size);
@@ -1089,16 +1114,33 @@ void DEV9readDMA8Mem(u32* pMem, int size)
 			DEV9runFIFO();
 		}
 	}
-
+#endif
 	//TODO, track if read was successful
 }
 
 void DEV9writeDMA8Mem(u32* pMem, int size)
 {
+	size >>= 1;
+
+	if (ACCORE::DMA::PendTrasnfType == ACCORE::DMA::ATA_WRITE) {
+		ACATA::TH::IO_Write(pMem, size);
+		ACCORE::DMA::PendTrasnfType = ACCORE::DMA::NONE;
+		ACATA::R_STATUS = ATA_STAT_READY;
+		psxDMA8Interrupt();
+		ACCORE::intr(ACCORE::INTRN_ATA);
+		return;
+	}
+
+	u32 dma_target_w = psxHu32(0x1410);
+	if ((dma_target_w & 0xFF000000) == 0x14000000) {
+		int bank = ACRAM::BankFromDmaTarget(dma_target_w);
+		ACRAM::DmaWrite(pMem, size, bank);
+		psxDMA8Interrupt();
+		return;
+	}
+
 	if (!EmuConfig.DEV9.EthEnable && !EmuConfig.DEV9.HddEnable)
 		return;
-
-	size >>= 1;
 
 	DevCon.WriteLn("DEV9: *DEV9writeDMA8Mem: size %x", size);
 

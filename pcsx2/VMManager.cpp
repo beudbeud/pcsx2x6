@@ -61,6 +61,7 @@
 #include "discord_rpc.h"
 #include "fmt/format.h"
 
+
 #include <atomic>
 #include <mutex>
 #include <sstream>
@@ -77,6 +78,13 @@
 #ifdef __APPLE__
 #include "common/Darwin/DarwinMisc.h"
 #endif
+
+#include "common/YAML.h"
+#include "common/ARCADE.h"
+
+#include "DEV9/ACATA.h"
+#include "DEV9/ACJV.h"
+#include "DEV9/ACSRAM.h"
 
 namespace VMManager
 {
@@ -177,11 +185,14 @@ static std::string s_elf_path;
 static std::pair<u32, u32> s_elf_text_range;
 static bool s_elf_executed = false;
 static std::string s_elf_override;
+static std::string s_acgame;
 static std::string s_input_profile_name;
 static u32 s_frame_advance_count = 0;
 static bool s_fast_boot_requested = false;
 static bool s_gs_open_on_initialize = false;
 static bool s_thread_affinities_set = false;
+static bool s_acgame_sys246 = false;
+static bool s_acgame_sys256 = false;
 
 static LimiterModeType s_limiter_mode = LimiterModeType::Nominal;
 static s64 s_limiter_ticks_per_frame = 0;
@@ -199,9 +210,10 @@ static bool s_screensaver_inhibited = false;
 
 static bool s_discord_presence_active = false;
 static time_t s_discord_presence_time_epoch;
-static const char* s_discord_presence_app_id = "1458595419499139094";
-static const char* s_discord_presence_large_image_key = "4k-pcsx2";
-static const char* s_discord_presence_large_image_text = "PCSX2 PS2 Emulator";
+
+static const char* s_discord_presence_app_id = "1512493978174619709";
+static const char* s_discord_presence_large_image_key = "appiconlarge";
+static const char* s_discord_presence_large_image_text = "PCSX2x6 SYSTEM246 Emulator";
 
 // Making GSDumpReplayer.h dependent on R5900.h is a no-no, since the GS uses it.
 extern R5900cpu GSDumpReplayerCpu;
@@ -594,6 +606,7 @@ void VMManager::SetDefaultSettings(
 	{
 		Pad::SetDefaultControllerConfig(si);
 		USB::SetDefaultConfiguration(&si);
+		ACJV::SetDefaultConfiguration(si);
 	}
 	if (hotkeys)
 		Pad::SetDefaultHotkeyConfig(si);
@@ -612,6 +625,7 @@ void VMManager::LoadSettings()
 	SettingsInterface* si = Host::GetSettingsInterface();
 	LoadCoreSettings(*si);
 	Pad::LoadConfig(*si);
+	ACJV::LoadConfig(*si);
 	Host::LoadSettings(*si, lock);
 	InputManager::ReloadSources(*si, lock);
 	LoadInputBindings(*si, lock);
@@ -722,6 +736,14 @@ void VMManager::WarnAboutUnconfiguredController()
 
 void VMManager::ApplyGameFixes()
 {
+	// Arcade games: HasBootedELF() stays false during proverb.elf boot, but the
+	// game serial is already set. Apply GameDB fixes early so gsHWFixes work.
+	if (!s_acgame.empty())
+	{
+		if (const auto* game = GameDatabase::findGame(ACJV::GetGameId()))
+			game->applyGSHardwareFixes(EmuConfig.GS);
+	}
+
 	if (!HasBootedELF() && !GSDumpReplayer::IsReplayingDump())
 	{
 		// Instant DMA needs to be on for this BIOS (font rendering is broken without it, possible cache issues).
@@ -1056,6 +1078,12 @@ void VMManager::UpdateDiscDetails(bool booting)
 			cdvdGetDiscInfo(&s_disc_serial, &s_disc_elf, &s_disc_version, &s_disc_crc, nullptr);
 			serial_is_valid = !s_disc_serial.empty();
 		}
+		else if (!s_acgame.empty()) {
+			//s_disc_serial = Path::GetFileTitle(s_acgame);
+			title = s_title;
+			s_disc_version = {};
+			s_disc_crc = 0;
+		}
 		else if (!s_elf_override.empty())
 		{
 			s_disc_serial = Path::GetFileTitle(s_elf_override);
@@ -1268,6 +1296,110 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 			s_elf_override = filename;
 			return true;
 		}
+		else if (isArcadeManifest(filename))
+		{
+			s_acgame = filename;
+			CDVDsys_ChangeSource(CDVD_SourceType::NoDisc); // COH-H does not have a laser like retails
+			INISettingsInterface INI(filename);
+			if (!INI.Load()){
+				Console.Error("cannot read arcade game config '%s'", filename.c_str());
+				return false;
+			} else {
+				Console.WriteLn(Color_Green, "# ARCADE GAME CONFIG FILE DETECTED");
+				std::string basedir = Path::ToNativePath(Path::GetDirectory(filename))+FS_OSPATH_SEPARATOR_CHARACTER;
+				std::string subdir = INI.GetStringValue("data", "subdir");
+				if (subdir != "") basedir = Path::AppendDirectory(basedir, subdir);
+				Console.WriteLnFmt(Color_Green, "ACGAME: basedir:'{}'", basedir);
+				std::string s_acmedia, s_imgname, s_serial;
+				s_acmedia = INI.GetStringValue("data", "media");
+				s_imgname = INI.GetStringValue("data", "mediasrc");
+				s_title = s_serial = INI.GetStringValue("game", "name");
+				s_disc_serial = s_serial = INI.GetStringValue("game", "gameid");
+				ACJV::SetGameId(s_serial); // Adapt JVS input to detected GAMEID
+				std::string platform = INI.GetStringValue("game", "platform", "");
+				s_acgame_sys246 = (platform == "246" || platform == "256" || platform == "super256");
+				s_acgame_sys256 = (platform == "256" || platform == "super256");
+				if (platform == "super256")
+					PS2CLK = PS2CLK_SS256;
+				else if (s_acgame_sys256)
+					PS2CLK = PS2CLK_S256;
+				if (s_acgame_sys246)
+				{
+					Console.WriteLnFmt(Color_Green, "ACGAME: System {} detected — extended IOP RAM", platform);
+				}
+
+				// When subdir= is set, basedir points to the subdir (e.g. roms/tekken4/).
+				// Dongle/card files may live elsewhere, so fall back to acgame dir and memcards/.
+				std::string acgamedir = Path::ToNativePath(Path::GetDirectory(filename))+FS_OSPATH_SEPARATOR_CHARACTER;
+				std::string card;
+				// Slot 1 (mc0:) = dongle (boot modules only, no save data).
+				// Always overwrite — DONGLEMAN corrupts this file at runtime.
+				if ((card = INI.GetStringValue("data", "dongle", "")) != "") {
+					std::string src = Path::Combine(basedir, card);
+					if (!FileSystem::FileExists(src.c_str()))
+						src = Path::Combine(acgamedir, card);
+					if (!FileSystem::FileExists(src.c_str()))
+						src = Path::Combine(Path::Combine(acgamedir, "memcards"), card);
+					std::string dst = Path::Combine(EmuFolders::MemoryCards, card);
+					if (FileSystem::FileExists(src.c_str()))
+						FileSystem::CopyFilePath(src.c_str(), dst.c_str(), true);
+					Host::SetBaseStringSettingValue("MemoryCards", "Slot1_Filename", card.c_str());
+				}
+				// Slot 2 (mc1:) = save card (e.g. SC2 conquest). Never overwrite existing saves.
+				if ((card = INI.GetStringValue("data", "card", "")) != "") {
+					std::string src = Path::Combine(basedir, card);
+					if (!FileSystem::FileExists(src.c_str()))
+						src = Path::Combine(acgamedir, card);
+					if (!FileSystem::FileExists(src.c_str()))
+						src = Path::Combine(Path::Combine(acgamedir, "memcards"), card);
+					std::string dst = Path::Combine(EmuFolders::MemoryCards, card);
+					if (FileSystem::FileExists(src.c_str()) && !FileSystem::FileExists(dst.c_str()))
+						FileSystem::CopyFilePath(src.c_str(), dst.c_str(), false);
+					Host::SetBaseStringSettingValue("MemoryCards", "Slot2_Filename", card.c_str());
+				}
+				/// TODOx6: Decide if we want to lock mc1 access if .ACGAME does not ask for it
+				//   Only SoulCalibur2 uses it, with the conquest card. yet many games bring a DONGLEMAN that can still access both ports
+				//   It SHOULD not be possible: but What if A game with the appropiate dongleman driver damages a conquest card?
+				// ---> else Host::SetBaseBoolSettingValue("MemoryCards", "Slot2_Enable", false);
+
+				//FileMcd_Reopen(s_serial);
+				s_elf_override = Path::Combine(basedir, INI.GetStringValue("data", "elf"));
+				EmuConfig.CurrentGameArgs = INI.GetStringValue("data", "args");
+				ACSRAM::filepath = Path::Combine(basedir, INI.GetStringValue("data", "sram", "sram.bin"));
+				std::string jvsmode = INI.GetStringValue("data", "jvsmode", "");
+				if (jvsmode == "lightgun")
+				{
+					Host::SetBaseStringSettingValue("USB1", "Type", "guncon2");
+					Host::SetBaseStringSettingValue("USB2", "Type", "guncon2");
+					ACJV::SetMode(JVS_MODE::LIGHTGUN);
+					Console.WriteLn(Color_Green, "ACGAME: jvsmode=lightgun -> GunCon2 on USB1+USB2");
+				}
+				else
+				{
+					Host::SetBaseStringSettingValue("USB1", "Type", "None");
+					Host::SetBaseStringSettingValue("USB2", "Type", "None");
+					if (jvsmode == "fighting")
+					{
+						ACJV::SetMode(JVS_MODE::FIGHTING);
+						Console.WriteLn(Color_Green, "ACGAME: jvsmode=fighting");
+					}
+					else
+						ACJV::SetMode(JVS_MODE::DEFAULT);
+				}
+
+				ACATA::SetEnv(basedir, s_imgname, s_acmedia);
+				int R;
+				if ((R = ACATA::TH::IO_OpenImage())!=0) {
+					Error::SetString(error, std::string("cannot open arcade media image"));
+					return false;
+				}
+				Console.WriteLnFmt(Color_Green, "ACGAME: elf:'{}'", s_elf_override);
+				Console.WriteLnFmt(Color_Green, "ACGAME: sram:'{}'", ACSRAM::filepath);
+				Console.WriteLnFmt(Color_Green, "ACGAME: media:'{}'", ACATA::imgpath);
+
+				return true;
+			}
+		}
 		else
 		{
 			// TODO: Maybe we should check if it's a valid iso here...
@@ -1450,6 +1582,8 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 		cdvdLoadNVRAM();
 	}
 
+	ACSRAM::ReadFile();
+
 	Error cdvd_error;
 	Console.WriteLn("Opening CDVD...");
 	if (!DoCDVDopen(&cdvd_error))
@@ -1483,6 +1617,7 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 		}
 
 		Hle_SetHostRoot(s_elf_override.c_str());
+		ACATA::SetImgPath(s_elf_override.c_str());
 	}
 	else if (CDVDsys_GetSourceType() == CDVD_SourceType::Iso)
 	{
@@ -1518,6 +1653,13 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	s_cpu_implementation_changed = false;
 	UpdateCPUImplementations();
 	mmap_ResetBlockTracking();
+	if (s_acgame_sys246)
+		EmuConfig.Cpu.ExtraMemory = true;
+	if (s_acgame_sys256)
+	{
+		s_sys256_mode = true;
+		Console.WriteLnFmt(Color_Green, "S256: bus clock 393MHz, IOP 49MHz");
+	}
 	memSetExtraMemMode(EmuConfig.Cpu.ExtraMemory);
 	Internal::ClearCPUExecutionCaches();
 	FPControlRegister::SetCurrent(EmuConfig.Cpu.FPUFPCR);
@@ -1677,6 +1819,10 @@ void VMManager::Shutdown(bool save_resume_state)
 
 	SaveSessionTime(s_disc_serial);
 	s_elf_override = {};
+	s_acgame = {};
+	PS2CLK = PS2CLK_DEFAULT;
+	PSXCLK = 36864000;
+	s_sys256_mode = false;
 	ClearELFInfo();
 	CDVDsys_ClearFiles();
 
@@ -1709,6 +1855,7 @@ void VMManager::Shutdown(bool save_resume_state)
 	DoCDVDclose();
 	FWclose();
 	FileMcd_EmuClose();
+	ACATA::TH::IO_CloseImage();
 
 	// If the fullscreen UI is running, do a hardware reset on the GS
 	// so that the texture cache and targets are all cleared.
@@ -1727,8 +1874,10 @@ void VMManager::Shutdown(bool save_resume_state)
 
 	if (GSDumpReplayer::IsReplayingDump())
 		GSDumpReplayer::Shutdown();
-	else
+	else {
 		cdvdSaveNVRAM();
+		ACSRAM::WriteFile();
+	}
 
 	cdvdUnlock();
 
@@ -2422,6 +2571,11 @@ bool VMManager::IsElfFileName(const std::string_view path)
 	return StringUtil::EndsWithNoCase(path, ".elf");
 }
 
+bool VMManager::isArcadeManifest(const std::string_view path)
+{
+	return StringUtil::EndsWithNoCase(path, ".acgame");
+}
+
 bool VMManager::IsBlockDumpFileName(const std::string_view path)
 {
 	return StringUtil::EndsWithNoCase(path, ".dump");
@@ -2453,7 +2607,7 @@ bool VMManager::IsDiscFileName(const std::string_view path)
 
 bool VMManager::IsLoadableFileName(const std::string_view path)
 {
-	return IsDiscFileName(path) || IsElfFileName(path) || IsGSDumpFileName(path) || IsBlockDumpFileName(path);
+	return IsDiscFileName(path) || IsElfFileName(path) || IsGSDumpFileName(path) || IsBlockDumpFileName(path) || isArcadeManifest(path);
 }
 
 #ifdef _WIN32
@@ -3371,11 +3525,13 @@ void VMManager::WarnAboutUnsafeSettings()
 		append(ICON_PF_MICROCHIP,
 			TRANSLATE_SV("VMManager", "VU Clamp Mode is not set to default, this may break some games."));
 	}
-	if (EmuConfig.Cpu.ExtraMemory)
+	/*if (EmuConfig.Cpu.ExtraMemory)
 	{
+		//SYSTEM256 needs 64mb EE | 4mb IOP
+		//and all COH-H models use practically the same boot rom software that ran on the arcade TOOL. so there should be no "compatibility affected"
 		append(ICON_PF_MICROCHIP,
 			TRANSLATE_SV("VMManager", "Extended RAM is enabled. Compatibility with some games may be affected."));
-	}
+	}*/
 	if (!EmuConfig.EnableGameFixes)
 	{
 		append(ICON_FA_GAMEPAD,
