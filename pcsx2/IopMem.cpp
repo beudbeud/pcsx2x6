@@ -159,7 +159,7 @@ u16 iopMemRead16(u32 mem)
 	} else if (t == 0x1241) {
 		if (IS_ACUART_RANGE(mem)) {
 			V = ACUART::Read16(mem);
-    		Console.Error("%-16s %08X:  %04X", "ACUART::Read16", mem, V);
+    		//Console.Error("%-16s %08X:  %04X", "ACUART::Read16", mem, V);
 		} else {
 			V = ACCORE::Read16(mem);
 		}

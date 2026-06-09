@@ -351,6 +351,7 @@ static const std::map<std::string, FightingLayout> s_fighting_layouts = {
 	{"NM00031", FightingLayout::STANDARD},   // Soul Calibur III
 	{"NM00002", FightingLayout::STANDARD},   // Bloody Roar 3
 	{"NM00048", FightingLayout::STANDARD},   // Fate Unlimited Codes
+	{"NM00027", FightingLayout::TEKKEN},     // Super Dragon Ball Z
 	{"NM00029", FightingLayout::STANDARD},   // Kinnikuman MGP
 	{"NM00040", FightingLayout::STANDARD},   // Kinnikuman MGP 2
 	{"NM00018", FightingLayout::SIX_BUTTON}, // Capcom Fighting Jam
