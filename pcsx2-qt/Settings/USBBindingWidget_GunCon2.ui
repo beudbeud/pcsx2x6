@@ -23,7 +23,7 @@
    </size>
   </property>
   <layout class="QGridLayout" name="gridLayout_16">
-   <item row="0" column="0" rowspan="3">
+   <item row="0" column="0" rowspan="2">
     <spacer name="horizontalSpacer_2">
      <property name="orientation">
       <enum>Qt::Orientation::Horizontal</enum>
@@ -36,31 +36,7 @@
      </property>
     </spacer>
    </item>
-   <item row="0" column="1">
-    <widget class="QGroupBox" name="groupBox_15">
-     <property name="title">
-      <string>Pointer Setup</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout">
-      <item>
-       <widget class="QLabel" name="label_2">
-        <property name="text">
-         <string>&lt;p&gt;By default, the light gun uses the mouse pointer. You &lt;strong&gt;do not&lt;/strong&gt; need to configure any bindings apart from the trigger and buttons.&lt;/p&gt;
-
-&lt;p&gt;If you want to use a controller, or lightgun which simulates a controller instead of a mouse, then you should bind it to Relative Aiming. Otherwise, Relative Aiming should be &lt;strong&gt;left unbound&lt;/strong&gt;.&lt;/p&gt;</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignmentFlag::AlignLeading|Qt::AlignmentFlag::AlignLeft|Qt::AlignmentFlag::AlignTop</set>
-        </property>
-        <property name="wordWrap">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item row="0" column="2" rowspan="2">
+   <item row="0" column="2">
     <widget class="QGroupBox" name="groupBox_10">
      <property name="title">
       <string extracomment="Try to use Sony's official terminology for this. A good place to start would be in the console or the DualShock 2's manual. If this element was officially translated to your language by Sony in later DualShocks, you may use that term.">Relative Aiming</string>
@@ -149,7 +125,7 @@
      </layout>
     </widget>
    </item>
-   <item row="1" column="1" rowspan="2">
+   <item row="0" column="1">
     <widget class="QGroupBox" name="groupBox_16">
      <property name="title">
       <string>Buttons</string>
@@ -246,7 +222,7 @@
      </layout>
     </widget>
    </item>
-   <item row="0" column="3" rowspan="3">
+   <item row="0" column="3" rowspan="2">
     <spacer name="horizontalSpacer">
      <property name="orientation">
       <enum>Qt::Orientation::Horizontal</enum>
@@ -259,7 +235,7 @@
      </property>
     </spacer>
    </item>
-   <item row="3" column="0" colspan="4">
+   <item row="1" column="0" colspan="4">
     <spacer name="verticalSpacer">
      <property name="orientation">
       <enum>Qt::Orientation::Vertical</enum>

@@ -109,10 +109,15 @@ namespace ACJV {
     const char* GetBoardDisplayName(BOARDID id);
     BOARDID GetCurrentBoardID();
     void SetMode(JVS_MODE mode);
+    JVS_MODE GetMode();
     void SetScreenPos(u16 x, u16 y);
     void SetGameId(const std::string& gameid);
     const std::string& GetGameId();
     const GunMapping& GetGunMapping();
+
+    bool IsSindenBorderEnabled();
+    int GetSindenBorderMode();
+    int GetSindenBorderThickness();
 }
 
 

@@ -14,6 +14,7 @@
 
 #include "pcsx2/Host.h"
 #include "pcsx2/SIO/Pad/Pad.h"
+#include "pcsx2/DEV9/ACJV.h"
 
 #include "Settings/ControllerBindingWidget.h"
 #include "Settings/ControllerSettingsWindow.h"
@@ -1488,6 +1489,46 @@ USBBindingWidget* USBBindingWidget::createInstance(
 			// Insert crosshair group before the vertical spacer (last item)
 			int spacerRow = mainLayout->rowCount();
 			mainLayout->addWidget(crosshairGroup, spacerRow, 0, 1, mainLayout->columnCount());
+
+			// Sinden Lightgun Border — only on USB Port 1
+			if (parent->getPortNumber() == 0)
+			{
+				QGroupBox* sindenGroup = new QGroupBox(qApp->translate("USB", "Light Gun Border (Sinden)"), widget);
+				QGridLayout* sindenLayout = new QGridLayout(sindenGroup);
+				sindenLayout->setColumnStretch(0, 0);
+				sindenLayout->setColumnStretch(1, 1);
+
+				QCheckBox* sindenEnabled = new QCheckBox(qApp->translate("USB", "Enable white border"), sindenGroup);
+				sindenEnabled->setToolTip(qApp->translate("USB",
+					"Display a white border around the screen for Sinden Lightgun tracking. Only active for lightgun games."));
+				ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(
+					sif, sindenEnabled, ACJV::CONFIG_SECTION, "SindenBorderEnabled", false);
+				sindenLayout->addWidget(sindenEnabled, 0, 0, 1, 2);
+
+				QComboBox* sindenMode = new QComboBox(sindenGroup);
+				sindenMode->addItem(qApp->translate("USB", "4:3 (Game Surface)"));
+				sindenMode->addItem(qApp->translate("USB", "Fullscreen (Entire Window)"));
+				sindenMode->setToolTip(qApp->translate("USB",
+					"4:3 frames the rendered game surface. Fullscreen fills the entire emulator window."));
+				ControllerSettingWidgetBinder::BindWidgetToInputProfileInt(
+					sif, sindenMode, ACJV::CONFIG_SECTION, "SindenBorderMode", 0);
+				sindenLayout->addWidget(new QLabel(qApp->translate("USB", "Border Mode"), sindenGroup), 1, 0);
+				sindenLayout->addWidget(sindenMode, 1, 1);
+
+				QSpinBox* sindenThickness = new QSpinBox(sindenGroup);
+				sindenThickness->setMinimum(1);
+				sindenThickness->setMaximum(100);
+				sindenThickness->setValue(10);
+				sindenThickness->setSuffix(QStringLiteral(" px"));
+				sindenThickness->setToolTip(qApp->translate("USB", "Border thickness in pixels (1-100)"));
+				ControllerSettingWidgetBinder::BindWidgetToInputProfileInt(
+					sif, sindenThickness, ACJV::CONFIG_SECTION, "SindenBorderThickness", 10);
+				sindenLayout->addWidget(new QLabel(qApp->translate("USB", "Border Thickness"), sindenGroup), 2, 0);
+				sindenLayout->addWidget(sindenThickness, 2, 1);
+
+				int sindenRow = mainLayout->rowCount();
+				mainLayout->addWidget(sindenGroup, sindenRow, 0, 1, mainLayout->columnCount());
+			}
 		}
 	}
 	else if (type == "RealPlay")

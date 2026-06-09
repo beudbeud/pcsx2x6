@@ -7,6 +7,7 @@
 #include "GS/GS.h"
 #include "common/SettingsInterface.h"
 #include <array>
+#include <atomic>
 #include <string>
 
 enum ACJVCMD {
@@ -142,6 +143,9 @@ static constexpr const std::array<InputBindingInfo, 2> s_jvs_coin_bindings = {{
 
 static u16 s_dip_switch_state = DEFAULT_DIP_SWITCH_STATE;
 static bool s_suppress_daemon = true;
+static std::atomic<bool> s_sinden_border_enabled{false};
+static std::atomic<int> s_sinden_border_mode{0};
+static std::atomic<int> s_sinden_border_thickness{10};
 static std::string s_gameid;
 
 std::span<const ACJV::DIPSwitchInfo> ACJV::GetDIPSwitches()
@@ -249,6 +253,9 @@ void ACJV::LoadConfig(const SettingsInterface& si)
 	}
 	s_dip_switch_state = state;
 	s_suppress_daemon = si.GetBoolValue(CONFIG_SECTION, "SuppressDaemon", true);
+	s_sinden_border_enabled = si.GetBoolValue(CONFIG_SECTION, "SindenBorderEnabled", false);
+	s_sinden_border_mode = si.GetIntValue(CONFIG_SECTION, "SindenBorderMode", 0);
+	s_sinden_border_thickness = si.GetIntValue(CONFIG_SECTION, "SindenBorderThickness", 10);
 }
 
 void ACJV::CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface& src_si, bool copy_settings, bool copy_bindings)
@@ -258,6 +265,9 @@ void ACJV::CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface
 		for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
 			dest_si->CopyBoolValue(src_si, CONFIG_SECTION, dip_switch.name);
 		dest_si->CopyBoolValue(src_si, CONFIG_SECTION, "SuppressDaemon");
+		dest_si->CopyBoolValue(src_si, CONFIG_SECTION, "SindenBorderEnabled");
+		dest_si->CopyIntValue(src_si, CONFIG_SECTION, "SindenBorderMode");
+		dest_si->CopyIntValue(src_si, CONFIG_SECTION, "SindenBorderThickness");
 	}
 
 	if (copy_bindings)
@@ -279,6 +289,9 @@ void ACJV::SetDefaultConfiguration(SettingsInterface& si)
 	for (const DIPSwitchInfo& dip_switch : s_dip_switch_info)
 		si.SetBoolValue(CONFIG_SECTION, dip_switch.name, dip_switch.default_value);
 	si.SetBoolValue(CONFIG_SECTION, "SuppressDaemon", true);
+	si.SetBoolValue(CONFIG_SECTION, "SindenBorderEnabled", false);
+	si.SetIntValue(CONFIG_SECTION, "SindenBorderMode", 0);
+	si.SetIntValue(CONFIG_SECTION, "SindenBorderThickness", 10);
 }
 
 u16 ACJV::Read16(u32 addr) {
@@ -367,6 +380,26 @@ void ACJV::InsertCoin(u32 slot)
 void ACJV::SetMode(JVS_MODE mode)
 {
 	m_jvsMode = mode;
+}
+
+JVS_MODE ACJV::GetMode()
+{
+	return m_jvsMode;
+}
+
+bool ACJV::IsSindenBorderEnabled()
+{
+	return s_sinden_border_enabled;
+}
+
+int ACJV::GetSindenBorderMode()
+{
+	return s_sinden_border_mode;
+}
+
+int ACJV::GetSindenBorderThickness()
+{
+	return s_sinden_border_thickness;
 }
 
 void ACJV::SetScreenPos(u16 x, u16 y)

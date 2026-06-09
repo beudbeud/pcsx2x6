@@ -61,6 +61,11 @@ GSRenderer::GSRenderer()
 
 GSRenderer::~GSRenderer() = default;
 
+GSVector4 GSRenderer::GetLastDrawRect()
+{
+	return s_last_draw_rect;
+}
+
 void GSRenderer::Reset(bool hardware_reset)
 {
 	// Clear the current display texture.
