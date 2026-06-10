@@ -29,6 +29,16 @@
           "type": "string",
           "description": "The game main executable filename inside security dongle"
         },
+        "media": {
+          "type": "string",
+          "description": "game media type",
+          "pattern": "^(CD|DVD|HDD)$"
+        },
+        "input": {
+          "type": "string",
+          "description": "game input type",
+          "pattern": "^(driving|button|lightgun|touchscreen|drum)$"
+        },
         "compat": {
           "type": "integer",
           "description": "A number indicating the compatibility of the game. 0 (Nothing) to 6 (Perfect)",
