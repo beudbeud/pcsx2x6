@@ -260,7 +260,7 @@ NM00041:
   input: drum
 NM00042:
   name: Sengoku Basara X
-  region: System256
+  region: System246
   bootprog: BASLOAD
   media: DVD
   input: button
@@ -280,19 +280,19 @@ NM00045:
   name: Taiko Drum Master 11 Asian Edition Taiwan
   region: System256
   bootprog: TEALOAD
-  media: ???
+  media: DVD
   input: drum
 NM00046:
   name: Taiko Drum Master 11 - Asian Edition
   region: System256
   bootprog: TEBLOAD
-  media: ???
+  media: DVD
   input: drum
 NM00047:
   name: Ace Driver 3 - Final Turn
   region: System256
   bootprog: NRALOAD
-  media: ???
+  media: HDD
   input: driving
 NM00048:
   name: Fate - Unlimited Codes
@@ -316,23 +316,23 @@ NM00053:
   name: Taiko Drum Master 12 - Asian Edition Taiwan
   region: System256
   bootprog: TECLOAD
-  media: ???
+  media: HDD
   input: drum
 NM00054:
   name: Taiko Drum Master 12 - Asian Edition
   region: System256
   bootprog: TEDLOAD
-  media: ???
+  media: HDD
   input: drum
 NM00056:
   name: Taiko Drum Master 13
   region: System256
   bootprog: T13LOAD
-  media: ???
+  media: HDD
   input: drum
 NM00057:
   name: Taiko Drum Master 14
   region: System256
   bootprog: T14LOAD
-  media: ???
+  media: HDD
   input: drum
