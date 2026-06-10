@@ -233,3 +233,12 @@ jobs:
           cd ./.github/workflows/scripts/releases/announce-release
           npm ci
           TAG_VAL=${TAG_VAL} node index.js
+
+  update_api:
+    needs:
+      - cut-release
+      - upload_artifacts
+    uses: ./.github/workflows/updater_api.yml
+    with:
+      tag: ${{ needs.cut-release.outputs.new_tag }}
+    secrets: inherit
