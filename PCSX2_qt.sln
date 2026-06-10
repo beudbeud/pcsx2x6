@@ -31,6 +31,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "d3d12memalloc", "3rdparty\d
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "lzma", "3rdparty\lzma\lzma.vcxproj", "{A4323327-3F2B-4271-83D9-7F9A3C66B6B2}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "updater", "updater\updater.vcxproj", "{90BBDC04-CC44-4006-B893-06A4FEA8ED47}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "cpuinfo", "3rdparty\cpuinfo\cpuinfo.vcxproj", "{7E183337-A7E9-460C-9D3D-568BC9F9BCC1}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "rcheevos", "3rdparty\rcheevos\rcheevos.vcxproj", "{6D5B5AD9-1525-459B-939F-A5E1082AF6B3}"

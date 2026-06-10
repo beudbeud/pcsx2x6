@@ -65,6 +65,7 @@ jobs:
           cd ./.github/workflows/scripts/releases/generate-release-notes
           npm ci
           node index.js
+          printf "\n----\n%s\n" '![GitHub Downloads (all assets, specific tag)](https://img.shields.io/github/downloads/PS2Homebrew-arcade/pcsx2x6/${{ steps.tag_version.outputs.new_tag }}/total?style=for-the-badge&logo=github&label=Downloads&labelColor=000000)'>>./release-notes.md
           mv ./release-notes.md ${GITHUB_WORKSPACE}/release-notes.md
 
       - name: Create a GitHub Release (Manual)
@@ -225,7 +226,7 @@ jobs:
         env:
           OWNER: PS2Homebrew-arcade
           REPO: pcsx2x6
-          DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILDS_CHAN }}
+          DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_CHAN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           TAG_VAL=${{needs.cut-release.outputs.new_tag}}

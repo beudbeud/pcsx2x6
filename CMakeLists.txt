@@ -53,9 +53,9 @@ if(ENABLE_QT_UI)
 endif()
 
 # Updater is Windows only for now.
-# if (WIN32)
-#	add_subdirectory(updater)
-# endif()
+if (WIN32)
+	add_subdirectory(updater)
+endif()
 
 # tests
 if(ENABLE_TESTS)
