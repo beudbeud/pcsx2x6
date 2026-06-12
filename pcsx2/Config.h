@@ -1491,8 +1491,16 @@ namespace EmuFolders
 #define REC_VU1 (EmuConfig.Cpu.Recompiler.EnableVU1)
 #define THREAD_VU1 (REC_VU1 && EmuConfig.Speedhacks.vuThread)
 #else
-#define THREAD_VU1 false
-#define REC_VU1 false
+// ARM64: microVU0/1 are ported, so REC_VU1 must track the config like x86 (port
+// of ARMSX2's fix). With the old bring-up stub (REC_VU1=false), GetGSPacketSize
+// takes its !REC_VU1 path and returns the XGKICK packet size with the bit31 EOP
+// flag set — which mVU_XGKICK_ doesn't mask, turning `size - diff` into a ~2GB
+// bogus GIF copy that overflows the path buffer and crashes (seen on SC3 boot).
+// THREAD_VU1 matches ARMSX2 (runtime-gated by the vuThread speedhack): runs VU1
+// microprograms on their own worker thread instead of serialized on the EE —
+// the main CPU-side lever for 3D-heavy scenes (SC3 attract mode: 35 -> ? fps).
+#define REC_VU1 (EmuConfig.Cpu.Recompiler.EnableVU1)
+#define THREAD_VU1 (REC_VU1 && EmuConfig.Speedhacks.vuThread)
 #endif
 #define INSTANT_VU1 (EmuConfig.Speedhacks.vu1Instant)
 #define CHECK_EEREC (EmuConfig.Cpu.Recompiler.EnableEE)

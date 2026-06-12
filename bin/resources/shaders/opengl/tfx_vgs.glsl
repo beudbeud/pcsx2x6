@@ -221,7 +221,7 @@ vec2 get_aa1_triangle_expand_dir(ProcessedVertex v0, ProcessedVertex v1, Process
 
 mat2 get_inverse(mat2 mat, float det)
 {
-	return mat2(mat[1][1], -mat[0][1], -mat[1][0], mat[0][0]) * (1 / det);
+	return mat2(mat[1][1], -mat[0][1], -mat[1][0], mat[0][0]) * (1.0f / det);
 }
 
 // Extrapolate triangle attributes from the first vertex along the given direction.
@@ -259,7 +259,7 @@ void extrapolate_aa1_triangle_edge(inout ProcessedVertex v0, ProcessedVertex v1,
 	// Get the position -> barycentric weight matrix
 	mat2 inv_dp_mat = get_inverse(dp_mat, dp_det);
 
-	vec2 weights = min_perp_length < 2 ? vec2(0) : inv_dp_mat * dp;
+	vec2 weights = min_perp_length < 2.0f ? vec2(0) : inv_dp_mat * dp;
 
 	v0.p.xy += dp * PointSize; // Extrapolate position
 
@@ -317,7 +317,7 @@ void main()
 	// Expand in y direction for shallow lines and x direction for steep lines.
 	vec2 line_expand = abs(line_vector.x) >= abs(line_vector.y) ? vec2(0.0f, 2.0f) : vec2(2.0f, 0.0f);
 #endif
-	vec2 line_width = (line_expand * PointSize) / 2;
+	vec2 line_width = (line_expand * PointSize) / 2.0f;
 	vec2 offset = is_right ? line_width : -line_width;
 	vtx.p.xy += offset;
 
@@ -431,7 +431,7 @@ void main()
 		bool corner_filled = all(equal(edge_expand_dir_0, edge_expand_dir_1));
 
 		// Nothing if corner is filled, otherwise opposite to the bisector of the corner angle.
-		vec2 far_corner_dir = corner_filled ? vec2(0) : -normalize((pos_deltas[0] + pos_deltas[1]) / 2);
+		vec2 far_corner_dir = corner_filled ? vec2(0) : -normalize((pos_deltas[0] + pos_deltas[1]) / 2.0f);
 
 		// Determine the expand direction.
 		vec2 expand_dir = is_near_corner ? vec2(0) :       // No extrapolation

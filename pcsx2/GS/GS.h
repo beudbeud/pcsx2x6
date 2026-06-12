@@ -110,6 +110,12 @@ bool GSSaveSnapshotToMemory(u32 window_width, u32 window_height, bool apply_aspe
 	u32* width, u32* height, std::vector<u32>* pixels);
 void GSJoinSnapshotThreads();
 
+/// Framebuffer readback: callback fires on the GS thread each vsync with the
+/// completed frame pixels, for libretro / headless frontends.
+using GSFramebufferReadbackCallback = void (*)(const u32* pixels, u32 pitch_px, u32 width, u32 height);
+void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height);
+void GSReleaseFramebufferReadbackResources();
+
 namespace Host
 {
 	/// Called when the GS is creating a render device.

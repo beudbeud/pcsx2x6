@@ -1081,6 +1081,57 @@ bool SaveState_ReadScreenshot(const std::string& filename, u32* out_width, u32* 
 	return SaveState_ReadScreenshot(zf.get(), out_width, out_height, out_pixels);
 }
 
+bool SaveState_ZipToBuffer(std::unique_ptr<ArchiveEntryList> srclist, std::vector<u8>* out_buffer, Error* error)
+{
+	zip_error_t ze = {};
+	zip_source_t* zs = zip_source_buffer_create(nullptr, 0, 0, &ze);
+	zip_t* zf = nullptr;
+	if (zs && !(zf = zip_open_from_source(zs, ZIP_TRUNCATE, &ze)))
+	{
+		Error::SetString(error, fmt::format("Failed to open in-memory zip for save state: {}", zip_error_strerror(&ze)));
+		zip_source_free(zs);
+		return false;
+	}
+
+	zip_source_keep(zs);
+
+	if (!SaveState_AddToZip(zf, srclist.get(), nullptr))
+	{
+		Error::SetString(error, "Failed to add state data to in-memory zip.");
+		zip_discard(zf);
+		zip_source_free(zs);
+		return false;
+	}
+
+	if (zip_close(zf) != 0)
+	{
+		Error::SetString(error, fmt::format("Failed to finalize in-memory zip: {}", zip_strerror(zf)));
+		zip_discard(zf);
+		zip_source_free(zs);
+		return false;
+	}
+
+	bool result = false;
+	if (zip_source_open(zs) == 0)
+	{
+		zip_source_seek(zs, 0, SEEK_END);
+		const zip_int64_t size = zip_source_tell(zs);
+		zip_source_seek(zs, 0, SEEK_SET);
+		if (size > 0)
+		{
+			out_buffer->resize(static_cast<size_t>(size));
+			result = (zip_source_read(zs, out_buffer->data(), out_buffer->size()) == size);
+		}
+		zip_source_close(zs);
+	}
+	zip_source_free(zs);
+
+	if (!result)
+		Error::SetString(error, "Failed to read back in-memory zip data.");
+
+	return result;
+}
+
 static bool CheckVersion(const std::string& filename, zip_t* zf, Error* error)
 {
 	u32 savever;
@@ -1232,6 +1283,82 @@ bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
 	}
 
 	PostLoadPrep();
+	return true;
+}
+
+bool SaveState_UnzipFromBuffer(const u8* data, size_t size, Error* error)
+{
+	zip_error_t ze = {};
+	zip_source_t* zs = zip_source_buffer_create(data, size, 0, &ze);
+	zip_t* zf = nullptr;
+	if (zs && !(zf = zip_open_from_source(zs, ZIP_RDONLY, &ze)))
+	{
+		zip_source_free(zs);
+		zs = nullptr;
+	}
+	if (!zf)
+	{
+		Error::SetString(error, fmt::format("Savestate zip error: {}", zip_error_strerror(&ze)));
+		return false;
+	}
+
+	if (!CheckVersion("<memory>", zf, error))
+	{
+		zip_discard(zf);
+		return false;
+	}
+
+	const s64 internal_index = CheckFileExistsInState(zf, EntryFilename_InternalStructures, true);
+	s64 entryIndices[std::size(SavestateEntries)];
+
+	bool allPresent = (internal_index >= 0);
+	for (u32 i = 0; i < std::size(SavestateEntries); i++)
+	{
+		const bool required = SavestateEntries[i]->IsRequired();
+		entryIndices[i] = CheckFileExistsInState(zf, SavestateEntries[i]->GetFilename(), required);
+		if (entryIndices[i] < 0 && required)
+		{
+			allPresent = false;
+			break;
+		}
+	}
+	if (!allPresent)
+	{
+		Error::SetString(error, "Some required components were not found or are incomplete.");
+		zip_discard(zf);
+		return false;
+	}
+
+	PreLoadPrep();
+
+	if (!LoadInternalStructuresState(zf, internal_index, error))
+	{
+		if (!error->IsValid())
+			Error::SetString(error, "Save state corruption in internal structures.");
+		VMManager::Reset();
+		zip_discard(zf);
+		return false;
+	}
+
+	for (u32 i = 0; i < std::size(SavestateEntries); ++i)
+	{
+		if (entryIndices[i] < 0)
+		{
+			SavestateEntries[i]->FreezeIn(nullptr);
+			continue;
+		}
+		auto zff = zip_fopen_index_managed(zf, entryIndices[i], 0);
+		if (!zff || !SavestateEntries[i]->FreezeIn(zff.get()))
+		{
+			Error::SetString(error, fmt::format("Save state corruption in {}.", SavestateEntries[i]->GetFilename()));
+			VMManager::Reset();
+			zip_discard(zf);
+			return false;
+		}
+	}
+
+	PostLoadPrep();
+	zip_discard(zf);
 	return true;
 }
 

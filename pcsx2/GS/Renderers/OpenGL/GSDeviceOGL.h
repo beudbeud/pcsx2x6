@@ -130,8 +130,17 @@ public:
 		VSSelector vs;
 		u8 pad[3];
 
-		__fi bool operator==(const ProgramSelector& p) const { return BitEqual(*this, p); }
-		__fi bool operator!=(const ProgramSelector& p) const { return !BitEqual(*this, p); }
+		// Compare only the meaningful selector keys, matching ProgramSelectorHash.
+		// A raw BitEqual over the whole struct also compares uninitialized padding
+		// (this struct is alignas(16)/32 bytes with smaller fields), so two equal
+		// selectors with different stack-garbage padding hash the same but compare
+		// unequal — the program cache then never hits, recompiling forever and
+		// leaking GL programs until OOM (seen on ARM64, where the padding varies).
+		__fi bool operator==(const ProgramSelector& p) const
+		{
+			return vs.key == p.vs.key && ps.key_hi == p.ps.key_hi && ps.key_lo == p.ps.key_lo;
+		}
+		__fi bool operator!=(const ProgramSelector& p) const { return !(*this == p); }
 	};
 	static_assert(sizeof(ProgramSelector) == 32, "Program selector is 32 bytes");
 
@@ -149,6 +158,13 @@ private:
 	static constexpr u8 NUM_TIMESTAMP_QUERIES = 5;
 
 	std::unique_ptr<GLContext> m_gl_context;
+	bool m_is_gles = false;
+
+	// glDrawElementsBaseVertex is core in GL 3.2 / GLES 3.2 but NOT in GLES 3.1
+	// (where the core pointer is null and calling it crashes — e.g. V3D on RPi5).
+	// Resolved at device creation to the core entry, or the OES/EXT extension
+	// variant on GLES 3.1, so indexed draws don't dispatch through a null pointer.
+	PFNGLDRAWELEMENTSBASEVERTEXPROC m_draw_elements_base_vertex = nullptr;
 
 	struct
 	{

@@ -14,6 +14,12 @@
 #include <optional>
 #include <vector>
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 static DynamicLibrary s_egl_library;
 static std::atomic_uint32_t s_egl_refcount = 0;
 
@@ -76,6 +82,21 @@ GLContextEGL::~GLContextEGL()
 {
 	DestroySurface();
 	DestroyContext();
+
+#ifndef _WIN32
+	if (m_gbm_device && m_gbm_lib)
+	{
+		typedef void (*PFN_gbm_device_destroy)(void*);
+		auto gbm_destroy = reinterpret_cast<PFN_gbm_device_destroy>(dlsym(m_gbm_lib, "gbm_device_destroy"));
+		if (gbm_destroy)
+			gbm_destroy(m_gbm_device);
+	}
+	if (m_gbm_lib)
+		dlclose(m_gbm_lib);
+	if (m_gbm_fd >= 0)
+		close(m_gbm_fd);
+#endif
+
 	UnloadEGL();
 }
 
@@ -108,6 +129,10 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 
 	Console.WriteLnFmt("eglInitialize() version: {}.{}", egl_major, egl_minor);
 
+	// Log supported client APIs — if "OpenGL" is absent, only GLES is available.
+	const char* client_apis = eglQueryString(m_display, EGL_CLIENT_APIS);
+	Console.WriteLnFmt("EGL client APIs: {}", client_apis ? client_apis : "(null)");
+
 	// Re-initialize EGL/GLAD.
 	if (!LoadGLADEGL(m_display, error))
 		return false;
@@ -127,11 +152,93 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 
 EGLDisplay GLContextEGL::GetPlatformDisplay(Error* error)
 {
+	// For surfaceless contexts (libretro/headless), try GBM first.
+	// On KMS/DRM systems (e.g. Recalbox on RPi5) the v3d driver only exposes GLES
+	// regardless of whether GBM or EGL_MESA_platform_surfaceless is used.
+	// Desktop GL versions will fail quietly; GLES 3.1/3.2 is the fallback.
+	if (m_wi.type == WindowInfo::Type::Surfaceless)
+	{
+		EGLDisplay dpy = TryGBMPlatformDisplay(error);
+		if (dpy != EGL_NO_DISPLAY)
+			return dpy;
+	}
+
 	EGLDisplay dpy = TryGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, "EGL_MESA_platform_surfaceless");
 	if (dpy == EGL_NO_DISPLAY)
 		dpy = GetFallbackDisplay(error);
 
 	return dpy;
+}
+
+EGLDisplay GLContextEGL::TryGBMPlatformDisplay(Error* error)
+{
+#ifndef _WIN32
+	const char* extensions_str = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+	if (!extensions_str || !std::strstr(extensions_str, "EGL_MESA_platform_gbm"))
+		return EGL_NO_DISPLAY;
+
+	PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display_ext =
+		reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT"));
+	if (!get_platform_display_ext)
+		return EGL_NO_DISPLAY;
+
+	// Try card0 first: on some drivers (e.g. V3D) the render node (renderD128)
+	// only exposes GLES while the full card device exposes desktop OpenGL too.
+	static const char* s_drm_nodes[] = {
+		"/dev/dri/card0", "/dev/dri/card1",
+		"/dev/dri/renderD128", "/dev/dri/renderD129", "/dev/dri/renderD130",
+		nullptr};
+
+	for (int i = 0; s_drm_nodes[i]; i++)
+	{
+		int fd = open(s_drm_nodes[i], O_RDWR);
+		if (fd < 0)
+			continue;
+
+		void* lib = dlopen("libgbm.so.1", RTLD_NOW | RTLD_LOCAL);
+		if (!lib)
+		{
+			close(fd);
+			continue;
+		}
+
+		typedef void* (*PFN_gbm_create_device)(int);
+		typedef void (*PFN_gbm_device_destroy)(void*);
+		auto gbm_create = reinterpret_cast<PFN_gbm_create_device>(dlsym(lib, "gbm_create_device"));
+		if (!gbm_create)
+		{
+			dlclose(lib);
+			close(fd);
+			continue;
+		}
+
+		void* dev = gbm_create(fd);
+		if (!dev)
+		{
+			dlclose(lib);
+			close(fd);
+			continue;
+		}
+
+		EGLDisplay dpy = get_platform_display_ext(EGL_PLATFORM_GBM_MESA, dev, nullptr);
+		if (dpy != EGL_NO_DISPLAY)
+		{
+			Console.WriteLnFmt("Using EGL GBM platform with {}.", s_drm_nodes[i]);
+			m_gbm_fd = fd;
+			m_gbm_lib = lib;
+			m_gbm_device = dev;
+			return dpy;
+		}
+
+		// This node didn't work; clean up and try the next one.
+		auto gbm_destroy = reinterpret_cast<PFN_gbm_device_destroy>(dlsym(lib, "gbm_device_destroy"));
+		if (gbm_destroy)
+			gbm_destroy(dev);
+		dlclose(lib);
+		close(fd);
+	}
+#endif
+	return EGL_NO_DISPLAY;
 }
 
 EGLSurface GLContextEGL::CreatePlatformSurface(EGLConfig config, void* win, Error* error)
@@ -435,19 +542,32 @@ void GLContextEGL::DestroySurface()
 
 bool GLContextEGL::CreateContext(const Version& version, EGLContext share_context)
 {
-	DevCon.WriteLnFmt("Trying GL version {}.{}", version.major_version, version.minor_version);
-	const int surface_attribs[] = {
-		EGL_RENDERABLE_TYPE,
-		EGL_OPENGL_BIT,
-		EGL_SURFACE_TYPE,
-		(m_wi.type != WindowInfo::Type::Surfaceless) ? EGL_WINDOW_BIT : 0,
-		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
-		EGL_BLUE_SIZE, 8, EGL_NONE, 0};
+	DevCon.WriteLnFmt("Trying {} version {}.{}", version.is_gles ? "GLES" : "GL",
+		version.major_version, version.minor_version);
+
+	const EGLint renderable_type = version.is_gles ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_BIT;
+
+	// For surfaceless contexts we omit EGL_SURFACE_TYPE so the config
+	// search is not restricted — V3D via GBM only exposes desktop-GL
+	// configs with EGL_WINDOW_BIT, but surfaceless contexts work with any
+	// config.  For windowed contexts keep EGL_WINDOW_BIT.
+	const int surface_attribs_surfaceless[] = {
+		EGL_RENDERABLE_TYPE, renderable_type,
+		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+		EGL_NONE, 0};
+	const int surface_attribs_window[] = {
+		EGL_RENDERABLE_TYPE, renderable_type,
+		EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+		EGL_NONE, 0};
+	const int* surface_attribs =
+		(m_wi.type == WindowInfo::Type::Surfaceless) ? surface_attribs_surfaceless : surface_attribs_window;
 
 	EGLint num_configs;
 	if (!eglChooseConfig(m_display, surface_attribs, nullptr, 0, &num_configs) || num_configs == 0)
 	{
-		Console.ErrorFmt("eglChooseConfig() failed: 0x{:x}", eglGetError());
+		// Expected on GLES-only systems when trying desktop GL (or vice-versa).
+		DevCon.WriteLnFmt("eglChooseConfig() found no configs (0x{:x})", eglGetError());
 		return false;
 	}
 
@@ -475,28 +595,51 @@ bool GLContextEGL::CreateContext(const Version& version, EGLContext share_contex
 		config = configs.front();
 	}
 
-	const int attribs[] = {
-		EGL_CONTEXT_MAJOR_VERSION,
-		version.major_version,
-		EGL_CONTEXT_MINOR_VERSION,
-		version.minor_version,
-		EGL_NONE,
-		0};
-
-	if (!eglBindAPI(EGL_OPENGL_API))
+	EGLContext context;
+	if (version.is_gles)
 	{
-		Console.ErrorFmt("eglBindAPI() failed: 0x{:x}", eglGetError());
-		return false;
+		// OpenGL ES: no profile mask needed, just major/minor version.
+		const int attribs[] = {
+			EGL_CONTEXT_MAJOR_VERSION, version.major_version,
+			EGL_CONTEXT_MINOR_VERSION, version.minor_version,
+			EGL_NONE, 0};
+
+		if (!eglBindAPI(EGL_OPENGL_ES_API))
+		{
+			Console.ErrorFmt("eglBindAPI(EGL_OPENGL_ES_API) failed: 0x{:x}", eglGetError());
+			return false;
+		}
+
+		context = eglCreateContext(m_display, config.value(), share_context, attribs);
+	}
+	else
+	{
+		// Desktop OpenGL: request core profile (required on Mesa V3D / RPi5).
+		const int attribs[] = {
+			EGL_CONTEXT_MAJOR_VERSION, version.major_version,
+			EGL_CONTEXT_MINOR_VERSION, version.minor_version,
+			EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+			EGL_NONE, 0};
+
+		if (!eglBindAPI(EGL_OPENGL_API))
+		{
+			DevCon.WriteLnFmt("eglBindAPI(EGL_OPENGL_API) not supported (0x{:x})", eglGetError());
+			return false;
+		}
+
+		context = eglCreateContext(m_display, config.value(), share_context, attribs);
 	}
 
-	m_context = eglCreateContext(m_display, config.value(), share_context, attribs);
+	m_context = context;
 	if (!m_context)
 	{
 		Console.ErrorFmt("eglCreateContext() failed: 0x{:x}", eglGetError());
 		return false;
 	}
 
-	Console.WriteLnFmt("Got GL version {}.{}", version.major_version, version.minor_version);
+	Console.WriteLnFmt("Got {} version {}.{}", version.is_gles ? "GLES" : "GL",
+		version.major_version, version.minor_version);
+	m_is_gles = version.is_gles;
 
 	EGLint min_swap_interval, max_swap_interval;
 	m_supports_negative_swap_interval = false;

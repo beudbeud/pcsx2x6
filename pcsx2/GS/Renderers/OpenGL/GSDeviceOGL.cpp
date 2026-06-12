@@ -263,6 +263,8 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		return false;
 	}
 
+	m_is_gles = m_gl_context->IsGLES();
+
 	if (!CheckFeatures())
 		return false;
 
@@ -291,7 +293,7 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// ****************************************************************
 	// Debug helper
 	// ****************************************************************
-	if (GSConfig.UseDebugDevice)
+	if (GSConfig.UseDebugDevice && !m_is_gles)
 	{
 		glDebugMessageCallback(DebugMessageCallback, nullptr);
 
@@ -576,8 +578,24 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	if (!CompileShadeBoostProgram() || !CompileFXAAProgram())
 		return false;
 
+	// Resolve glDrawElementsBaseVertex: core on desktop GL and GLES 3.2, but on
+	// GLES 3.1 the core pointer is null (calling it crashes — V3D/Mesa on RPi5),
+	// so fall back to the OES/EXT extension variant.
+	if (glad_glDrawElementsBaseVertex)
+		m_draw_elements_base_vertex = glad_glDrawElementsBaseVertex;
+	else if (GLAD_GL_OES_draw_elements_base_vertex && glad_glDrawElementsBaseVertexOES)
+		m_draw_elements_base_vertex = glad_glDrawElementsBaseVertexOES;
+	else if (GLAD_GL_EXT_draw_elements_base_vertex && glad_glDrawElementsBaseVertexEXT)
+		m_draw_elements_base_vertex = glad_glDrawElementsBaseVertexEXT;
+	if (!m_draw_elements_base_vertex)
+	{
+		Console.Error("GS: This GL/GLES driver lacks glDrawElementsBaseVertex (need GL 3.2, GLES 3.2, or OES/EXT_draw_elements_base_vertex).");
+		return false;
+	}
+
 	// Image load store and GLSL 420pack is core in GL4.2, no need to check.
-	m_features.cas_sharpening = ((GLAD_GL_VERSION_4_2 && GLAD_GL_ARB_compute_shader) || GLAD_GL_ES_VERSION_3_2) && CreateCASPrograms();
+	// GLES 3.1+ has compute shaders as core.
+	m_features.cas_sharpening = ((GLAD_GL_VERSION_4_2 && GLAD_GL_ARB_compute_shader) || GLAD_GL_ES_VERSION_3_1) && CreateCASPrograms();
 
 	// ****************************************************************
 	// rasterization configuration
@@ -585,10 +603,13 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	{
 		GL_PUSH("GSDeviceOGL::Rasterization");
 
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		if (!m_is_gles)
+		{
+			glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+			glDisable(GL_MULTISAMPLE);
+		}
 		glDisable(GL_CULL_FACE);
 		glEnable(GL_SCISSOR_TEST);
-		glDisable(GL_MULTISAMPLE);
 
 		glDisable(GL_DITHER); // Honestly I don't know!
 
@@ -620,13 +641,13 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// Use DX coordinate convention
 	// ****************************************************************
 
-	// VS gl_position.z => [-1,-1]
-	// FS depth => [0, 1]
-	// because of -1 we loose lot of precision for small GS value
-	// This extension allow FS depth to range from -1 to 1. So
-	// gl_position.z could range from [0, 1]
-	// Change depth convention
-	glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	// Map clip space depth from [-1,1] to [0,1] for better depth precision.
+	// Desktop GL: core since 4.5 / ARB_clip_control.
+	// GLES: GL_EXT_clip_control provides glClipControlEXT() (e.g. Mesa v3d on RPi5).
+	if (!m_is_gles)
+		glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	else if (GLAD_GL_EXT_clip_control)
+		glClipControlEXT(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
 
 	// ****************************************************************
 	// HW renderer shader
@@ -742,10 +763,16 @@ bool GSDeviceOGL::CheckFeatures()
 	GLint minor_gl = 0;
 	glGetIntegerv(GL_MAJOR_VERSION, &major_gl);
 	glGetIntegerv(GL_MINOR_VERSION, &minor_gl);
-	if (!GLAD_GL_VERSION_3_3)
+	if (!m_is_gles && !GLAD_GL_VERSION_3_3)
 	{
 		Host::ReportErrorAsync(
 			"GS", fmt::format(TRANSLATE_FS("GSDeviceOGL", "OpenGL renderer is not supported. Only OpenGL {}.{}\n was found"), major_gl, minor_gl));
+		return false;
+	}
+	if (m_is_gles && !GLAD_GL_ES_VERSION_3_1)
+	{
+		Host::ReportErrorAsync(
+			"GS", fmt::format(TRANSLATE_FS("GSDeviceOGL", "OpenGL renderer is not supported. Only OpenGL ES {}.{}\n was found"), major_gl, minor_gl));
 		return false;
 	}
 
@@ -769,24 +796,27 @@ bool GSDeviceOGL::CheckFeatures()
 	}
 	DevCon.WriteLn(std::move(extensions));
 
-	if (!GLAD_GL_ARB_shading_language_420pack)
+	if (!m_is_gles)
 	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_shading_language_420pack is not supported, this is required for the OpenGL renderer.");
-		return false;
-	}
+		if (!GLAD_GL_ARB_shading_language_420pack)
+		{
+			Host::ReportFormattedErrorAsync(
+				"GS", "GL_ARB_shading_language_420pack is not supported, this is required for the OpenGL renderer.");
+			return false;
+		}
 
-	if (!GLAD_GL_VERSION_4_3 && !GLAD_GL_ARB_copy_image && !GLAD_GL_EXT_copy_image && !GLAD_GL_NV_copy_image)
-	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_copy_image is not supported, copies will be slower.");
-	}
+		if (!GLAD_GL_VERSION_4_3 && !GLAD_GL_ARB_copy_image && !GLAD_GL_EXT_copy_image && !GLAD_GL_NV_copy_image)
+		{
+			Host::ReportFormattedErrorAsync(
+				"GS", "GL_ARB_copy_image is not supported, copies will be slower.");
+		}
 
-	if (!GLAD_GL_VERSION_4_5 && !GLAD_GL_ARB_clip_control)
-	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_clip_control is not supported, this is required for the OpenGL renderer.");
-		return false;
+		if (!GLAD_GL_VERSION_4_5 && !GLAD_GL_ARB_clip_control)
+		{
+			Host::ReportFormattedErrorAsync(
+				"GS", "GL_ARB_clip_control is not supported, this is required for the OpenGL renderer.");
+			return false;
+		}
 	}
 
 	if (!GLAD_GL_ARB_viewport_array)
@@ -819,7 +849,11 @@ bool GSDeviceOGL::CheckFeatures()
 
 	// Don't use PBOs when we don't have ARB_buffer_storage, orphaning buffers probably ends up worse than just
 	// using the normal texture update routines and letting the driver take care of it.
-	m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
+	// On GLES, EXT_buffer_storage is optional; treat its absence as buggy_pbo.
+	if (!m_is_gles)
+		m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
+	else
+		m_bugs.buggy_pbo = !GLAD_GL_EXT_buffer_storage;
 	if (m_bugs.buggy_pbo)
 		Console.Warning("GL: Not using PBOs for texture uploads because buffer_storage is unavailable.");
 
@@ -833,7 +867,8 @@ bool GSDeviceOGL::CheckFeatures()
 	m_features.broken_point_sampler = false;
 	m_features.primitive_id = true;
 
-	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch;
+	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch ||
+		(m_is_gles && GLAD_GL_ARM_shader_framebuffer_fetch);
 	if (m_features.framebuffer_fetch && GSConfig.DisableFramebufferFetch)
 	{
 		Host::AddOSDMessage(
@@ -876,13 +911,17 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.depth_feedback |= GSConfig.DepthFeedbackMode == GSDepthFeedbackMode::Auto;
 	}
 
-	if (GLAD_GL_ARB_shader_storage_buffer_object)
+	// SSBOs are in GLES 3.1 core; ARB_shader_storage_buffer_object is the desktop GL equivalent.
+	// Bitfield ops (ARB_gpu_shader5 on desktop) are also in GLES 3.1 core.
+	if (GLAD_GL_ARB_shader_storage_buffer_object || (m_is_gles && GLAD_GL_ES_VERSION_3_1))
 	{
 		GLint max_vertex_ssbos = 0;
 		glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &max_vertex_ssbos);
-		DevCon.WriteLn("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: %d", max_vertex_ssbos);
-		m_features.vs_expand = (!GSConfig.DisableVertexShaderExpand && max_vertex_ssbos > 0 && GLAD_GL_ARB_gpu_shader5);
+		Console.WriteLn("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: %d", max_vertex_ssbos);
+		m_features.vs_expand = (!GSConfig.DisableVertexShaderExpand && max_vertex_ssbos > 0 &&
+			(GLAD_GL_ARB_gpu_shader5 || (m_is_gles && GLAD_GL_ES_VERSION_3_1)));
 	}
+	Console.WriteLn("GL: vs_expand=%s", m_features.vs_expand ? "enabled" : "disabled");
 	if (!m_features.vs_expand)
 		Console.Warning("GL: Vertex expansion is not supported. This will reduce performance.");
 
@@ -901,9 +940,15 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.line_expand ? "hardware" : (m_features.vs_expand ? "vertex expanding" : "UNSUPPORTED"),
 		m_features.vs_expand ? "vertex expanding" : "CPU");
 
-	if (!GLAD_GL_ARB_conservative_depth)
+	if (!m_is_gles && !GLAD_GL_ARB_conservative_depth)
+		Console.Warning("GL_ARB_conservative_depth is not supported. This will reduce performance.");
+
+	if (m_is_gles)
 	{
-		Console.Warning("GLAD_GL_ARB_conservative_depth is not supported. This will reduce performance.");
+		if (GLAD_GL_EXT_clip_control)
+			Console.WriteLn("GLES: GL_EXT_clip_control available — depth precision OK.");
+		else
+			Console.Warning("GLES: GL_EXT_clip_control not available — depth precision reduced.");
 	}
 	
 	m_features.aa1 = GSConfig.HWAA1 && m_features.vs_expand && m_features.feedback_loops();
@@ -1209,7 +1254,7 @@ void GSDeviceOGL::DrawIndexedPrimitive()
 void GSDeviceOGL::DrawIndexedPrimitive(int offset, int count)
 {
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
-	glDrawElementsBaseVertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+	m_draw_elements_base_vertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
 		reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)),
 		static_cast<GLint>(m_vertex.start));
 }
@@ -1225,7 +1270,7 @@ void GSDeviceOGL::DrawIndexedPrimitiveVSExpand(int offset, int count, bool vs_in
 	else
 	{
 		VSSetPushConstants(m_vertex.start);
-		glDrawElementsBaseVertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+		m_draw_elements_base_vertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
 			reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)), 0);
 	}
 }
@@ -1452,7 +1497,49 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 {
 	std::string header;
 
-	if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
+	if (m_is_gles)
+	{
+		if (GLAD_GL_ES_VERSION_3_2)
+			header = "#version 320 es\n";
+		else
+		{
+			header = "#version 310 es\n";
+			// GLSL ES 3.10 doesn't allow user-defined interface blocks or geometry
+			// shaders in core (both are core in 3.20). The HW renderer uses interface
+			// blocks (VS<->FS) and geometry shaders (HW primitive expansion), so enable
+			// the OES/EXT variants — present on V3D/Mesa (RPi5 GLES 3.1).
+			header += "#extension GL_EXT_shader_io_blocks : enable\n";
+			header += "#extension GL_OES_shader_io_blocks : enable\n";
+			header += "#extension GL_EXT_geometry_shader : enable\n";
+			header += "#extension GL_OES_geometry_shader : enable\n";
+		}
+
+		if (GLAD_GL_EXT_blend_func_extended)
+			header += "#extension GL_EXT_blend_func_extended : require\n";
+
+		if (m_features.framebuffer_fetch)
+		{
+			if (GLAD_GL_ARM_shader_framebuffer_fetch)
+				header += "#extension GL_ARM_shader_framebuffer_fetch : require\n";
+			else if (GLAD_GL_EXT_shader_framebuffer_fetch)
+				header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
+		}
+
+		header += "precision highp float;\n";
+		header += "precision highp int;\n";
+		header += "precision highp sampler2D;\n";
+		if (GLAD_GL_ES_VERSION_3_1)
+			header += "precision highp sampler2DMS;\n";
+		if (GLAD_GL_ES_VERSION_3_2)
+			header += "precision highp usamplerBuffer;\n";
+
+		if (!GLAD_GL_EXT_blend_func_extended)
+			header += "#define DISABLE_DUAL_SOURCE\n";
+
+		// Signal shaders that they are compiled for GLES (e.g. to skip built-in redeclarations).
+		header += "#define GLES 1\n";
+	}
+	else if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
 	{
 		// Intel's GL driver doesn't like the readonly qualifier with 3.3 GLSL.
 		header = "#version 430 core\n";
@@ -1467,7 +1554,10 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 			header += "#extension GL_ARB_shader_storage_buffer_object: require\n";
 	}
 
-	if (m_features.framebuffer_fetch && GLAD_GL_EXT_shader_framebuffer_fetch)
+	// For GLES, framebuffer_fetch extensions are already emitted inside the GLES block
+	// (before precision qualifiers). In GLSL ES, #extension must precede precision
+	// declarations, so we must not repeat them here.
+	if (!m_is_gles && m_features.framebuffer_fetch && GLAD_GL_EXT_shader_framebuffer_fetch)
 		header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
 
 	if (m_features.framebuffer_fetch)
@@ -1475,7 +1565,8 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 	else
 		header += "#define HAS_FRAMEBUFFER_FETCH 0\n";
 
-	if (GLAD_GL_ARB_conservative_depth)
+	// GL_ARB_conservative_depth is a desktop GL extension; GLAD flag is 0 on GLES.
+	if (!m_is_gles && GLAD_GL_ARB_conservative_depth)
 	{
 		header += "#extension GL_ARB_conservative_depth : enable\n";
 		header += "#define PS_HAS_CONSERVATIVE_DEPTH 1\n";
@@ -1530,9 +1621,8 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 
 std::string GSDeviceOGL::GetVSSource(VSSelector sel)
 {
-	DevCon.WriteLn("GL: Compiling new vertex shader with selector 0x%" PRIX64, sel.key);
-
 	std::string macro = fmt::format("#define VS_FST {}\n", static_cast<u32>(sel.fst))
+		+ fmt::format("#define VS_TME {}\n", static_cast<u32>(sel.tme))
 		+ fmt::format("#define VS_IIP {}\n", static_cast<u32>(sel.iip))
 		+ fmt::format("#define VS_POINT_SIZE {}\n", static_cast<u32>(sel.point_size))
 		+ fmt::format("#define VS_EXPAND {}\n", static_cast<int>(sel.expand));
@@ -1544,8 +1634,6 @@ std::string GSDeviceOGL::GetVSSource(VSSelector sel)
 
 std::string GSDeviceOGL::GetPSSource(const PSSelector& sel)
 {
-	DevCon.WriteLn("GL: Compiling new pixel shader with selector 0x%016" PRIX64 "_%016" PRIX64, sel.key_hi, sel.key_lo);
-
 	std::string macro = fmt::format("#define PS_FST {}\n", sel.fst)
 		+ fmt::format("#define PS_WMS {}\n", sel.wms)
 		+ fmt::format("#define PS_WMT {}\n", sel.wmt)
@@ -2312,9 +2400,20 @@ bool GSDeviceOGL::CreateCASPrograms()
 		return false;
 	}
 
-	const char* header =
-		"#version 420\n"
-		"#extension GL_ARB_compute_shader : require\n";
+	std::string header_str;
+	if (m_is_gles)
+	{
+		if (GLAD_GL_ES_VERSION_3_2)
+			header_str = "#version 320 es\n";
+		else
+			header_str = "#version 310 es\n";
+		header_str += "precision highp float;\nprecision highp int;\n";
+	}
+	else
+	{
+		header_str = "#version 420\n#extension GL_ARB_compute_shader : require\n";
+	}
+	const char* header = header_str.c_str();
 	const char* sharpen_params[2] = {
 		"#define CAS_SHARPEN_ONLY false\n",
 		"#define CAS_SHARPEN_ONLY true\n"};
@@ -2473,7 +2572,7 @@ void GSDeviceOGL::RenderImGui()
 				glBindTextureUnit(0, texture_id);
 			}
 
-			glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)pcmd->ElemCount, GL_UNSIGNED_SHORT,
+			m_draw_elements_base_vertex(GL_TRIANGLES, (GLsizei)pcmd->ElemCount, GL_UNSIGNED_SHORT,
 				(void*)(intptr_t)((pcmd->IdxOffset + m_index.start) * sizeof(ImDrawIdx)), pcmd->VtxOffset + vertex_start);
 		}
 
@@ -2547,7 +2646,11 @@ void GSDeviceOGL::OMSetColorMaskState(OMColorMaskSelector sel)
 	{
 		GLState::wrgba = sel.wrgba;
 
-		glColorMaski(0, sel.wr, sel.wg, sel.wb, sel.wa);
+		// Only render target 0 is ever bound for these passes, so the non-indexed
+		// glColorMask (core in all GL/GLES) is equivalent to glColorMaski(0, ...).
+		// glColorMaski is core only in GL 3.0 / GLES 3.2 — its pointer is null on
+		// GLES 3.1 (V3D/RPi5) and calling it crashes.
+		glColorMask(sel.wr, sel.wg, sel.wb, sel.wa);
 	}
 }
 
@@ -2732,6 +2835,36 @@ static constexpr std::array<GLenum, 3> s_gl_blend_ops = { {
 
 void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 {
+	// GLES 3.1 without EXT_blend_func_extended (V3D/RPi5) has no dual-source
+	// blending: the second fragment output (layout index=1) fails to compile and
+	// SRC1 blend factors are invalid enums. Drop the second output and
+	// approximate SRC1 factors with the post-shader alpha — in PCSX2's tfx the
+	// dual-source output carries the blend coefficient (As/Af) replicated, so
+	// SRC_ALPHA is close, and strictly better than the broken program a failed
+	// compile produces.
+	if (m_is_gles && !GLAD_GL_EXT_blend_func_extended) [[unlikely]]
+	{
+		config.ps.no_color1 = true;
+		const auto remap = [](u8 f) -> u8 {
+			if (f == SRC1_COLOR || f == SRC1_ALPHA)
+				return SRC_ALPHA;
+			if (f == INV_SRC1_COLOR || f == INV_SRC1_ALPHA)
+				return INV_SRC_ALPHA;
+			return f;
+		};
+		config.blend.src_factor = remap(config.blend.src_factor);
+		config.blend.dst_factor = remap(config.blend.dst_factor);
+		config.blend.src_factor_alpha = remap(config.blend.src_factor_alpha);
+		config.blend.dst_factor_alpha = remap(config.blend.dst_factor_alpha);
+		config.blend_multi_pass.blend.src_factor = remap(config.blend_multi_pass.blend.src_factor);
+		config.blend_multi_pass.blend.dst_factor = remap(config.blend_multi_pass.blend.dst_factor);
+		config.blend_multi_pass.blend.src_factor_alpha = remap(config.blend_multi_pass.blend.src_factor_alpha);
+		config.blend_multi_pass.blend.dst_factor_alpha = remap(config.blend_multi_pass.blend.dst_factor_alpha);
+		config.blend_multi_pass.no_color1 = true;
+		if (config.alpha_second_pass.enable)
+			config.alpha_second_pass.ps.no_color1 = true;
+	}
+
 	if (!GLState::scissor.eq(config.scissor))
 	{
 		glScissor(config.scissor.x, config.scissor.y, config.scissor.width(), config.scissor.height());

@@ -7,6 +7,7 @@
 #include "SPU2/Dma.h"
 #include "Common.h"
 #include "Host/AudioStream.h"
+#include "Host/AudioStreamTypes.h"
 #include "Host.h"
 #include "GS/GSCapture.h"
 #include "MTGS.h"
@@ -30,6 +31,8 @@ u64 lClocks = 0;
 static bool s_audio_capture_active = false;
 static bool s_psxmode = false;
 static bool s_output_muted = false;
+
+std::unique_ptr<AudioStream> (*SPU2::CustomOutputStreamFactory)(u32 sample_rate, const AudioStreamParameters& parameters) = nullptr;
 
 static std::unique_ptr<AudioStream> s_output_stream;
 static std::array<float, AudioStream::CHUNK_SIZE * 2> s_current_chunk;
@@ -117,9 +120,13 @@ void SPU2::CreateOutputStream()
 	const u32 sample_rate = GetConsoleSampleRate();
 	s_output_stream.reset();
 
+	if (CustomOutputStreamFactory)
+		s_output_stream = CustomOutputStreamFactory(sample_rate, EmuConfig.SPU2.StreamParameters);
+
 	Error error;
-	s_output_stream = AudioStream::CreateStream(EmuConfig.SPU2.Backend, sample_rate, EmuConfig.SPU2.StreamParameters,
-		EmuConfig.SPU2.DriverName.c_str(), EmuConfig.SPU2.DeviceName.c_str(), EmuConfig.SPU2.IsTimeStretchEnabled(), &error);
+	if (!s_output_stream)
+		s_output_stream = AudioStream::CreateStream(EmuConfig.SPU2.Backend, sample_rate, EmuConfig.SPU2.StreamParameters,
+			EmuConfig.SPU2.DriverName.c_str(), EmuConfig.SPU2.DeviceName.c_str(), EmuConfig.SPU2.IsTimeStretchEnabled(), &error);
 	if (!s_output_stream)
 	{
 		Host::ReportErrorAsync("Error",

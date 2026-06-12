@@ -18,6 +18,9 @@
 #ifndef __APPLE__
 #include <ucontext.h>
 #endif
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <execinfo.h>
+#endif
 
 #include "fmt/format.h"
 
@@ -276,9 +279,28 @@ void PageFaultHandler::SignalHandler(int sig, siginfo_t* info, void* ctx)
 #if defined(ARCH_X86)
 	void* const exception_pc = reinterpret_cast<void*>(static_cast<ucontext_t*>(ctx)->uc_mcontext.gregs[REG_RIP]);
 	const bool is_write = (static_cast<ucontext_t*>(ctx)->uc_mcontext.gregs[REG_ERR] & 2) != 0;
+	const bool bogus_pc = reinterpret_cast<uintptr_t>(exception_pc) < 0x1000;
 #elif defined(ARCH_ARM64)
 	void* const exception_pc = reinterpret_cast<void*>(static_cast<ucontext_t*>(ctx)->uc_mcontext.pc);
-	const bool is_write = IsStoreInstruction(exception_pc);
+	// A guest jump to a null/bad host pointer (e.g. a corrupt dispatch slot) leaves PC
+	// unreadable; probing it in IsStoreInstruction would fault recursively (and mask
+	// the real fault). Anything inside the first page is a bogus branch target, not
+	// code (observed: branch to 0x3d during the boot race).
+	const bool bogus_pc = reinterpret_cast<uintptr_t>(exception_pc) < 0x1000;
+	const bool is_write = !bogus_pc && IsStoreInstruction(exception_pc);
+	// Diagnose a branch-to-garbage: dump host GPRs so the dispatcher's guest-PC / fnptr
+	// registers (and x30 = the branching call site) reveal where the bad target came
+	// from. (arcade ARM64 diag)
+	if (bogus_pc)
+	{
+		const auto& mc = static_cast<ucontext_t*>(ctx)->uc_mcontext;
+		std::fprintf(stderr, "@@BADPC@@ sig=%d addr=%p pc=%p sp=0x%llx pstate=0x%llx\n",
+			sig, exception_address, exception_pc, static_cast<unsigned long long>(mc.sp),
+			static_cast<unsigned long long>(mc.pstate));
+		for (int i = 0; i <= 30; i++)
+			std::fprintf(stderr, "  x%d=0x%llx\n", i, static_cast<unsigned long long>(mc.regs[i]));
+		std::fflush(stderr);
+	}
 #endif
 
 #elif defined(__FreeBSD__)
@@ -312,6 +334,25 @@ void PageFaultHandler::SignalHandler(int sig, siginfo_t* info, void* ctx)
 	// Resumes execution right where we left off (re-executes instruction that caused the SIGSEGV).
 	if (result == HandlerResult::ContinueExecution)
 		return;
+
+	// We couldn't handle it. Log the fault details (USE_BACKTRACE is off in the
+	// libretro build, so CrashSignalHandler dumps nothing) before aborting, so
+	// an unrecoverable fault points at the offending host address/PC + callstack.
+	std::fprintf(stderr, "@@FAULT@@ sig=%d addr=%p pc=%p write=%d\n",
+		sig, exception_address, exception_pc, is_write ? 1 : 0);
+	std::fflush(stderr);
+#if defined(__linux__) && !defined(__ANDROID__)
+	// With a bogus PC the unwinder itself faults recursively trying to walk through
+	// the corrupt signal frame — the @@BADPC@@ GPR dump above is the useful data.
+	if (!bogus_pc)
+	{
+		void* frames[48];
+		const int n = backtrace(frames, 48);
+		// backtrace_symbols_fd is async-signal-safe (unlike Console / malloc).
+		backtrace_symbols_fd(frames, n, fileno(stderr));
+		std::fflush(stderr);
+	}
+#endif
 
 	// We couldn't handle it. Pass it off to the crash dumper.
 	CrashHandler::CrashSignalHandler(sig, info, ctx);
