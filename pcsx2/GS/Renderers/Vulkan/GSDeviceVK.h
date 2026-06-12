@@ -47,6 +47,7 @@ public:
 		bool vk_khr_shader_non_semantic_info : 1;
 		bool vk_ext_attachment_feedback_loop_layout : 1;
 		bool vk_ext_fragment_shader_interlock : 1;
+		bool vk_khr_push_descriptor : 1;
 	};
 
 	// Global state accessors
@@ -106,6 +107,11 @@ public:
 
 	/// Frees a descriptor set allocated from the global pool.
 	void FreePersistentDescriptorSet(VkDescriptorSet set);
+
+	/// Allocates a short-lived descriptor set from the current frame's transient pool.
+	/// The set is automatically reclaimed when the frame completes. Only valid when
+	/// vk_khr_push_descriptor is unavailable (fallback path).
+	VkDescriptorSet AllocateTransientDescriptorSet(VkDescriptorSetLayout layout);
 
 	// Gets the fence that will be signaled when the currently executing command buffer is
 	// queued and executed. Do not wait for this fence before the buffer is executed.
@@ -222,6 +228,7 @@ private:
 		bool needs_fence_wait = false;
 		bool timestamp_written = false;
 
+		VkDescriptorPool transient_descriptor_pool = VK_NULL_HANDLE;
 		std::vector<std::function<void()>> cleanup_resources;
 	};
 

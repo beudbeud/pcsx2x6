@@ -93,4 +93,10 @@ namespace ACATA
     }
     void SetEnv(std::string ata_img_path, std::string ata_img_filename, std::string Media);
     void SetImgPath(const char* S);
+
+    // Synchronous 2048-byte ISO9660 sector read off the already-open arcade
+    // media image (CHD or flat file). Used by the ac0: ELF loader to read the
+    // filesystem directly through ACATA instead of re-mounting the image as a
+    // CDVD Iso source (which mis-detects the geometry). Returns false on error.
+    bool ReadIsoSector(u8* buf, u32 lsn);
 }

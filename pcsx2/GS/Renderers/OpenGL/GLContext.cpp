@@ -12,6 +12,8 @@
 #ifdef WAYLAND_API
 #include "GS/Renderers/OpenGL/GLContextEGLWayland.h"
 #endif
+// Base EGL is always available for surfaceless/KMS contexts (libretro, headless).
+#include "GS/Renderers/OpenGL/GLContextEGL.h"
 #endif
 
 #include "common/Console.h"
@@ -28,7 +30,8 @@ GLContext::~GLContext() = default;
 
 std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
 {
-	// We need at least GL3.3.
+	// Desktop GL first (3.3+), then GLES fallback (3.2/3.1) for platforms
+	// that only expose GLES (e.g. EGL_MESA_platform_surfaceless on some drivers).
 	static constexpr Version vlist[] = {
 		{4, 6},
 		{4, 5},
@@ -38,6 +41,8 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
 		{4, 1},
 		{4, 0},
 		{3, 3},
+		{3, 2, true},
+		{3, 1, true},
 	};
 
 	std::unique_ptr<GLContext> context;
@@ -54,6 +59,11 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
 	if (wi.type == WindowInfo::Type::Wayland)
 		context = GLContextEGLWayland::Create(wi, vlist, error);
 #endif
+
+	// Fallback: use the base EGL context for surfaceless/KMS builds
+	// (libretro, headless). EGL_PLATFORM_SURFACELESS_MESA is tried first.
+	if (!context)
+		context = GLContextEGL::Create(wi, vlist, error);
 #endif
 
 	if (!context)
@@ -63,10 +73,14 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
 	static GLContext* context_being_created;
 	context_being_created = context.get();
 
-	// load up glad
-	if (!gladLoadGL([](const char* name) { return reinterpret_cast<GLADapiproc>(context_being_created->GetProcAddress(name)); }))
+	// Load glad — desktop GL or GLES2 depending on which context we got.
+	const bool is_gles = context->IsGLES();
+	const bool glad_ok = is_gles
+		? (gladLoadGLES2([](const char* name) { return reinterpret_cast<GLADapiproc>(context_being_created->GetProcAddress(name)); }) != 0)
+		: (gladLoadGL([](const char* name) { return reinterpret_cast<GLADapiproc>(context_being_created->GetProcAddress(name)); }) != 0);
+	if (!glad_ok)
 	{
-		Error::SetStringView(error, "Failed to load GL functions for GLAD");
+		Error::SetStringFmt(error, "Failed to load {} functions for GLAD", is_gles ? "GLES" : "GL");
 		return nullptr;
 	}
 

@@ -7043,12 +7043,22 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		}
 		else if (accumulation_blend)
 		{
-			// A fast algo that requires 2 passes
-			GL_INS("HW: COLCLIP ACCU HW mode ENABLED");
-			m_conf.ps.colclip_hw = 1;
-			sw_blending = true; // Enable sw blending for the colclip algo
-
-			m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			if (features.color_clip)
+			{
+				// A fast algo that requires 2 passes
+				GL_INS("HW: COLCLIP ACCU HW mode ENABLED");
+				m_conf.ps.colclip_hw = 1;
+				sw_blending = true; // Enable sw blending for the colclip algo
+				m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			}
+			else
+			{
+				// ColorClip RT format not supported on this GPU, fall back to shader-only SW colclip.
+				GL_INS("HW: COLCLIP ACCU HW mode (no ColorClip RT, using SW colclip)");
+				m_conf.ps.colclip = 1;
+				sw_blending = true;
+				m_conf.colclip_mode = (has_colclip_texture && !NextDrawColClip()) ? GSHWDrawConfig::ColClipMode::ResolveOnly : GSHWDrawConfig::ColClipMode::NoModify;
+			}
 		}
 		else if (sw_blending)
 		{
@@ -7059,9 +7069,19 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		}
 		else
 		{
-			GL_INS("HW: COLCLIP HW mode ENABLED");
-			m_conf.ps.colclip_hw = 1;
-			m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			if (features.color_clip)
+			{
+				GL_INS("HW: COLCLIP HW mode ENABLED");
+				m_conf.ps.colclip_hw = 1;
+				m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			}
+			else
+			{
+				// ColorClip RT format not supported on this GPU, fall back to shader-only SW colclip.
+				GL_INS("HW: COLCLIP HW mode (no ColorClip RT, using SW colclip)");
+				m_conf.ps.colclip = 1;
+				m_conf.colclip_mode = (has_colclip_texture && !NextDrawColClip()) ? GSHWDrawConfig::ColClipMode::ResolveOnly : GSHWDrawConfig::ColClipMode::NoModify;
+			}
 		}
 
 		m_conf.colclip_frame = m_cached_ctx.FRAME;

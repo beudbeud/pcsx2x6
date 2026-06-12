@@ -15,6 +15,7 @@
 #include "pcsx2/Config.h"
 #include "VMManager.h"
 
+#include "common/Console.h"
 #include "common/FileSystem.h"
 #include "common/Image.h"
 #include "common/Path.h"
@@ -40,6 +41,92 @@ static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
 
 static std::deque<std::thread> s_screenshot_threads;
 static std::mutex s_screenshot_threads_mutex;
+
+// Framebuffer readback (for libretro / headless frontends)
+static GSFramebufferReadbackCallback s_fb_readback_cb = nullptr;
+static std::atomic<u64> s_fb_readback_size{0}; // (width << 32) | height
+static GSTexture* s_fb_readback_rt = nullptr;
+static std::unique_ptr<GSDownloadTexture> s_fb_readback_dl[2];
+static bool s_fb_readback_pending[2] = {};
+static u32 s_fb_readback_slot = 0;
+
+void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height)
+{
+	s_fb_readback_cb = callback;
+	s_fb_readback_size.store((static_cast<u64>(width) << 32) | height, std::memory_order_release);
+}
+
+void GSReleaseFramebufferReadbackResources()
+{
+	for (u32 i = 0; i < 2; i++)
+	{
+		s_fb_readback_dl[i].reset();
+		s_fb_readback_pending[i] = false;
+	}
+	if (s_fb_readback_rt)
+	{
+		g_gs_device->Recycle(s_fb_readback_rt);
+		s_fb_readback_rt = nullptr;
+	}
+}
+
+static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_uv)
+{
+	const u64 packed_size = s_fb_readback_size.load(std::memory_order_acquire);
+	const u32 width = static_cast<u32>(packed_size >> 32);
+	const u32 height = static_cast<u32>(packed_size & 0xFFFFFFFFu);
+	if (width == 0 || height == 0)
+		return;
+
+	if (s_fb_readback_rt &&
+		(static_cast<u32>(s_fb_readback_rt->GetWidth()) != width || static_cast<u32>(s_fb_readback_rt->GetHeight()) != height))
+	{
+		GSReleaseFramebufferReadbackResources();
+	}
+	if (!s_fb_readback_rt)
+	{
+		s_fb_readback_rt = g_gs_device->CreateRenderTarget(width, height, GSTexture::Format::Color, false);
+		if (!s_fb_readback_rt)
+			return;
+	}
+	if (!s_fb_readback_dl[0])
+	{
+		for (u32 i = 0; i < 2; i++)
+		{
+			s_fb_readback_dl[i] = g_gs_device->CreateDownloadTexture(width, height, GSTexture::Format::Color);
+			if (!s_fb_readback_dl[i])
+			{
+				GSReleaseFramebufferReadbackResources();
+				return;
+			}
+		}
+	}
+
+	// Stretch full source into full render target; RetroArch handles aspect ratio.
+	const GSVector4 dst_rect(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+	g_gs_device->ClearRenderTarget(s_fb_readback_rt, 0);
+	g_gs_device->StretchRect(current, src_uv, s_fb_readback_rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
+		BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
+
+	const GSVector4i rc(0, 0, static_cast<s32>(width), static_cast<s32>(height));
+	const u32 idx = s_fb_readback_slot;
+	s_fb_readback_dl[idx]->CopyFromTexture(rc, s_fb_readback_rt, rc, 0);
+	s_fb_readback_pending[idx] = true;
+
+	const u32 prev = idx ^ 1;
+	if (s_fb_readback_pending[prev])
+	{
+		s_fb_readback_dl[prev]->Flush();
+		if (s_fb_readback_dl[prev]->Map(rc))
+		{
+			s_fb_readback_cb(reinterpret_cast<const u32*>(s_fb_readback_dl[prev]->GetMapPointer()),
+				s_fb_readback_dl[prev]->GetMapPitch() / sizeof(u32), width, height);
+			s_fb_readback_dl[prev]->Unmap();
+		}
+		s_fb_readback_pending[prev] = false;
+	}
+	s_fb_readback_slot = prev;
+}
 
 std::unique_ptr<GSRenderer> g_gs_renderer;
 
@@ -708,6 +795,9 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			if (GSConfig.OsdShowGPU || GSDumpReplayer::IsReplayingDump())
 				PerformanceMetrics::OnGPUPresent(g_gs_device->GetAndResetAccumulatedGPUTime());
 		}
+
+		if (s_fb_readback_cb && current && !blank_frame)
+			PerformFramebufferReadback(current, src_uv);
 
 		PerformanceMetrics::Update(registers_written, fb_sprite_frame, false);
 	}

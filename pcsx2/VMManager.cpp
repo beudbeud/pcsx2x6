@@ -2846,10 +2846,13 @@ void VMManager::InitializeCPUProviders()
 	CpuMicroVU0.Reserve();
 	CpuMicroVU1.Reserve();
 #else
-	// Despite not having any VU recompilers on ARM64, therefore no MTVU,
-	// we still need the thread alive. Otherwise the read and write positions
-	// of the ring buffer wont match, and various systems in the emulator end up deadlocked.
-	vu1Thread.Open();
+	// ARM64: EE, IOP, and VU recompilers are now ported.
+	// recMicroVU1::Reserve() opens vu1Thread for us, so we no longer open it explicitly.
+	recCpu.Reserve();
+	psxRec.Reserve();
+
+	CpuMicroVU0.Reserve();
+	CpuMicroVU1.Reserve();
 #endif
 
 	VifUnpackSSE_Init();
@@ -2870,10 +2873,12 @@ void VMManager::ShutdownCPUProviders()
 	psxRec.Shutdown();
 	recCpu.Shutdown();
 #else
-	// See the comment in the InitializeCPUProviders for an explaination why we
-	// still need to manage the MTVU thread.
-	if (vu1Thread.IsOpen())
-		vu1Thread.WaitVU();
+	// ARM64: tear down VU + IOP + EE recompilers.
+	CpuMicroVU1.Shutdown();
+	CpuMicroVU0.Shutdown();
+
+	psxRec.Shutdown();
+	recCpu.Shutdown();
 #endif
 }
 
@@ -2895,11 +2900,12 @@ void VMManager::UpdateCPUImplementations()
 	CpuVU0 = EmuConfig.Cpu.Recompiler.EnableVU0 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU0) : static_cast<BaseVUmicroCPU*>(&CpuIntVU0);
 	CpuVU1 = EmuConfig.Cpu.Recompiler.EnableVU1 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU1) : static_cast<BaseVUmicroCPU*>(&CpuIntVU1);
 #else
-	Cpu = &intCpu;
-	psxCpu = &psxInt;
+	// ARM64: EE, IOP, and VU recompilers are now functional.
+	Cpu = CHECK_EEREC ? &recCpu : &intCpu;
+	psxCpu = CHECK_IOPREC ? &psxRec : &psxInt;
 
-	CpuVU0 = &CpuIntVU0;
-	CpuVU1 = &CpuIntVU1;
+	CpuVU0 = EmuConfig.Cpu.Recompiler.EnableVU0 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU0) : static_cast<BaseVUmicroCPU*>(&CpuIntVU0);
+	CpuVU1 = EmuConfig.Cpu.Recompiler.EnableVU1 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU1) : static_cast<BaseVUmicroCPU*>(&CpuIntVU1);
 #endif
 }
 
@@ -2910,6 +2916,13 @@ void VMManager::Internal::ClearCPUExecutionCaches()
 
 #ifdef _M_X86 // TODO(Stenzek): Remove me once EE/VU/IOP recs are added.
 	// mVU's VU0 needs to be properly initialized for macro mode even if it's not used for micro mode!
+	if (CHECK_EEREC && !EmuConfig.Cpu.Recompiler.EnableVU0)
+		CpuMicroVU0.Reset();
+#else
+	// ARM64: reset EE + IOP rec caches so emit cursors start clean on each VM reset.
+	recCpu.Reset();
+	psxRec.Reset();
+
 	if (CHECK_EEREC && !EmuConfig.Cpu.Recompiler.EnableVU0)
 		CpuMicroVU0.Reset();
 #endif

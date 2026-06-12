@@ -33,6 +33,7 @@ protected:
 	virtual EGLSurface CreatePlatformSurface(EGLConfig config, void* win, Error* error);
 
 	EGLDisplay TryGetPlatformDisplay(EGLenum platform, const char* platform_ext);
+	EGLDisplay TryGBMPlatformDisplay(Error* error);
 	EGLSurface TryCreatePlatformSurface(EGLConfig config, void* window, Error* error);
 	EGLDisplay GetFallbackDisplay(Error* error);
 	EGLSurface CreateFallbackSurface(EGLConfig config, void* window, Error* error);
@@ -54,4 +55,12 @@ protected:
 
 	bool m_use_ext_platform_base = false;
 	bool m_supports_negative_swap_interval = false;
+	bool m_is_gles = false;
+
+	bool IsGLES() const override { return m_is_gles; }
+
+	// GBM resources used when EGL_MESA_platform_surfaceless doesn't support desktop GL
+	int m_gbm_fd = -1;
+	void* m_gbm_lib = nullptr;
+	void* m_gbm_device = nullptr;
 };

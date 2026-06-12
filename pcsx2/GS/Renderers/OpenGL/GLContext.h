@@ -22,9 +22,12 @@ public:
 	{
 		int major_version;
 		int minor_version;
+		bool is_gles = false;
 	};
 
 	__fi const WindowInfo& GetWindowInfo() const { return m_wi; }
+
+	virtual bool IsGLES() const { return false; }
 	__fi u32 GetSurfaceWidth() const { return m_wi.surface_width; }
 	__fi u32 GetSurfaceHeight() const { return m_wi.surface_height; }
 

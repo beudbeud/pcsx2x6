@@ -326,7 +326,7 @@ vec4 sample_c_af(vec2 uv, float uv_w)
 		colour = textureLod(TextureSampler, uv, lod);
 	else
 	{
-		vec4 num = vec4(0, 0, 0, 0);
+		vec4 num = vec4(0.0f, 0.0f, 0.0f, 0.0f);
 		for (int i = 0; i < aniso_ratio; i++)
 		{		
 			vec2 d = -aniso_line + (0.5f + i) * (2.0f * aniso_line) / aniso_ratio;	
@@ -1293,12 +1293,12 @@ void ps_main()
 #if PS_DATE == 1
 	// DATM == 0
 	// Pixel with alpha equal to 1 will failed (128-255)
-	o_col0 = (C.a > 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
+	o_col0 = (C.a > 127.5f) ? vec4(float(gl_PrimitiveID)) : vec4(float(0x7FFFFFFF));
 	return;
 #elif PS_DATE == 2
 	// DATM == 1
 	// Pixel with alpha equal to 0 will failed (0-127)
-	o_col0 = (C.a < 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
+	o_col0 = (C.a < 127.5f) ? vec4(float(gl_PrimitiveID)) : vec4(float(0x7FFFFFFF));
 	return;
 #endif
 

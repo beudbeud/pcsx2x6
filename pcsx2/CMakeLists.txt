@@ -11,6 +11,10 @@ target_link_libraries(PCSX2 PRIVATE PCSX2_FLAGS)
 
 target_compile_features(PCSX2_FLAGS INTERFACE cxx_std_17)
 target_compile_definitions(PCSX2_FLAGS INTERFACE "${PCSX2_DEFS}")
+
+if(BUILD_LIBRETRO_CORE)
+	target_compile_definitions(PCSX2_FLAGS INTERFACE BUILD_LIBRETRO_CORE)
+endif()
 target_compile_options(PCSX2_FLAGS INTERFACE "${PCSX2_WARNINGS}")
 
 # Check that people use the good file
@@ -516,6 +520,7 @@ set(pcsx2GSSources
 	GS/Renderers/Common/GSTexture.cpp
 	GS/Renderers/Common/GSVertexTrace.cpp
 	GS/Renderers/Null/GSRendererNull.cpp
+	GS/Renderers/Null/GSDeviceNull.cpp
 	GS/Renderers/HW/GSHwHack.cpp
 	GS/Renderers/HW/GSRendererHW.cpp
 	GS/Renderers/HW/GSTextureCache.cpp
@@ -559,6 +564,7 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSVertex.h
 	GS/Renderers/Common/GSVertexTrace.h
 	GS/Renderers/Null/GSRendererNull.h
+	GS/Renderers/Null/GSDeviceNull.h
 	GS/Renderers/HW/GSHwHack.h
 	GS/Renderers/HW/GSRendererHW.h
 	GS/Renderers/HW/GSTextureCache.h
@@ -615,10 +621,11 @@ if(USE_OPENGL)
 		list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextWGL.h)
 		target_link_libraries(PCSX2_FLAGS INTERFACE opengl32.lib WinPixEventRuntime::WinPixEventRuntime)
 	else()
-		if(X11_API OR WAYLAND_API)
-			list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGL.cpp)
-			list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGL.h)
-		endif()
+		# Always include the base EGL context on Linux/non-Windows.
+		# GLContextEGL supports EGL_PLATFORM_SURFACELESS_MESA for KMS/headless
+		# builds (e.g. libretro) where X11 and Wayland are both disabled.
+		list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGL.cpp)
+		list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGL.h)
 
 		if(X11_API)
 			list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGLX11.cpp)
@@ -1064,10 +1071,34 @@ set(pcsx2arm64Sources
 	arm64/Vif_Dynarec.cpp
 	arm64/Vif_UnpackNEON.cpp
 	arm64/RecStubs.cpp
+	arm64/aR3000A.cpp
+	arm64/aR5900.cpp
+	arm64/aR5900LoadStore.cpp
+	arm64/aR5900Arith.cpp
+	arm64/aR5900MultDiv.cpp
+	arm64/aR5900Branch.cpp
+	arm64/aR5900FPU.cpp
+	arm64/aR5900MMI.cpp
+	arm64/aVU.cpp
 	)
 
 set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
+	arm64/aR3000A.h
+	arm64/aR5900.h
+	arm64/aVU.h
+	arm64/aVU_IR.h
+	arm64/aVU_Misc.h
+	arm64/aVU_Analyze.inl
+	arm64/aVU_Alloc.inl
+	arm64/aVU_Clamp.inl
+	arm64/aVU_Misc.inl
+	arm64/aVU_Upper.inl
+	arm64/aVU_Lower.inl
+	arm64/aVU_Tables.inl
+	arm64/aVU_Flags.inl
+	arm64/aVU_Branch.inl
+	arm64/aVU_Compile.inl
 )
 
 # These ones benefit a lot from LTO
