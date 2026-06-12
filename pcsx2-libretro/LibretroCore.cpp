@@ -456,22 +456,6 @@ void LibretroHost::RegisterCoreOptions()
 		{"pcsx2_aspect_ratio", "Aspect Ratio", nullptr,
 			"Automatic reports 16:9 when widescreen patches are enabled, 4:3 otherwise.", nullptr, "graphics",
 			{{"auto", "Automatic"}, {"4:3", nullptr}, {"16:9", nullptr}, {nullptr, nullptr}}, "auto"},
-		{"pcsx2_multitap", "Multitap", nullptr,
-			"Enable the multitap adapter. Restart recommended.", nullptr, "system",
-			{{"disabled", "Disabled (2 players)"}, {"port1", "Port 1 (5 players)"}, {"port2", "Port 2 (5 players)"},
-				{"both", "Both Ports (8 players)"}, {nullptr, nullptr}},
-			"disabled"},
-		{"pcsx2_rumble", "Rumble", nullptr, "DualShock 2 vibration (if supported by the frontend).",
-			nullptr, "system", {{"enabled", nullptr}, {"disabled", nullptr}, {nullptr, nullptr}}, "enabled"},
-		{"pcsx2_axis_scale", "Analog Axis Scale", nullptr,
-			"Scales stick input like a real DualShock 2 (PCSX2 default 133%).",
-			nullptr, "system",
-			{{"100", "100%"}, {"115", "115%"}, {"133", "133% (Default)"}, {"150", "150%"}, {nullptr, nullptr}},
-			"133"},
-		{"pcsx2_axis_deadzone", "Analog Deadzone", nullptr,
-			"Stick deadzone applied inside the emulated controller.", nullptr, "system",
-			{{"0", "0% (Default)"}, {"5", "5%"}, {"10", "10%"}, {"15", "15%"}, {"20", "20%"}, {nullptr, nullptr}},
-			"0"},
 		{"pcsx2_widescreen_patches", "Widescreen Patches", nullptr,
 			"Enable built-in 16:9 widescreen patches where available.", nullptr, "patches",
 			{{"disabled", nullptr}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
@@ -623,39 +607,26 @@ void LibretroHost::ReadCoreOptions(bool startup)
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleSkip", get_int_option("pcsx2_ee_cycle_skip", "0"));
 
 	{
-		const char* multitap = get_option("pcsx2_multitap", "disabled");
-		const bool mt1 = (std::strcmp(multitap, "port1") == 0 || std::strcmp(multitap, "both") == 0);
-		const bool mt2 = (std::strcmp(multitap, "port2") == 0 || std::strcmp(multitap, "both") == 0);
-		s_settings_interface.SetBoolValue("Pad", "MultitapPort1", mt1);
-		s_settings_interface.SetBoolValue("Pad", "MultitapPort2", mt2);
+		// System 246/256 arcade: input is JVS (2 players max), so no multitap and no
+		// DualShock2 stick tuning. Two pads are still configured for the brief window
+		// before the game starts its JVS driver (and so the emulated ports exist).
+		s_settings_interface.SetBoolValue("Pad", "MultitapPort1", false);
+		s_settings_interface.SetBoolValue("Pad", "MultitapPort2", false);
 
 		s_pad_map.clear();
-		s_pad_map.push_back(0); // 1A
-		if (mt1)
-		{
-			s_pad_map.push_back(2); // 1B
-			s_pad_map.push_back(3); // 1C
-			s_pad_map.push_back(4); // 1D
-		}
-		s_pad_map.push_back(1); // 2A
-		if (mt2)
-		{
-			s_pad_map.push_back(5); // 2B
-			s_pad_map.push_back(6); // 2C
-			s_pad_map.push_back(7); // 2D
-		}
+		s_pad_map.push_back(0); // P1
+		s_pad_map.push_back(1); // P2
 
-		const float axis_scale = static_cast<float>(get_int_option("pcsx2_axis_scale", "133")) / 100.0f;
-		const float axis_deadzone = static_cast<float>(get_int_option("pcsx2_axis_deadzone", "0")) / 100.0f;
 		for (const u32 pad : s_pad_map)
 		{
 			const std::string section = fmt::format("Pad{}", pad + 1);
 			s_settings_interface.SetStringValue(section.c_str(), "Type", "DualShock2");
-			s_settings_interface.SetFloatValue(section.c_str(), "AxisScale", axis_scale);
-			s_settings_interface.SetFloatValue(section.c_str(), "Deadzone", axis_deadzone);
+			s_settings_interface.SetFloatValue(section.c_str(), "AxisScale", 1.33f);
+			s_settings_interface.SetFloatValue(section.c_str(), "Deadzone", 0.0f);
 		}
 
-		s_rumble_enabled = std::strcmp(get_option("pcsx2_rumble", "enabled"), "enabled") == 0;
+		// JVS arcade controls have no vibration.
+		s_rumble_enabled = false;
 	}
 
 	if (startup)
