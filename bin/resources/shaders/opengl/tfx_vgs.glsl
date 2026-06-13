@@ -38,6 +38,9 @@ out SHADER
 	#endif
 	float inv_cov; // We use the inverse to make it simpler to interpolate.
 	flat uint interior; // 1 for triangle interior; 0 for edge.
+#ifdef GLES_NO_CLIP_CONTROL
+	highp float precise_z; // full-precision window depth; clip-space float32 quantizes Z16/Z24 near the -1 clip bound
+#endif
 } VSout;
 
 const float exp_min32 = exp2(-32.0f);
@@ -88,9 +91,11 @@ void vs_main()
 #ifdef GLES_NO_CLIP_CONTROL
 	// V3D/RPi5 (Mesa) has no EXT_clip_control: the GL clip range is [-1,1], but z
 	// above is in [0,1] (the clip_control ZERO_TO_ONE convention this VS assumes).
-	// Without remap all geometry compresses into the far half [0.5,1] of the depth
-	// buffer -> severe Z-fighting (eyes / coplanar layers / alpha foliage drop out).
-	// Map [0,1] -> [-1,1] so depth uses the full range.
+	// Carry the true window depth to the FS at full precision FIRST — the clip-space
+	// remap below maps small z near the -1 bound where float32 only resolves ~256
+	// levels (Z16/Z24 would Z-fight); the FS writes gl_FragDepth from precise_z.
+	VSout.precise_z = gl_Position.z;
+	// Map [0,1] -> [-1,1] so clipping/fixed-function depth still use the full range.
 	gl_Position.z = gl_Position.z * 2.0f - gl_Position.w;
 #endif
 
@@ -463,7 +468,8 @@ void main()
 
 	gl_Position = vtx.p;
 #ifdef GLES_NO_CLIP_CONTROL
-	// See vs_main: remap z [0,1] -> [-1,1] when EXT_clip_control is unavailable.
+	// See vs_main: carry precise window depth, then remap z [0,1] -> [-1,1].
+	VSout.precise_z = gl_Position.z;
 	gl_Position.z = gl_Position.z * 2.0f - gl_Position.w;
 #endif
 	VSout.t_float = vtx.t_float;
