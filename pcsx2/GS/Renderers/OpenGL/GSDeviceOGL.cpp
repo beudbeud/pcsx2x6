@@ -306,6 +306,23 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		glEnable(GL_DEBUG_OUTPUT);
 		//glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_ARB);
 	}
+	// DIAGNOSTIC (V3D/RPi5 texture flicker): force the driver's own debug output on GLES so
+	// the V3D driver reports incomplete textures / sync stalls / format fallbacks during the
+	// Tekken 4 flicker. Uses the KHR entry points (the non-KHR ones are NULL on a GLES context)
+	// and runs SYNCHRONOUS so each message is attributed to the draw that triggered it.
+	// REMOVE at final cleanup (diagnostic-only; synchronous debug output hurts perf).
+	else if (m_is_gles && GLAD_GL_KHR_debug)
+	{
+		glDebugMessageCallbackKHR(DebugMessageCallback, nullptr);
+		glDebugMessageControlKHR(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, true);
+		glEnable(GL_DEBUG_OUTPUT);
+		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_ARB);
+		Console.WriteLn("GLES: V3D debug output ENABLED (diagnostic) — watching for texture/sync warnings.");
+	}
+	else if (m_is_gles)
+	{
+		Console.Warning("GLES: GL_KHR_debug not available — cannot capture driver debug output.");
+	}
 
 	// WARNING it must be done after the control setup (at least on MESA)
 	GL_PUSH("GSDeviceOGL::Create");
@@ -850,13 +867,7 @@ bool GSDeviceOGL::CheckFeatures()
 	// Don't use PBOs when we don't have ARB_buffer_storage, orphaning buffers probably ends up worse than just
 	// using the normal texture update routines and letting the driver take care of it.
 	// On GLES, EXT_buffer_storage is optional; treat its absence as buggy_pbo.
-	if (!m_is_gles)
-		m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
-	else
-		// V3D/RPi5: persistent-mapped PBO texture uploads intermittently sample stale
-		// data (textures flicker / show grey on characters and stage). Force the direct
-		// glTexSubImage upload path on GLES — synchronous, no streaming-buffer reuse hazard.
-		m_bugs.buggy_pbo = true;
+	m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
 	if (m_bugs.buggy_pbo)
 		Console.Warning("GL: Not using PBOs for texture uploads because buffer_storage is unavailable.");
 
