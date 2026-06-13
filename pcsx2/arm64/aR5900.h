@@ -87,6 +87,10 @@ static constexpr u32 EE_CODE_OFFSET = static_cast<u32>(offsetof(cpuRegisters, co
 // Byte offset of cpuRegs.sa (MMI shift-amount register; QFSRV reads it as a byte offset).
 static constexpr u32 EE_SA_OFFSET = static_cast<u32>(offsetof(cpuRegisters, sa));
 
+// Byte offset of CP0 register rd (cpuRegs.CP0.r[rd], 32-bit each; r[] is at the
+// start of the CP0regs union, so &CP0.r[rd] == &CP0 + rd*4). Used by MFC0 codegen.
+static constexpr u32 EE_CP0_R_OFFSET(u32 rd) { return static_cast<u32>(offsetof(cpuRegisters, CP0)) + rd * 4u; }
+
 void armEmitEffectiveAddr(const vixl::aarch64::Register& dst, u32 rs, s32 imm);
 void armEmitLoadGpr(u32 bits, bool sign, u32 rt, u32 rs, s32 imm);
 void armEmitStoreGpr(u32 bits, u32 rt, u32 rs, s32 imm);
