@@ -11,21 +11,26 @@
 // op emitters (mVU_ADD, mVU_SUB, …) against a freshly-reset register allocator
 // and a one-instruction IR — exactly like the x86 rec's "macro mode".
 //
-// STEP-1 SCOPE (deliberately minimal, zero-regression):
-//   * Only the VADD/VSUB arithmetic family is JIT'd here:
-//       VADD, VADDi, VADDx/y/z/w, VADDA, VADDAi, VADDAx/y/z/w
-//       VSUB, VSUBi, VSUBx/y/z/w, VSUBA, VSUBAi, VSUBAx/y/z/w
-//     (The broadcast (x/y/z/w), I-reg (i) and ACC-accumulator (A) forms are all
-//      trivial parameterisations of the same mVU_FMACa emitter, so they come for
-//      free.) Every OTHER COP2 op stays on the existing interpreter fallback in
-//      aR5900.cpp (recEmitInterpInline) — byte-for-byte unchanged.
-//   * The Q-reg forms (VADDq/VSUBq, mode bit 0x1) are NOT included: they need the
-//      xmmPQ latency reg loaded from VI[REG_Q], which the EE block hasn't set up.
-//      They keep using the interpreter fallback.
-//   * Flags ARE emulated to match the interpreter exactly. The VADD/VSUB family
-//      updates the MAC flag and the (non-sticky) Status flag (mode 0x10 in x86).
-//      We always do the flag update (no vuFlagHack EE-analysis path — the ARM64
-//      EE rec has no g_pCurInstInfo, and the interpreter always updates flags).
+// SCOPE — the float FMAC family (mode 0x110: Status+MAC flags), zero-regression:
+//   * JIT'd here (all reuse the single mVUsetupMacroOp/mVUendMacroOp driver):
+//       ADD/SUB/MUL/MADD/MSUB  + their i and x/y/z/w broadcast forms,
+//       ADDA/SUBA/MULA/MADDA/MSUBA (ACC accumulator, SPECIAL2) + their i/x/y/z/w,
+//       OPMULA/OPMSUB (outer-product cross-product helpers).
+//     The broadcast (x/y/z/w), I-reg (i) and ACC-accumulator (A) forms are trivial
+//     parameterisations of the same FMAC emitters, so they come for free. MADD/MSUB
+//     read ACC, which the emitter loads from vuRegs[0].ACC memory (flushed across the
+//     macro boundary) — so the load-from-memory/flush-to-memory driver stays correct.
+//   * Every OTHER COP2 op stays on the existing interpreter fallback in aR5900.cpp
+//     (recEmitInterpInline) — byte-for-byte unchanged. NOT yet ported:
+//       - MAX/MINI (mode 0x0, no flags) and the integer ALU ops (IADD/IAND/IOR,
+//         mode 0x104) — need a no-flag driver variant;
+//       - Q-reg forms (ADDq/MULq/…, DIV/SQRT/RSQRT, mode bit 0x1/0x2) — need the
+//         xmmPQ latency reg loaded from VI[REG_Q], which the EE block hasn't set up;
+//       - ITOF/FTOI/ABS/CLIP, transfers (CFC2/QMFC2/…), branches (BC2*).
+//   * Flags ARE emulated to match the interpreter exactly: the family updates the MAC
+//     flag and the (non-sticky) Status flag (mode 0x10 in x86). We always do the flag
+//     update (no vuFlagHack EE-analysis path — the ARM64 EE rec has no g_pCurInstInfo,
+//     and the interpreter always updates flags).
 //
 // --------------------------------------------------------------------------------
 // The x19 dual-role conflict and how it's resolved
@@ -176,6 +181,58 @@ MVU_MACRO_FMAC(VSUBAy, mVU_SUBAy)
 MVU_MACRO_FMAC(VSUBAz, mVU_SUBAz)
 MVU_MACRO_FMAC(VSUBAw, mVU_SUBAw)
 
+// VMUL family (Upper, SPECIAL1) — same mode 0x110 (Status+MAC), reuses the driver.
+MVU_MACRO_FMAC(VMUL,   mVU_MUL)
+MVU_MACRO_FMAC(VMULi,  mVU_MULi)
+MVU_MACRO_FMAC(VMULx,  mVU_MULx)
+MVU_MACRO_FMAC(VMULy,  mVU_MULy)
+MVU_MACRO_FMAC(VMULz,  mVU_MULz)
+MVU_MACRO_FMAC(VMULw,  mVU_MULw)
+// VMULA accumulator family (Upper, SPECIAL2)
+MVU_MACRO_FMAC(VMULA,  mVU_MULA)
+MVU_MACRO_FMAC(VMULAi, mVU_MULAi)
+MVU_MACRO_FMAC(VMULAx, mVU_MULAx)
+MVU_MACRO_FMAC(VMULAy, mVU_MULAy)
+MVU_MACRO_FMAC(VMULAz, mVU_MULAz)
+MVU_MACRO_FMAC(VMULAw, mVU_MULAw)
+
+// VMADD family (Upper, SPECIAL1) — multiply-add against ACC; the emitter loads ACC
+// from vuRegs[0].ACC (flushed to memory across the macro boundary), so the same
+// load-from-memory/flush-to-memory driver is correct.
+MVU_MACRO_FMAC(VMADD,   mVU_MADD)
+MVU_MACRO_FMAC(VMADDi,  mVU_MADDi)
+MVU_MACRO_FMAC(VMADDx,  mVU_MADDx)
+MVU_MACRO_FMAC(VMADDy,  mVU_MADDy)
+MVU_MACRO_FMAC(VMADDz,  mVU_MADDz)
+MVU_MACRO_FMAC(VMADDw,  mVU_MADDw)
+// VMADDA accumulator family (Upper, SPECIAL2)
+MVU_MACRO_FMAC(VMADDA,  mVU_MADDA)
+MVU_MACRO_FMAC(VMADDAi, mVU_MADDAi)
+MVU_MACRO_FMAC(VMADDAx, mVU_MADDAx)
+MVU_MACRO_FMAC(VMADDAy, mVU_MADDAy)
+MVU_MACRO_FMAC(VMADDAz, mVU_MADDAz)
+MVU_MACRO_FMAC(VMADDAw, mVU_MADDAw)
+
+// VMSUB family (Upper, SPECIAL1) — multiply-subtract against ACC.
+MVU_MACRO_FMAC(VMSUB,   mVU_MSUB)
+MVU_MACRO_FMAC(VMSUBi,  mVU_MSUBi)
+MVU_MACRO_FMAC(VMSUBx,  mVU_MSUBx)
+MVU_MACRO_FMAC(VMSUBy,  mVU_MSUBy)
+MVU_MACRO_FMAC(VMSUBz,  mVU_MSUBz)
+MVU_MACRO_FMAC(VMSUBw,  mVU_MSUBw)
+// VMSUBA accumulator family (Upper, SPECIAL2)
+MVU_MACRO_FMAC(VMSUBA,  mVU_MSUBA)
+MVU_MACRO_FMAC(VMSUBAi, mVU_MSUBAi)
+MVU_MACRO_FMAC(VMSUBAx, mVU_MSUBAx)
+MVU_MACRO_FMAC(VMSUBAy, mVU_MSUBAy)
+MVU_MACRO_FMAC(VMSUBAz, mVU_MSUBAz)
+MVU_MACRO_FMAC(VMSUBAw, mVU_MSUBAw)
+
+// Outer-product accumulate (cross-product helpers) — mode 0x110, fixed operand
+// fields handled inside the emitter.
+MVU_MACRO_FMAC(VOPMSUB, mVU_OPMSUB) // SPECIAL1
+MVU_MACRO_FMAC(VOPMULA, mVU_OPMULA) // SPECIAL2
+
 #undef MVU_MACRO_FMAC
 
 // EE-rec dispatch: route the SPECIAL1/SPECIAL2 funct of a COP2 op to one of the
@@ -185,7 +242,7 @@ MVU_MACRO_FMAC(VSUBAw, mVU_SUBAw)
 // COP2 op layout (matches x86 microVU_Macro.inl recCOP2SPECIAL1t/2t indexing):
 //   SPECIAL1 (rs==0x10..0x1f i.e. cpuRegs.code bit26-set group): index = funct(0..63)
 //   SPECIAL2 (SPECIAL1 funct 0x3c-0x3f): index = (code & 3) | ((code >> 4) & 0x7c)
-bool recCOP2_TryMacroVADDSUB(u32 code)
+bool recCOP2_TryMacroFMAC(u32 code)
 {
 	const u32 funct = code & 0x3f;
 
@@ -196,18 +253,37 @@ bool recCOP2_TryMacroVADDSUB(u32 code)
 		switch (idx2)
 		{
 			// recCOP2SPECIAL2t indices (see x86 table):
-			case 0x00: recCOP2_VADDAx(code); return true;
-			case 0x01: recCOP2_VADDAy(code); return true;
-			case 0x02: recCOP2_VADDAz(code); return true;
-			case 0x03: recCOP2_VADDAw(code); return true;
-			case 0x04: recCOP2_VSUBAx(code); return true;
-			case 0x05: recCOP2_VSUBAy(code); return true;
-			case 0x06: recCOP2_VSUBAz(code); return true;
-			case 0x07: recCOP2_VSUBAw(code); return true;
-			case 0x22: recCOP2_VADDAi(code); return true; // ADDAi
-			case 0x26: recCOP2_VSUBAi(code); return true; // SUBAi
-			case 0x28: recCOP2_VADDA(code);  return true; // ADDA
-			case 0x2c: recCOP2_VSUBA(code);  return true; // SUBA
+			case 0x00: recCOP2_VADDAx(code);  return true;
+			case 0x01: recCOP2_VADDAy(code);  return true;
+			case 0x02: recCOP2_VADDAz(code);  return true;
+			case 0x03: recCOP2_VADDAw(code);  return true;
+			case 0x04: recCOP2_VSUBAx(code);  return true;
+			case 0x05: recCOP2_VSUBAy(code);  return true;
+			case 0x06: recCOP2_VSUBAz(code);  return true;
+			case 0x07: recCOP2_VSUBAw(code);  return true;
+			case 0x08: recCOP2_VMADDAx(code); return true;
+			case 0x09: recCOP2_VMADDAy(code); return true;
+			case 0x0a: recCOP2_VMADDAz(code); return true;
+			case 0x0b: recCOP2_VMADDAw(code); return true;
+			case 0x0c: recCOP2_VMSUBAx(code); return true;
+			case 0x0d: recCOP2_VMSUBAy(code); return true;
+			case 0x0e: recCOP2_VMSUBAz(code); return true;
+			case 0x0f: recCOP2_VMSUBAw(code); return true;
+			case 0x18: recCOP2_VMULAx(code);  return true;
+			case 0x19: recCOP2_VMULAy(code);  return true;
+			case 0x1a: recCOP2_VMULAz(code);  return true;
+			case 0x1b: recCOP2_VMULAw(code);  return true;
+			case 0x1e: recCOP2_VMULAi(code);  return true; // MULAi
+			case 0x22: recCOP2_VADDAi(code);  return true; // ADDAi
+			case 0x23: recCOP2_VMADDAi(code); return true; // MADDAi
+			case 0x26: recCOP2_VSUBAi(code);  return true; // SUBAi
+			case 0x27: recCOP2_VMSUBAi(code); return true; // MSUBAi
+			case 0x28: recCOP2_VADDA(code);   return true; // ADDA
+			case 0x29: recCOP2_VMADDA(code);  return true; // MADDA
+			case 0x2a: recCOP2_VMULA(code);   return true; // MULA
+			case 0x2c: recCOP2_VSUBA(code);   return true; // SUBA
+			case 0x2d: recCOP2_VMSUBA(code);  return true; // MSUBA
+			case 0x2e: recCOP2_VOPMULA(code); return true; // OPMULA
 			default: return false;
 		}
 	}
@@ -215,18 +291,37 @@ bool recCOP2_TryMacroVADDSUB(u32 code)
 	// SPECIAL1 table (recCOP2SPECIAL1t indices = funct directly).
 	switch (funct)
 	{
-		case 0x00: recCOP2_VADDx(code); return true;
-		case 0x01: recCOP2_VADDy(code); return true;
-		case 0x02: recCOP2_VADDz(code); return true;
-		case 0x03: recCOP2_VADDw(code); return true;
-		case 0x04: recCOP2_VSUBx(code); return true;
-		case 0x05: recCOP2_VSUBy(code); return true;
-		case 0x06: recCOP2_VSUBz(code); return true;
-		case 0x07: recCOP2_VSUBw(code); return true;
-		case 0x22: recCOP2_VADDi(code); return true; // ADDi
-		case 0x26: recCOP2_VSUBi(code); return true; // SUBi
-		case 0x28: recCOP2_VADD(code);  return true; // ADD
-		case 0x2c: recCOP2_VSUB(code);  return true; // SUB
+		case 0x00: recCOP2_VADDx(code);  return true;
+		case 0x01: recCOP2_VADDy(code);  return true;
+		case 0x02: recCOP2_VADDz(code);  return true;
+		case 0x03: recCOP2_VADDw(code);  return true;
+		case 0x04: recCOP2_VSUBx(code);  return true;
+		case 0x05: recCOP2_VSUBy(code);  return true;
+		case 0x06: recCOP2_VSUBz(code);  return true;
+		case 0x07: recCOP2_VSUBw(code);  return true;
+		case 0x08: recCOP2_VMADDx(code); return true;
+		case 0x09: recCOP2_VMADDy(code); return true;
+		case 0x0a: recCOP2_VMADDz(code); return true;
+		case 0x0b: recCOP2_VMADDw(code); return true;
+		case 0x0c: recCOP2_VMSUBx(code); return true;
+		case 0x0d: recCOP2_VMSUBy(code); return true;
+		case 0x0e: recCOP2_VMSUBz(code); return true;
+		case 0x0f: recCOP2_VMSUBw(code); return true;
+		case 0x18: recCOP2_VMULx(code);  return true;
+		case 0x19: recCOP2_VMULy(code);  return true;
+		case 0x1a: recCOP2_VMULz(code);  return true;
+		case 0x1b: recCOP2_VMULw(code);  return true;
+		case 0x1e: recCOP2_VMULi(code);  return true; // MULi
+		case 0x22: recCOP2_VADDi(code);  return true; // ADDi
+		case 0x23: recCOP2_VMADDi(code); return true; // MADDi
+		case 0x26: recCOP2_VSUBi(code);  return true; // SUBi
+		case 0x27: recCOP2_VMSUBi(code); return true; // MSUBi
+		case 0x28: recCOP2_VADD(code);   return true; // ADD
+		case 0x29: recCOP2_VMADD(code);  return true; // MADD
+		case 0x2a: recCOP2_VMUL(code);   return true; // MUL
+		case 0x2c: recCOP2_VSUB(code);   return true; // SUB
+		case 0x2d: recCOP2_VMSUB(code);  return true; // MSUB
+		case 0x2e: recCOP2_VOPMSUB(code);return true; // OPMSUB
 		default: return false;
 	}
 }

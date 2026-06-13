@@ -406,7 +406,7 @@ static bool recTranslateOp(u32 op);
 // fallback. Repoints RVUSTATE(x19)=&vuRegs[0] for the macro op and restores
 // RESTATEPTR(x19)=&cpuRegs afterwards (safe: the EE GPR cache is already flushed +
 // killed before recTranslateOp runs — see recTranslateOpOptimized).
-extern bool recCOP2_TryMacroVADDSUB(u32 code);
+extern bool recCOP2_TryMacroFMAC(u32 code);
 
 struct RecGprConstState
 {
@@ -1886,14 +1886,15 @@ static bool recTranslateOp(u32 op)
 		case 0x12:
 			if (rs == 0x08)
 				return false; // BC2F/BC2T/BC2FL/BC2TL — single-step (writes PC)
-			// STEP 1: JIT the VADD/VSUB float family via reused microVU0 emitters
-			// (96-98% of EE fallbacks are COP2 on 3D titles). The SPECIAL1/SPECIAL2
-			// groups carry the VU op in `funct`; recCOP2_TryMacroVADDSUB returns true
-			// only for the ported family and emits it natively. Everything else
-			// (MUL/MADD/MAX/MINI/CFC2/transfers/…) keeps the unchanged interpreter
-			// fallback below — zero regression on unported ops. rs >= 0x10 is the
-			// SPECIAL group; rs < 0x10 (QMFC2/CFC2/QMTC2/CTC2) is never in the family.
-			if (rs >= 0x10 && recCOP2_TryMacroVADDSUB(op))
+			// JIT the COP2 float FMAC family via reused microVU0 emitters (96-98% of
+			// EE fallbacks are COP2 on 3D titles). The SPECIAL1/SPECIAL2 groups carry
+			// the VU op in `funct`; recCOP2_TryMacroFMAC returns true only for the
+			// ported family (ADD/SUB/MUL/MADD/MSUB + A-forms + OPMULA/OPMSUB) and emits
+			// it natively. Everything else (MAX/MINI/integer/CFC2/transfers/Q-forms/
+			// DIV/SQRT/…) keeps the unchanged interpreter fallback below — zero
+			// regression on unported ops. rs >= 0x10 is the SPECIAL group; rs < 0x10
+			// (QMFC2/CFC2/QMTC2/CTC2) is never in the family.
+			if (rs >= 0x10 && recCOP2_TryMacroFMAC(op))
 				return true;
 			recEmitInterpInline(op);
 			return true;
