@@ -3439,10 +3439,26 @@ void GSDeviceOGL::DebugMessageCallback(GLenum gl_source, GLenum gl_type, GLuint 
 		default                                  : source = "???"; break;
 	}
 
-	// Don't spam noisy information on the terminal
-	if (gl_severity != GL_DEBUG_SEVERITY_NOTIFICATION && gl_source != GL_DEBUG_SOURCE_APPLICATION)
+	// DIAGNOSTIC (V3D texture flicker): print ALL severities including NOTIFICATION so V3D
+	// fallback/texture messages aren't filtered out. Skip our own GL_PUSH markers, and dedup
+	// consecutive identical messages so a per-frame warning doesn't flood the synchronous log.
+	// REVERT to the notification filter at cleanup.
+	if (gl_source != GL_DEBUG_SOURCE_APPLICATION)
 	{
-		Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), GSState::s_n, severity.c_str(), message.c_str());
+		static std::string s_last_msg;
+		static int s_repeat = 0;
+		if (message == s_last_msg)
+		{
+			if ((++s_repeat % 600) != 0) // ~once per 10s at 60fps
+				return;
+			Console.Error("T:%s\tID:%d\tS:%s\t=> %s (x%d)", type.c_str(), GSState::s_n, severity.c_str(), message.c_str(), s_repeat);
+		}
+		else
+		{
+			s_last_msg = message;
+			s_repeat = 0;
+			Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), GSState::s_n, severity.c_str(), message.c_str());
+		}
 	}
 }
 

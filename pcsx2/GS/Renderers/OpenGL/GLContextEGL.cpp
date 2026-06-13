@@ -599,9 +599,13 @@ bool GLContextEGL::CreateContext(const Version& version, EGLContext share_contex
 	if (version.is_gles)
 	{
 		// OpenGL ES: no profile mask needed, just major/minor version.
+		// DIAGNOSTIC (V3D/RPi5 texture flicker): request a DEBUG context so Mesa/V3D
+		// actually emits GL_KHR_debug messages to our callback — without the debug bit
+		// the driver stays silent even with the callback installed. REMOVE at cleanup.
 		const int attribs[] = {
 			EGL_CONTEXT_MAJOR_VERSION, version.major_version,
 			EGL_CONTEXT_MINOR_VERSION, version.minor_version,
+			EGL_CONTEXT_OPENGL_DEBUG, EGL_TRUE,
 			EGL_NONE, 0};
 
 		if (!eglBindAPI(EGL_OPENGL_ES_API))
@@ -611,6 +615,16 @@ bool GLContextEGL::CreateContext(const Version& version, EGLContext share_contex
 		}
 
 		context = eglCreateContext(m_display, config.value(), share_context, attribs);
+		if (!context)
+		{
+			// DIAGNOSTIC fallback: some drivers reject the debug bit — retry without it.
+			Console.WarningFmt("eglCreateContext() with debug bit failed (0x{:x}); retrying without.", eglGetError());
+			const int attribs_nodebug[] = {
+				EGL_CONTEXT_MAJOR_VERSION, version.major_version,
+				EGL_CONTEXT_MINOR_VERSION, version.minor_version,
+				EGL_NONE, 0};
+			context = eglCreateContext(m_display, config.value(), share_context, attribs_nodebug);
+		}
 	}
 	else
 	{
