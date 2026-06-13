@@ -641,7 +641,8 @@ mVUop(mVU_ERSQRT)
 		mVUshufflePS(mVU_xmmPQ, mVU_xmmPQ, mVUinfo.writeP ? 0x27 : 0xC6); // Flip xmmPQ to get Valid P instance
 		mvuLdrQ(RQSCRATCH, mVUglob.absclip);
 		armAsm->And(Fs.V16B(), Fs.V16B(), RQSCRATCH.V16B());
-		armAsm->Fsqrt(mVU_xmmPQ.S(), Fs.S());
+		armAsm->Fsqrt(RQSCRATCH.S(), Fs.S());
+		armAsm->Ins(mVU_xmmPQ.V4S(), 0, RQSCRATCH.V4S(), 0);
 		mvuLdrSS(Fs, mVUglob.one);
 		SSE_DIVSS(mVU, Fs, mVU_xmmPQ);
 		armAsm->Ins(mVU_xmmPQ.V4S(), 0, Fs.V4S(), 0);
@@ -741,7 +742,8 @@ mVUop(mVU_ESQRT)
 		mVUshufflePS(mVU_xmmPQ, mVU_xmmPQ, mVUinfo.writeP ? 0x27 : 0xC6); // Flip xmmPQ to get Valid P instance
 		mvuLdrQ(RQSCRATCH, mVUglob.absclip);
 		armAsm->And(Fs.V16B(), Fs.V16B(), RQSCRATCH.V16B());
-		armAsm->Fsqrt(mVU_xmmPQ.S(), Fs.S());
+		armAsm->Fsqrt(RQSCRATCH.S(), Fs.S());
+		armAsm->Ins(mVU_xmmPQ.V4S(), 0, RQSCRATCH.V4S(), 0);
 		mVUshufflePS(mVU_xmmPQ, mVU_xmmPQ, mVUinfo.writeP ? 0x27 : 0xC6); // Flip back
 		mVU.regAlloc->clearNeeded(Fs);
 		mVU.profiler.EmitOp(opESQRT);
