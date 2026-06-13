@@ -1331,9 +1331,15 @@ static void mVUGenerateWaitMTVU(microVU& mVU)
 	constexpr int kVecSave = 25; // v0..v24 (VF pool + PQ)
 	constexpr int gprBytes = kGprSave * 8;
 	constexpr int vecBytes = kVecSave * 16;
-	constexpr int frame = gprBytes + ((vecBytes + 15) & ~15); // 16-aligned
+	constexpr int frame = gprBytes + ((vecBytes + 15) & ~15); // 16-aligned, 0x210
+	// 16 extra bytes at [sp+frame] to save/restore lr (x30) around the C call.
+	// blr clobbers x30 with the instruction after the call site; without this save,
+	// ret returns to the restore sequence itself instead of the VU block that called
+	// the thunk, creating a loop that advances sp by frame each iteration until it
+	// reaches the thread stack guard (~41 iterations) and SIGBUSes.
+	constexpr int frameTotal = frame + 16;
 
-	armAsm->Sub(a64::sp, a64::sp, frame);
+	armAsm->Sub(a64::sp, a64::sp, frameTotal);
 	for (int i = 0; i < kGprSave; i += 2)
 		armAsm->Stp(armXRegister(i), armXRegister(i + 1), a64::MemOperand(a64::sp, i * 8));
 	int voff = gprBytes;
@@ -1341,7 +1347,9 @@ static void mVUGenerateWaitMTVU(microVU& mVU)
 		armAsm->Stp(armQRegister(i), armQRegister(i + 1), a64::MemOperand(a64::sp, voff));
 	armAsm->Str(armQRegister(kVecSave - 1), a64::MemOperand(a64::sp, voff));
 
+	armAsm->Str(a64::x30, a64::MemOperand(a64::sp, frame));
 	armEmitCall(reinterpret_cast<const void*>(mVUwaitMTVU));
+	armAsm->Ldr(a64::x30, a64::MemOperand(a64::sp, frame));
 
 	voff = gprBytes;
 	for (int i = 0; i < kVecSave - 1; i += 2, voff += 32)
@@ -1349,7 +1357,7 @@ static void mVUGenerateWaitMTVU(microVU& mVU)
 	armAsm->Ldr(armQRegister(kVecSave - 1), a64::MemOperand(a64::sp, voff));
 	for (int i = 0; i < kGprSave; i += 2)
 		armAsm->Ldp(armXRegister(i), armXRegister(i + 1), a64::MemOperand(a64::sp, i * 8));
-	armAsm->Add(a64::sp, a64::sp, frame);
+	armAsm->Add(a64::sp, a64::sp, frameTotal);
 	armAsm->Ret();
 }
 
@@ -1441,15 +1449,46 @@ static void* mVUexecute(u32 startPC, u32 cycles)
 	mVU.cycles = cycles;
 	mVU.totalCycles = cycles;
 
-	// x86 repositions its single global emit cursor here (xSetTextPtr/xSetPtr to
-	// mVU.prog.x86ptr). On ARM64 we open one MacroAssembler session at the program
-	// cursor for the whole search/compile (the recursive mVUcompile/normBranch calls
-	// append into it); armEndBlock finalises + flushes the icache so the freshly
-	// emitted code is safe to branch into when the dispatcher does `br x0`. If the
-	// program was already compiled nothing is emitted and codePtr is unchanged.
+	const u32 spc = startPC & vuLimit;
+
+	// Fast path: if the microprogram + block for this (start_pc, startPC, pipeline
+	// state) is already compiled, return its host entry directly and skip the emit
+	// session below. armStartBlock/armEndBlock allocate+finalize a VIXL
+	// MacroAssembler, toggle W^X (Begin/EndCodeWrite), and flush the icache *on every
+	// VU dispatch* -- pure overhead when nothing is emitted (x86 just bumps its global
+	// emit cursor here, which is free). VU0-heavy titles (e.g. Ratchet & Clank)
+	// dispatch VU constantly with the cache already warm, so this wrapping dominated
+	// the EE thread (profiled at ~50% of CPU-thread samples in armStartBlock/
+	// armEndBlock, vs ~0 actually compiling). mVUclear/mVUreset NULL every
+	// quick[i].prog, so a non-NULL quick.prog means the cache is valid; the slow path
+	// populates it on the first (cold) lookup. Mirrors mVUsearchProg's quick-reference
+	// hit path (and mVUentryGet's hit branch) exactly, minus the compile.
+	{
+		microProgramQuick& quick = mVU.prog.quick[mVU.regs().start_pc / 8];
+		if (quick.prog && !mVU.prog.cleared)
+		{
+			if (microBlockManager* mgr = quick.prog->block[spc / 8])
+			{
+				if (microBlock* b = mgr->search(mVU, (microRegInfo*)&mVU.prog.lpState))
+				{
+					mVU.prog.isSame = -1;
+					mVU.prog.cur    = quick.prog;
+					quick.block     = mgr;
+					return b->codeStart;
+				}
+			}
+		}
+	}
+
+	// Cold/compile path: open one MacroAssembler session at the program cursor for the
+	// whole search/compile (the recursive mVUcompile/normBranch calls append into it);
+	// armEndBlock finalises + flushes the icache so the freshly emitted code is safe to
+	// branch into when the dispatcher does `br x0`. If the search still turns out to be
+	// a hit, nothing is emitted and codePtr is unchanged (the fast path above usually
+	// catches that case before paying for the session).
 	armSetAsmPtr(mVU.prog.codePtr, mVU.prog.codeEnd - mVU.prog.codePtr, nullptr);
 	armStartBlock();
-	void* const entry = mVUsearchProg<vuIndex>(startPC & vuLimit, (uptr)&mVU.prog.lpState);
+	void* const entry = mVUsearchProg<vuIndex>(spc, (uptr)&mVU.prog.lpState);
 	mVU.prog.codePtr = armEndBlock();
 	return entry;
 }

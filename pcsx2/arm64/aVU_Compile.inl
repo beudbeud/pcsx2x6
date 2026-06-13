@@ -731,6 +731,19 @@ _mVUt void* mVUcompileJIT(u32 startPC, uptr ptr)
 {
 	microVU& mVU = mVUx;
 
+	// Fast path: a cached jump target is returned directly, without opening an emit
+	// session. armSetAsmPtr/armStartBlock/armEndBlock toggle W^X (Begin/EndCodeWrite)
+	// and flush the icache on *every* JR/JALR dispatch — pure overhead when nothing is
+	// compiled. This mirrors the inner doJumpCaching hit checks below, hoisted above the
+	// session (same optimisation as mVUexecute's program-entry fast path).
+	if (doJumpCaching)
+	{
+		microBlock* pBlock = (microBlock*)ptr;
+		microJumpCache& jc = pBlock->jumpCache[startPC / 8];
+		if (jc.prog && jc.prog == mVU.prog.quick[startPC / 8].prog)
+			return jc.codeStart;
+	}
+
 	armSetAsmPtr(mVU.prog.codePtr, mVU.prog.codeEnd - mVU.prog.codePtr, nullptr);
 	armStartBlock();
 	void* result;
