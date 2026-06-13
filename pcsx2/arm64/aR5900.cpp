@@ -1896,6 +1896,14 @@ static bool recTranslateOp(u32 op)
 			// (QMFC2/CFC2/QMTC2/CTC2) is never in the family.
 			if (rs >= 0x10 && recCOP2_TryMacroFMAC(op))
 				return true;
+			// Quadword register transfers: the data plumbing of every VU0-macro
+			// computation (load a vector into VF, read the result back). On this
+			// synchronous-VU0 port the COP2 interlock/sync is a no-op (see
+			// armEmitQMFC2), so both the plain and interlock encodings reduce to a pure
+			// 128-bit NEON move — far cheaper than the interpreter call, and the single
+			// biggest remaining COP2 fallback after the FMAC family.
+			if (rs == 0x01) { armEmitQMFC2(rt, rd); return true; } // QMFC2: GPR[rt]=VF[rd]
+			if (rs == 0x05) { armEmitQMTC2(rt, rd); return true; } // QMTC2: VF[rd]=GPR[rt]
 			recEmitInterpInline(op);
 			return true;
 
