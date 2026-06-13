@@ -253,9 +253,11 @@ void armEmitStoreQuadCop2(u32 ft, u32 rs, s32 imm)
 // ------------------------------------------------------------------------
 //  COP2 quadword register transfers (QMFC2/QMTC2) — VU0 VF[rd] <-> EE GPR[rt].
 //  Same 128-bit register-file move as LQC2/SQC2, just GPR-to/from-VF instead of
-//  memory. The interpreter's COP2 interlock/sync is a no-op on this port (VU0 is
-//  the synchronous interpreter, never running async — see armEmitLoadQuadCop2),
-//  so both the plain and interlock (code&1) encodings reduce to a pure data move.
+//  memory. These emit the move only; the caller restricts them to the non-interlock
+//  encoding (code&1 == 0). The interlock encoding runs a pending VU0 microprogram
+//  first (_vu0WaitMicro/_vu0FinishMicro) and must stay on the interpreter — see the
+//  dispatch in aR5900.cpp. vu0Sync() itself is a no-op on this port (VU0 is the
+//  synchronous interpreter, never running async), so the bare move is faithful.
 //  GPRs are memory-authoritative here: COP2 dispatch runs after the EE rec has
 //  flushed+killed its GPR cache, so reading/writing cpuRegs.GPR.r[] directly is safe.
 // ------------------------------------------------------------------------
