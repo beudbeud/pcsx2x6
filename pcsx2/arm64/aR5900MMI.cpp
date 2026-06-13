@@ -1331,3 +1331,33 @@ void armEmitPMTHL(u32 rs, u32 sa)
 	armAsm->Ldr(a64::w9, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rs) + 12));
 	armAsm->Str(a64::w9, a64::MemOperand(RESTATEPTR, EE_HI1_OFFSET));
 }
+
+// QFSRV — quadword funnel shift right variable. Conceptually shifts the 256-bit
+// concatenation {Rs(high):Rt(low)} right by cpuRegs.sa*8 bits and keeps the low
+// 128 bits. cpuRegs.sa is a *byte* amount (0..15), so the funnel shift is exactly
+// an unaligned 16-byte load at byte offset sa into the buffer [Rt | Rs] — the same
+// trick x86 recQFSRV uses (iMMI.cpp). Lay Rt in scratch[0..15] and Rs in
+// scratch[16..31], then load 16 bytes at scratch+sa. (Hot path: Capcom Fighting
+// Jam blits sprites with this ~3.4M times/frame; it was the #1 EE fallback.)
+//
+// The static scratch is safe: the EE rec runs single-threaded, and the emitted
+// store-then-load sequence for one op never interleaves with another on that thread.
+void armEmitQFSRV(u32 rd, u32 rs, u32 rt)
+{
+	if (rd == 0)
+		return;
+
+	alignas(16) static u8 s_qfsrv_scratch[32];
+
+	armMoveAddressToReg(RSCRATCHADDR, s_qfsrv_scratch);
+	loadQ(VT, rt);
+	armAsm->Str(VT.Q(), a64::MemOperand(RSCRATCHADDR, 0));   // low 16 bytes = Rt
+	loadQ(VS, rs);
+	armAsm->Str(VS.Q(), a64::MemOperand(RSCRATCHADDR, 16));  // high 16 bytes = Rs
+
+	// sa (byte offset 0..15) zero-extends into x9; unaligned 16-byte load at +sa.
+	armAsm->Ldr(a64::w9, a64::MemOperand(RESTATEPTR, EE_SA_OFFSET));
+	armAsm->Add(RSCRATCHADDR, RSCRATCHADDR, a64::x9);
+	armAsm->Ldr(VD.Q(), a64::MemOperand(RSCRATCHADDR));
+	storeQ(VD, rd);
+}

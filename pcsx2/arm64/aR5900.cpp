@@ -1578,8 +1578,7 @@ static bool recTranslateMMI1(u32 sa, u32 rd, u32 rs, u32 rt)
 		case 0x18: armEmitPADDUB(rd, rs, rt); return true;
 		case 0x19: armEmitPSUBUB(rd, rs, rt); return true;
 		case 0x1A: armEmitPEXTUB(rd, rs, rt); return true;
-		// 0x1B QFSRV: shift amount comes from the runtime SA register (cpuRegs.sa),
-		// not the instruction — left to the interpreter.
+		case 0x1B: armEmitQFSRV(rd, rs, rt); return true; // runtime SA byte-offset load
 		default:   return false;
 	}
 }
