@@ -1870,11 +1870,22 @@ static bool recTranslateOp(u32 op)
 						armAsm->Str(RSCRATCHADDR, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
 					}
 					return true;
-				case 0x04: // MTC0 — writes can have side effects (Status gates IRQs, etc.),
-					// so keep them on the interpreter.
+				case 0x04: // MTC0 — the interpreter's default case is a plain 32-bit write
+					// (CP0.r[rd] = GPR[rt].UL[0]) with no side effects, so JIT it (e.g. EPC).
+					// Registers with side effects stay on the interpreter: 9 (Count timer) /
+					// 25 (PERF) need live cpuRegs.cycle -> single-step; 12 (Status ->
+					// WriteCP0Status/IRQ recheck), 16 (Config -> WriteCP0Config), 24 (debug
+					// breakpoint regs, a no-op) -> inline interpreter.
 					if (rd == 9 || rd == 25)
-						return false; // Count / PERF need a live cpuRegs.cycle
-					recEmitInterpInline(op);
+						return false;
+					if (rd == 12 || rd == 16 || rd == 24)
+					{
+						recEmitInterpInline(op);
+						return true;
+					}
+					// GPR[rt].UL[0] is the low word at EE_GPR_OFFSET(rt); rt==0 reads 0.
+					armAsm->Ldr(RSCRATCHADDR.W(), a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
+					armAsm->Str(RSCRATCHADDR.W(), a64::MemOperand(RESTATEPTR, EE_CP0_R_OFFSET(rd)));
 					return true;
 				case 0x10: // C0 — inline the TLB ops only
 					switch (funct)
