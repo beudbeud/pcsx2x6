@@ -949,6 +949,12 @@ bool GSDeviceOGL::CheckFeatures()
 			Console.WriteLn("GLES: GL_EXT_clip_control available — depth precision OK.");
 		else
 			Console.Warning("GLES: GL_EXT_clip_control not available — depth precision reduced.");
+
+		// Diagnostic: is dual-source blending (EXT_blend_func_extended) exposed?
+		// On v3d the Mesa release notes list ARB_blend_func_extended only from 25.2.0;
+		// this confirms what the actual driver reports at runtime.
+		Console.WriteLnFmt("GLES: GL_EXT_blend_func_extended (dual-source) = {}",
+			GLAD_GL_EXT_blend_func_extended ? "available" : "NOT available");
 	}
 	
 	m_features.aa1 = GSConfig.HWAA1 && m_features.vs_expand && m_features.feedback_loops();
