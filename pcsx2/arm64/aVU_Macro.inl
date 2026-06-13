@@ -63,21 +63,21 @@
 
 namespace {
 
-// x86 setupMacroOp/endMacroOp mode bits we care about for the VADD/VSUB family:
-//   0x10 -> updates Status + MAC flags (all VADD/VSUB[A][i/x/y/z/w] use this)
-//   0x01 -> reads Q reg     (NOT used by the family we JIT — see scope note)
-//   0x02 -> writes Q reg    (NOT used)
-//   0x04 -> needs analysis pass (NOT used by the FMACa family)
-//   0x08 -> writes CLIP     (NOT used)
-static constexpr int MVU_MACRO_FLAGS = 0x10;
+// x86 setupMacroOp/endMacroOp mode bits (mirrors pcsx2/x86/microVU_Macro.inl):
+//   0x01 -> reads Q reg      (Q-forms: ADDq/MULq/...; not yet JIT'd)
+//   0x02 -> writes Q reg     (DIV/SQRT/RSQRT — next slice)
+//   0x04 -> needs analysis pass (run pass 0 then 1; none of our families use it)
+//   0x08 -> writes CLIP flag (CLIP)
+//   0x10 -> updates Status + MAC flags (the FMAC family)
+static constexpr int MVU_MODE_NOFLAG = 0x00;
+static constexpr int MVU_MODE_FMAC   = 0x10;
+static constexpr int MVU_MODE_CLIP   = 0x08;
 
 // Repoint x19 (RESTATEPTR -> RVUSTATE) to &vuRegs[0] and prime the microVU state
-// for a single macro op. Mirrors x86 setupMacroOp. `updateFlags` selects mode 0x10
-// (FMAC family: updates Status+MAC) vs mode 0x0 (ITOF/FTOI/ABS/MAX/MINI/MOVE/MR32:
-// no flag side effects). For the no-flag ops we skip the IRinfo flag setup AND the
-// status-flag denorm/norm entirely — they don't read or write the flag instances,
-// so leaving gprF0/the flag pipeline untouched matches the interpreter exactly.
-static void mVUsetupMacroOp(u32 code, bool updateFlags)
+// for a single macro op. `mode` selects which flag plumbing to emit (see bits above).
+// No-flag ops (mode 0) skip all of it — they don't touch any flag instance, so
+// leaving gprF0/the flag pipeline untouched matches the interpreter exactly.
+static void mVUsetupMacroOp(u32 code, int mode)
 {
 	microVU& mVU = microVU0;
 
@@ -89,7 +89,7 @@ static void mVUsetupMacroOp(u32 code, bool updateFlags)
 	mVU.code           = code;
 	std::memset(&mVU.prog.IRinfo.info[0], 0, sizeof(mVU.prog.IRinfo.info[0]));
 
-	if (updateFlags)
+	if (mode & 0x10)
 	{
 		// Status flag: write/lastWrite both reference flag instance 0 (gprF0); the
 		// family updates the non-sticky O/U/S/Z bits. (x86: mode & 0x10 branch.)
@@ -104,11 +104,20 @@ static void mVUsetupMacroOp(u32 code, bool updateFlags)
 		mVU.prog.IRinfo.info[0].mFlag.write  = 0xff;
 	}
 
+	if (mode & 0x08)
+	{
+		// CLIP: read the previous clip flag and write the new one. Instance 0xff (>= 4)
+		// makes mVUallocCFLAGa/b read/write vuRegs[0].VI[REG_CLIP_FLAG] in memory
+		// directly (the macroVU path) — so no driver-side load/store is needed.
+		mVU.prog.IRinfo.info[0].cFlag.write     = 0xff;
+		mVU.prog.IRinfo.info[0].cFlag.lastWrite = 0xff;
+	}
+
 	// Point RVUSTATE (x19) at &vuRegs[0] for the macro op. The EE rec's
 	// RESTATEPTR(&cpuRegs) is restored in mVUendMacroOp.
 	armMoveAddressToReg(RVUSTATE, &::vuRegs[0]);
 
-	if (updateFlags)
+	if (mode & 0x10)
 	{
 		// The interpreter keeps vuRegs[0].VI[REG_STATUS_FLAG] *normalized*. The mVU
 		// flag pipeline works on a *denormalized* status flag kept in gprF0. Load &
@@ -120,9 +129,9 @@ static void mVUsetupMacroOp(u32 code, bool updateFlags)
 }
 
 // Flush the macro op's results back to vuRegs[0] memory, re-normalize the Status
-// flag (FMAC family only), and restore x19 = &cpuRegs for the rest of the EE block.
-// Mirrors x86 endMacroOp.
-static void mVUendMacroOp(bool updateFlags)
+// flag (mode 0x10 only), and restore x19 = &cpuRegs for the rest of the EE block.
+// Mirrors x86 endMacroOp. (CLIP needs no teardown — its flag went straight to memory.)
+static void mVUendMacroOp(u32 code, int mode)
 {
 	microVU& mVU = microVU0;
 
@@ -131,7 +140,7 @@ static void mVUendMacroOp(bool updateFlags)
 	// is correct — nothing must remain live across the macro-op boundary.)
 	mVU.regAlloc->flushAll();
 
-	if (updateFlags)
+	if (mode & 0x10)
 	{
 		// Re-normalize the Status flag from gprF0 back into vuRegs[0] memory, so the
 		// interpreter (and the next macro op's denormalize) see the canonical form.
@@ -150,26 +159,20 @@ static void mVUendMacroOp(bool updateFlags)
 	armMoveAddressToReg(RVUSTATE, &cpuRegs);
 }
 
-// Drive one macro op: setup, run the emitter's pass-2 (recompile) against
-// microVU0, tear down. All the ops we JIT are mode 0x10 (FMAC) or mode 0x0
-// (no-flag) — neither sets bit 0x04, so we only run recPass == 1, exactly like
-// x86 REC_COP2_mVU0's `else` branch. FMAC ops update Status+MAC (updateFlags=true);
-// the no-flag ops (ITOF/FTOI/ABS/MAX/MINI/MOVE/MR32) pass false.
-#define MVU_MACRO_FMAC(name, emitter)                 \
-	void recCOP2_##name(u32 code)                     \
-	{                                                 \
-		mVUsetupMacroOp(code, /*updateFlags=*/true);  \
-		emitter(microVU0, /*recPass=*/1);             \
-		mVUendMacroOp(/*updateFlags=*/true);          \
+// Drive one macro op: setup, run the emitter's pass-2 (recompile) against microVU0,
+// tear down. None of these families set bit 0x04, so we only run recPass == 1
+// (x86 REC_COP2_mVU0's `else` branch).
+#define MVU_MACRO_OP(name, emitter, mode)        \
+	void recCOP2_##name(u32 code)                \
+	{                                            \
+		mVUsetupMacroOp(code, (mode));           \
+		emitter(microVU0, /*recPass=*/1);        \
+		mVUendMacroOp(code, (mode));             \
 	}
 
-#define MVU_MACRO_NOFLAG(name, emitter)               \
-	void recCOP2_##name(u32 code)                     \
-	{                                                 \
-		mVUsetupMacroOp(code, /*updateFlags=*/false); \
-		emitter(microVU0, /*recPass=*/1);             \
-		mVUendMacroOp(/*updateFlags=*/false);         \
-	}
+#define MVU_MACRO_FMAC(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_FMAC)
+#define MVU_MACRO_NOFLAG(name, emitter) MVU_MACRO_OP(name, emitter, MVU_MODE_NOFLAG)
+#define MVU_MACRO_CLIP(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_CLIP)
 
 } // anonymous namespace
 
@@ -286,8 +289,16 @@ MVU_MACRO_NOFLAG(VMINIw,  mVU_MINIw)
 MVU_MACRO_NOFLAG(VMOVE,   mVU_MOVE)
 MVU_MACRO_NOFLAG(VMR32,   mVU_MR32)
 
+// --- mode 0x08 (writes the CLIP flag) ------------------------------------------
+// CLIP feeds frustum/backface culling — heavy in 3D titles. mVU_CLIP reads the
+// previous clip flag and writes the new one; with cFlag instance 0xff both go
+// straight to vuRegs[0].VI[REG_CLIP_FLAG] (macroVU path), so no teardown is needed.
+MVU_MACRO_CLIP(VCLIP, mVU_CLIP) // SPECIAL2
+
 #undef MVU_MACRO_FMAC
 #undef MVU_MACRO_NOFLAG
+#undef MVU_MACRO_CLIP
+#undef MVU_MACRO_OP
 
 // EE-rec dispatch: route the SPECIAL1/SPECIAL2 funct of a COP2 op to one of the
 // JIT'd macro ops above. Returns true if the op was emitted natively, false if it
@@ -338,6 +349,7 @@ bool recCOP2_TryMacroFMAC(u32 code)
 			case 0x1b: recCOP2_VMULAw(code);  return true;
 			case 0x1d: recCOP2_VABS(code);    return true; // ABS (no flags)
 			case 0x1e: recCOP2_VMULAi(code);  return true; // MULAi
+			case 0x1f: recCOP2_VCLIP(code);   return true; // CLIP (writes clip flag)
 			case 0x22: recCOP2_VADDAi(code);  return true; // ADDAi
 			case 0x23: recCOP2_VMADDAi(code); return true; // MADDAi
 			case 0x26: recCOP2_VSUBAi(code);  return true; // SUBAi
