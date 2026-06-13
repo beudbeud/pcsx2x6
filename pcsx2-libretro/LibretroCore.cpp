@@ -1445,7 +1445,7 @@ void Host::OnPerformanceMetricsUpdated()
 		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetVUThreadUsage(),
 		PerformanceMetrics::GetGPUUsage());
 #ifdef ARCH_ARM64
-	char fb[256];
+	char fb[512];
 	recPerfDumpExecFallbacks(fb, sizeof(fb));
 	INFO_LOG("{}", fb);
 #endif

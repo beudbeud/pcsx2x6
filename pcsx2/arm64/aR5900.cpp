@@ -2327,6 +2327,8 @@ static bool recBranchIsUnconditional(u32 op)
 // groups. COP2 is sub-bucketed by funct so we see *which* VU macro op dominates.
 static u64 s_rec_exec_fallback[64] = {};
 static u64 s_rec_exec_cop2[64] = {};
+static u64 s_rec_exec_mmi[128] = {};  // MMI 128-bit SIMD sub-ops: key = group*32 + sa
+static u64 s_rec_exec_cop0[32] = {};  // COP0 fallbacks bucketed by CP0 register (rd)
 
 static void recCountFallback(u32 op)
 {
@@ -2334,6 +2336,24 @@ static void recCountFallback(u32 op)
 	s_rec_exec_fallback[primary]++;
 	if (primary == 0x12) // COP2 — break down by funct (VU0 macro op)
 		s_rec_exec_cop2[op & 0x3f]++;
+	else if (primary == 0x1c) // MMI — break down the 128-bit SIMD sub-groups by sa
+	{
+		// MMI0/MMI2/MMI1/MMI3 escape via funct 0x08/0x09/0x28/0x29 and select the
+		// real op in sa = (op>>6)&0x1f. key = group*32+sa so the dump pinpoints the
+		// exact packed op (PADDW/PEXTLB/PPACH/...) to port to NEON. Direct MMI ops
+		// (mul/div, HI-LO moves) aren't sub-grouped and show only in the 0x1c total.
+		const u32 sa = (op >> 6) & 0x1f;
+		switch (op & 0x3f)
+		{
+			case 0x08: s_rec_exec_mmi[0 * 32 + sa]++; break; // MMI0
+			case 0x09: s_rec_exec_mmi[1 * 32 + sa]++; break; // MMI2
+			case 0x28: s_rec_exec_mmi[2 * 32 + sa]++; break; // MMI1
+			case 0x29: s_rec_exec_mmi[3 * 32 + sa]++; break; // MMI3
+			default: break;
+		}
+	}
+	else if (primary == 0x10) // COP0 — bucket by CP0 register (catches MFC0 COUNT polling)
+		s_rec_exec_cop0[(op >> 11) & 0x1f]++;
 }
 
 // Called periodically from the libretro perf log: formats the top fallback buckets for the
@@ -2347,9 +2367,9 @@ void recPerfDumpExecFallbacks(char* out, size_t n)
 	for (u32 i = 0; i < 64; i++)
 		total += s_rec_exec_fallback[i];
 
-	const auto top6 = [](const u64* arr, char* dst, size_t cap) {
+	const auto top6 = [](const u64* arr, u32 count, char* dst, size_t cap) {
 		u32 idx[6] = {}; u64 cnt[6] = {};
-		for (u32 i = 0; i < 64; i++)
+		for (u32 i = 0; i < count; i++)
 		{
 			for (u32 j = 0; j < 6; j++)
 			{
@@ -2370,13 +2390,20 @@ void recPerfDumpExecFallbacks(char* out, size_t n)
 
 	char primary_buf[128] = {};
 	char cop2_buf[128] = {};
-	top6(s_rec_exec_fallback, primary_buf, sizeof(primary_buf));
-	top6(s_rec_exec_cop2, cop2_buf, sizeof(cop2_buf));
-	std::snprintf(out, n, "EE_FB: total=%llu | primary: %s | cop2_funct: %s",
-		static_cast<unsigned long long>(total), primary_buf, cop2_buf);
+	char mmi_buf[160] = {};
+	char cop0_buf[96] = {};
+	top6(s_rec_exec_fallback, 64, primary_buf, sizeof(primary_buf));
+	top6(s_rec_exec_cop2, 64, cop2_buf, sizeof(cop2_buf));
+	top6(s_rec_exec_mmi, 128, mmi_buf, sizeof(mmi_buf));
+	top6(s_rec_exec_cop0, 32, cop0_buf, sizeof(cop0_buf));
+	// mmi key = group*32+sa (group 0=MMI0 1=MMI2 2=MMI1 3=MMI3); cop0 key = CP0 reg.
+	std::snprintf(out, n, "EE_FB: total=%llu | primary: %s | cop2: %s | mmi[g*32+sa]: %s | cop0[rd]: %s",
+		static_cast<unsigned long long>(total), primary_buf, cop2_buf, mmi_buf, cop0_buf);
 
 	std::memset(s_rec_exec_fallback, 0, sizeof(s_rec_exec_fallback));
 	std::memset(s_rec_exec_cop2, 0, sizeof(s_rec_exec_cop2));
+	std::memset(s_rec_exec_mmi, 0, sizeof(s_rec_exec_mmi));
+	std::memset(s_rec_exec_cop0, 0, sizeof(s_rec_exec_cop0));
 }
 
 // Emit a counter bump for an op executed through the interpreter fallback. The whole-cache
