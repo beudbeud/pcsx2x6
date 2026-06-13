@@ -197,6 +197,9 @@ void armEmitStoreQuad(u32 rt, u32 rs, s32 imm);
 // COP2 quad load/store: VU0.VF[ft] <-> memory (LQC2/SQC2).
 void armEmitLoadQuadCop2(u32 ft, u32 rs, s32 imm);
 void armEmitStoreQuadCop2(u32 ft, u32 rs, s32 imm);
+// COP2 quad register transfers: VU0.VF[rd] <-> EE GPR[rt] (QMFC2/QMTC2).
+void armEmitQMFC2(u32 rt, u32 rd);
+void armEmitQMTC2(u32 rt, u32 rd);
 
 // --------------------------------------------------------------------------------------
 //  EE immediate arithmetic opcode generators (Phase 3.1)
