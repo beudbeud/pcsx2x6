@@ -477,6 +477,22 @@ void LibretroHost::RegisterCoreOptions()
 			"Makes the EE skip cycles. Helps some games, breaks others.", nullptr, "performance",
 			{{"0", "Disabled (Default)"}, {"1", "Mild"}, {"2", "Moderate"}, {"3", "Maximum"}, {nullptr, nullptr}},
 			"0"},
+		{"pcsx2_hw_download_mode", "HW Download Mode", nullptr,
+			"Controls GPU->CPU framebuffer readbacks. 'Disable Readbacks' avoids pipeline stalls on weak, "
+			"tiled GPUs (e.g. RPi5/V3D) for a large speedup, but breaks effects that read back the "
+			"framebuffer. Hardware renderers only.",
+			nullptr, "performance",
+			{{"0", "Accurate (Default)"}, {"1", "Disable Readbacks (Faster)"}, {"2", "Unsynchronized"},
+				{"3", "Disabled (Fastest, breaks more)"}, {nullptr, nullptr}},
+			"0"},
+		{"pcsx2_skipdraw", "Skipdraw (Skip Draw Range)", nullptr,
+			"Skips the first N draw calls each frame to remove expensive effects (bloom, shadows, etc.) "
+			"for a GPU speedup. Game-specific; higher skips more and may remove wanted graphics. "
+			"Non-zero enables manual HW fixes, which disables per-game GameDB auto-fixes.",
+			nullptr, "performance",
+			{{"0", "Disabled (Default)"}, {"1", "1"}, {"2", "2"}, {"3", "3"}, {"4", "4"}, {"5", "5"},
+				{"6", "6"}, {"8", "8"}, {"10", "10"}, {nullptr, nullptr}},
+			"0"},
 		{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr, nullptr}}, nullptr},
 	};
 
@@ -612,6 +628,25 @@ void LibretroHost::ReadCoreOptions(bool startup)
 
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleRate", get_int_option("pcsx2_ee_cycle_rate", "0"));
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleSkip", get_int_option("pcsx2_ee_cycle_skip", "0"));
+
+	// GPU->CPU readback control. Not masked by ManualUserHacks, so it always applies.
+	s_settings_interface.SetIntValue("EmuCore/GS", "HWDownloadMode", get_int_option("pcsx2_hw_download_mode", "0"));
+
+	// Skipdraw: skip draw calls [1, N] each frame. SkipDraw is zeroed by GSOptions::MaskUserHacks()
+	// unless ManualUserHacks ("UserHacks") is set, so only enable that master toggle when skipdraw
+	// is actually requested — otherwise the per-game GameDB auto-fixes stay active.
+	const int skipdraw = get_int_option("pcsx2_skipdraw", "0");
+	if (skipdraw > 0)
+	{
+		s_settings_interface.SetBoolValue("EmuCore/GS", "UserHacks", true);
+		s_settings_interface.SetIntValue("EmuCore/GS", "UserHacks_SkipDraw_Start", 1);
+		s_settings_interface.SetIntValue("EmuCore/GS", "UserHacks_SkipDraw_End", skipdraw);
+	}
+	else
+	{
+		s_settings_interface.SetIntValue("EmuCore/GS", "UserHacks_SkipDraw_Start", 0);
+		s_settings_interface.SetIntValue("EmuCore/GS", "UserHacks_SkipDraw_End", 0);
+	}
 
 	{
 		// System 246/256 arcade: input is JVS (2 players max), so no multitap and no
