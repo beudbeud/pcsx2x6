@@ -853,7 +853,10 @@ bool GSDeviceOGL::CheckFeatures()
 	if (!m_is_gles)
 		m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
 	else
-		m_bugs.buggy_pbo = !GLAD_GL_EXT_buffer_storage;
+		// V3D/RPi5: persistent-mapped PBO texture uploads intermittently sample stale
+		// data (textures flicker / show grey on characters and stage). Force the direct
+		// glTexSubImage upload path on GLES — synchronous, no streaming-buffer reuse hazard.
+		m_bugs.buggy_pbo = true;
 	if (m_bugs.buggy_pbo)
 		Console.Warning("GL: Not using PBOs for texture uploads because buffer_storage is unavailable.");
 
