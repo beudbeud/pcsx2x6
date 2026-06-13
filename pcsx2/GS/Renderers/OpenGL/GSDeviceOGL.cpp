@@ -1525,15 +1525,13 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 				header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
 		}
 
-		// V3D (RPi5) runs mediump float ALU much faster than highp. This is a
-		// measurement probe for whether the GS fragment shader is ALU-bound: set
-		// PCSX2_GLES_MEDIUMP=1 to drop the *fragment* shader to mediump float and A/B
-		// the fps (no rebuild). Expect texture shimmer — PS2 texcoords need highp, so
-		// this is NOT a shipping setting; if it speeds V3D up, the real fix is a
-		// per-variable split (color mediump, texcoord/pos highp) in tfx_fs.glsl. The
-		// vertex shader and int/sampler precision stay highp regardless.
-		static const bool s_gles_fs_mediump = (std::getenv("PCSX2_GLES_MEDIUMP") != nullptr);
-		if (s_gles_fs_mediump && type == GL_FRAGMENT_SHADER)
+		// V3D (RPi5) runs mediump float ALU much faster than highp. The "Reduce Shader
+		// Precision" option (GSConfig.GLESReducedPrecision) drops the *fragment* shader
+		// to mediump float for speed on GPU-bound scenes. Trade-off: PS2 texcoords need
+		// highp, and the interpolated coords inherit the FS default, so mediump causes
+		// minor texture shimmer — hence it's opt-in, default off. The vertex shader and
+		// int/sampler precision always stay highp (positions / exact PS2 integer math).
+		if (GSConfig.GLESReducedPrecision && type == GL_FRAGMENT_SHADER)
 			header += "precision mediump float;\n";
 		else
 			header += "precision highp float;\n";

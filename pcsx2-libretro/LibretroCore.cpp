@@ -453,6 +453,11 @@ void LibretroHost::RegisterCoreOptions()
 			"0"},
 		{"pcsx2_fxaa", "FXAA", nullptr, "Cheap post-process anti-aliasing.", nullptr, "graphics",
 			{{"disabled", nullptr}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_reduce_shader_precision", "Reduce Shader Precision", nullptr,
+			"Use mediump float in the fragment shader for speed on weak GPUs (e.g. RPi5/V3D). "
+			"Helps GPU-bound scenes but causes minor texture shimmer. Hardware (OpenGL) renderer only.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Accurate)"}, {"enabled", "Enabled (Faster)"}, {nullptr, nullptr}}, "disabled"},
 		{"pcsx2_aspect_ratio", "Aspect Ratio", nullptr,
 			"Automatic reports 16:9 when widescreen patches are enabled, 4:3 otherwise.", nullptr, "graphics",
 			{{"auto", "Automatic"}, {"4:3", nullptr}, {"16:9", nullptr}, {nullptr, nullptr}}, "auto"},
@@ -591,6 +596,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 	s_settings_interface.SetIntValue("EmuCore/GS", "deinterlace_mode", get_int_option("pcsx2_deinterlace_mode", "0"));
 	s_settings_interface.SetBoolValue("EmuCore/GS", "fxaa",
 		std::strcmp(get_option("pcsx2_fxaa", "disabled"), "enabled") == 0);
+	s_settings_interface.SetBoolValue("EmuCore/GS", "GLESReducedPrecision",
+		std::strcmp(get_option("pcsx2_reduce_shader_precision", "disabled"), "enabled") == 0);
 
 	const bool widescreen = std::strcmp(get_option("pcsx2_widescreen_patches", "disabled"), "enabled") == 0;
 	s_settings_interface.SetBoolValue("EmuCore", "EnableWideScreenPatches", widescreen);
