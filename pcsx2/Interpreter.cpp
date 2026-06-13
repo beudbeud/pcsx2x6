@@ -78,11 +78,13 @@ void intExecuteOneInst()
 
 	opcode.interpret();
 
-	// Branch ops flush their own cycles inside doBranch when taken; everything
-	// else (including not-taken branches) we flush immediately so the dynarec's
-	// cycle/event accounting stays in sync.
-	if (!(opcode.flags & IS_BRANCH))
-		intUpdateCPUCycles();
+	// Unconditional flush: in rec context the interpreter's branch helpers skip
+	// their own flush (intDoBranch is gated on Cpu == &intCpu), so this is the only
+	// place the accrued cycles reach cpuRegs.cycle. Flushing for branches too
+	// guarantees forward progress for a branch-only guest wait loop (e.g. Burnout's
+	// `BC0F .; nop` CPCOND0 poll), which otherwise freezes cpuRegs.cycle so the
+	// pending event (DMAC completion) never comes due.
+	intUpdateCPUCycles();
 }
 
 // These macros are used to assemble the repassembler functions
