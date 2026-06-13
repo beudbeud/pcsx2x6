@@ -1537,6 +1537,21 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 			header += "precision highp float;\n";
 		header += "precision highp int;\n";
 		header += "precision highp sampler2D;\n";
+
+		// One-shot confirmation (re-logged whenever the setting toggles) so testers can
+		// verify the "Reduce Shader Precision" option actually reached shader compile —
+		// useful when the mediump texcoord shimmer is imperceptible (e.g. on a 480i CRT).
+		if (type == GL_FRAGMENT_SHADER)
+		{
+			static int s_logged_prec = -1;
+			const int prec = GSConfig.GLESReducedPrecision ? 1 : 0;
+			if (prec != s_logged_prec)
+			{
+				s_logged_prec = prec;
+				Console.WriteLnFmt("GS: GLES fragment shader float precision = {}",
+					prec ? "mediump (reduced)" : "highp (default)");
+			}
+		}
 		if (GLAD_GL_ES_VERSION_3_1)
 			header += "precision highp sampler2DMS;\n";
 		if (GLAD_GL_ES_VERSION_3_2)
