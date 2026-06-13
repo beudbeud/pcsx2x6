@@ -1851,8 +1851,27 @@ static bool recTranslateOp(u32 op)
 		case 0x10:
 			switch (rs)
 			{
-				case 0x00: // MFC0
-				case 0x04: // MTC0
+				case 0x00: // MFC0 — read a CP0 register into GPR[rt], sign-extended into
+					// the low doubleword (interpreter: GPR[rt].SD[0] = (s32)CP0.r[rd]).
+					// It's a pure memory read, so JIT it. Special-cased registers stay on
+					// the interpreter: 9 (Count, needs live cycle accounting), 24 (debug
+					// breakpoint regs — a no-op read), 25 (PERF, needs COP0_UpdatePCCR).
+					if (rd == 9 || rd == 24 || rd == 25)
+						return false;
+					if (rt != 0)
+					{
+						armAsm->Ldr(RSCRATCHADDR.W(), a64::MemOperand(RESTATEPTR, EE_CP0_R_OFFSET(rd)));
+						if (rd == 12) // Status: interpreter masks the readable bits
+						{
+							armAsm->Mov(a64::w9, 0xf0c79c1fu);
+							armAsm->And(RSCRATCHADDR.W(), RSCRATCHADDR.W(), a64::w9);
+						}
+						armAsm->Sxtw(RSCRATCHADDR, RSCRATCHADDR.W());
+						armAsm->Str(RSCRATCHADDR, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
+					}
+					return true;
+				case 0x04: // MTC0 — writes can have side effects (Status gates IRQs, etc.),
+					// so keep them on the interpreter.
 					if (rd == 9 || rd == 25)
 						return false; // Count / PERF need a live cpuRegs.cycle
 					recEmitInterpInline(op);
@@ -2327,7 +2346,7 @@ static bool recBranchIsUnconditional(u32 op)
 static u64 s_rec_exec_fallback[64] = {};
 static u64 s_rec_exec_cop2[64] = {};
 static u64 s_rec_exec_mmi[128] = {};  // MMI 128-bit SIMD sub-ops: key = group*32 + sa
-static u64 s_rec_exec_cop0[32] = {};  // COP0 fallbacks bucketed by CP0 register (rd)
+static u64 s_rec_exec_cop0[96] = {};  // COP0: MFC0 rd (0x00-1f) | MTC0 rd (0x20-3f) | C0 funct (0x40-5f)
 
 static void recCountFallback(u32 op)
 {
@@ -2351,8 +2370,14 @@ static void recCountFallback(u32 op)
 			default: break;
 		}
 	}
-	else if (primary == 0x10) // COP0 — bucket by CP0 register (catches MFC0 COUNT polling)
-		s_rec_exec_cop0[(op >> 11) & 0x1f]++;
+	else if (primary == 0x10) // COP0 — split by sub-op so reads (cheap to JIT) are
+	{                         // distinguished from writes / control ops (ERET/EI/DI).
+		const u32 cop0_rs = (op >> 21) & 0x1f;
+		const u32 cop0_rd = (op >> 11) & 0x1f;
+		if (cop0_rs == 0x00)      s_rec_exec_cop0[cop0_rd]++;              // MFC0 rd
+		else if (cop0_rs == 0x04) s_rec_exec_cop0[0x20 | cop0_rd]++;       // MTC0 rd
+		else                      s_rec_exec_cop0[0x40 | (op & 0x1f)]++;   // BC0/C0 by funct
+	}
 }
 
 // Called periodically from the libretro perf log: formats the top fallback buckets for the
@@ -2394,9 +2419,10 @@ void recPerfDumpExecFallbacks(char* out, size_t n)
 	top6(s_rec_exec_fallback, 64, primary_buf, sizeof(primary_buf));
 	top6(s_rec_exec_cop2, 64, cop2_buf, sizeof(cop2_buf));
 	top6(s_rec_exec_mmi, 128, mmi_buf, sizeof(mmi_buf));
-	top6(s_rec_exec_cop0, 32, cop0_buf, sizeof(cop0_buf));
-	// mmi key = group*32+sa (group 0=MMI0 1=MMI2 2=MMI1 3=MMI3); cop0 key = CP0 reg.
-	std::snprintf(out, n, "EE_FB: total=%llu | primary: %s | cop2: %s | mmi[g*32+sa]: %s | cop0[rd]: %s",
+	top6(s_rec_exec_cop0, 96, cop0_buf, sizeof(cop0_buf));
+	// mmi key = group*32+sa (group 0=MMI0 1=MMI2 2=MMI1 3=MMI3);
+	// cop0 key = MFC0 rd (<0x20) | MTC0 rd (0x20-3f) | C0/BC0 funct (>=0x40).
+	std::snprintf(out, n, "EE_FB: total=%llu | primary: %s | cop2: %s | mmi[g*32+sa]: %s | cop0[mfc/mtc/c0]: %s",
 		static_cast<unsigned long long>(total), primary_buf, cop2_buf, mmi_buf, cop0_buf);
 
 	std::memset(s_rec_exec_fallback, 0, sizeof(s_rec_exec_fallback));
