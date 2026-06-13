@@ -73,9 +73,12 @@ console.log(embed);
 // Get all webhooks, simple comma-sep string
 const webhookUrls = process.env.DISCORD_BUILD_WEBHOOK.split(",");
 
+const ROLE_ID = "1513000483583824032"; // PCSX2x6 @follower role
+
 for (const url of webhookUrls) {
   const webhookClient = new WebhookClient({ url: url });
   await webhookClient.send({
+    content: `<@&${ROLE_ID}>`,
     embeds: [embed],
   });
 }
