@@ -810,6 +810,7 @@ struct Pcsx2Config
 					UserHacks_EstimateTextureRegion : 1,
 					UserHacks_DrawBuffering : 1,
 					FXAA : 1,
+					GLESReducedPrecision : 1, // GLES (V3D/RPi5): mediump fragment float for speed
 					ShadeBoost : 1,
 					DumpGSData : 1,
 					SaveRT : 1,
