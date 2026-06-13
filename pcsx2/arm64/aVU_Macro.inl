@@ -73,6 +73,7 @@ static constexpr int MVU_MODE_NOFLAG = 0x00;
 static constexpr int MVU_MODE_FMAC   = 0x10;
 static constexpr int MVU_MODE_CLIP   = 0x08;
 static constexpr int MVU_MODE_QDIV   = 0x12; // Status (0x10) + writes Q (0x02): DIV/SQRT/RSQRT
+static constexpr int MVU_MODE_QFMAC  = 0x11; // Status (0x10) + reads Q (0x01): ADDq/MULq/MADDq/...
 
 // Repoint x19 (RESTATEPTR -> RVUSTATE) to &vuRegs[0] and prime the microVU state
 // for a single macro op. `mode` selects which flag plumbing to emit (see bits above).
@@ -117,6 +118,15 @@ static void mVUsetupMacroOp(u32 code, int mode)
 	// Point RVUSTATE (x19) at &vuRegs[0] for the macro op. The EE rec's
 	// RESTATEPTR(&cpuRegs) is restored in mVUendMacroOp.
 	armMoveAddressToReg(RVUSTATE, &::vuRegs[0]);
+
+	if (mode & 0x01)
+	{
+		// Q-form FMAC (ADDq/MULq/...) reads the Q register: load vuRegs[0].VI[REG_Q]
+		// into mVU_xmmPQ lane 0 (the lane getQreg(readQ=0) broadcasts from). Ldr S
+		// zero-extends [127:32], matching x86 setupMacroOp's xMOVSSZX(xmmPQ, VI[REG_Q]).
+		armMoveAddressToReg(RSCRATCHADDR, &::vuRegs[0].VI[REG_Q].UL);
+		armAsm->Ldr(mVU_xmmPQ.S(), a64::MemOperand(RSCRATCHADDR));
+	}
 
 	if (mode & 0x10)
 	{
@@ -185,6 +195,7 @@ static void mVUendMacroOp(u32 code, int mode)
 #define MVU_MACRO_NOFLAG(name, emitter) MVU_MACRO_OP(name, emitter, MVU_MODE_NOFLAG)
 #define MVU_MACRO_CLIP(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_CLIP)
 #define MVU_MACRO_QDIV(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_QDIV)
+#define MVU_MACRO_QFMAC(name, emitter)  MVU_MACRO_OP(name, emitter, MVU_MODE_QFMAC)
 
 } // anonymous namespace
 
@@ -317,10 +328,26 @@ MVU_MACRO_QDIV(VDIV,   mVU_DIV)   // SPECIAL2
 MVU_MACRO_QDIV(VSQRT,  mVU_SQRT)  // SPECIAL2
 MVU_MACRO_QDIV(VRSQRT, mVU_RSQRT) // SPECIAL2
 
+// --- mode 0x11 (Status + reads Q) ----------------------------------------------
+// Q-form FMAC: the broadcast operand is the Q register (the result of a prior DIV).
+// The driver loads VI[REG_Q] into mVU_xmmPQ lane 0; the emitters read it via
+// getQreg(readQ=0). No Q write-back (they only read Q).
+MVU_MACRO_QFMAC(VADDq,  mVU_ADDq)   // SPECIAL1
+MVU_MACRO_QFMAC(VSUBq,  mVU_SUBq)
+MVU_MACRO_QFMAC(VMULq,  mVU_MULq)
+MVU_MACRO_QFMAC(VMADDq, mVU_MADDq)
+MVU_MACRO_QFMAC(VMSUBq, mVU_MSUBq)
+MVU_MACRO_QFMAC(VADDAq,  mVU_ADDAq)  // SPECIAL2 (accumulator)
+MVU_MACRO_QFMAC(VSUBAq,  mVU_SUBAq)
+MVU_MACRO_QFMAC(VMULAq,  mVU_MULAq)
+MVU_MACRO_QFMAC(VMADDAq, mVU_MADDAq)
+MVU_MACRO_QFMAC(VMSUBAq, mVU_MSUBAq)
+
 #undef MVU_MACRO_FMAC
 #undef MVU_MACRO_NOFLAG
 #undef MVU_MACRO_CLIP
 #undef MVU_MACRO_QDIV
+#undef MVU_MACRO_QFMAC
 #undef MVU_MACRO_OP
 
 // EE-rec dispatch: route the SPECIAL1/SPECIAL2 funct of a COP2 op to one of the
@@ -370,11 +397,16 @@ bool recCOP2_TryMacroFMAC(u32 code)
 			case 0x19: recCOP2_VMULAy(code);  return true;
 			case 0x1a: recCOP2_VMULAz(code);  return true;
 			case 0x1b: recCOP2_VMULAw(code);  return true;
+			case 0x1c: recCOP2_VMULAq(code);  return true; // MULAq (reads Q)
 			case 0x1d: recCOP2_VABS(code);    return true; // ABS (no flags)
 			case 0x1e: recCOP2_VMULAi(code);  return true; // MULAi
 			case 0x1f: recCOP2_VCLIP(code);   return true; // CLIP (writes clip flag)
+			case 0x20: recCOP2_VADDAq(code);  return true; // ADDAq (reads Q)
+			case 0x21: recCOP2_VMADDAq(code); return true; // MADDAq (reads Q)
 			case 0x22: recCOP2_VADDAi(code);  return true; // ADDAi
 			case 0x23: recCOP2_VMADDAi(code); return true; // MADDAi
+			case 0x24: recCOP2_VSUBAq(code);  return true; // SUBAq (reads Q)
+			case 0x25: recCOP2_VMSUBAq(code); return true; // MSUBAq (reads Q)
 			case 0x26: recCOP2_VSUBAi(code);  return true; // SUBAi
 			case 0x27: recCOP2_VMSUBAi(code); return true; // MSUBAi
 			case 0x28: recCOP2_VADDA(code);   return true; // ADDA
@@ -423,11 +455,16 @@ bool recCOP2_TryMacroFMAC(u32 code)
 		case 0x19: recCOP2_VMULy(code);  return true;
 		case 0x1a: recCOP2_VMULz(code);  return true;
 		case 0x1b: recCOP2_VMULw(code);  return true;
+		case 0x1c: recCOP2_VMULq(code);  return true; // MULq (reads Q)
 		case 0x1d: recCOP2_VMAXi(code);  return true; // MAXi (no flags)
 		case 0x1e: recCOP2_VMULi(code);  return true; // MULi
 		case 0x1f: recCOP2_VMINIi(code); return true; // MINIi (no flags)
+		case 0x20: recCOP2_VADDq(code);  return true; // ADDq (reads Q)
+		case 0x21: recCOP2_VMADDq(code); return true; // MADDq (reads Q)
 		case 0x22: recCOP2_VADDi(code);  return true; // ADDi
 		case 0x23: recCOP2_VMADDi(code); return true; // MADDi
+		case 0x24: recCOP2_VSUBq(code);  return true; // SUBq (reads Q)
+		case 0x25: recCOP2_VMSUBq(code); return true; // MSUBq (reads Q)
 		case 0x26: recCOP2_VSUBi(code);  return true; // SUBi
 		case 0x27: recCOP2_VMSUBi(code); return true; // MSUBi
 		case 0x28: recCOP2_VADD(code);   return true; // ADD
