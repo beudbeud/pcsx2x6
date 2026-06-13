@@ -84,6 +84,9 @@ static constexpr u32 EE_PC_OFFSET = static_cast<u32>(offsetof(cpuRegisters, pc))
 // Byte offset of cpuRegs.code (the current-instruction field the interpreter reads).
 static constexpr u32 EE_CODE_OFFSET = static_cast<u32>(offsetof(cpuRegisters, code));
 
+// Byte offset of cpuRegs.sa (MMI shift-amount register; QFSRV reads it as a byte offset).
+static constexpr u32 EE_SA_OFFSET = static_cast<u32>(offsetof(cpuRegisters, sa));
+
 void armEmitEffectiveAddr(const vixl::aarch64::Register& dst, u32 rs, s32 imm);
 void armEmitLoadGpr(u32 bits, bool sign, u32 rt, u32 rs, s32 imm);
 void armEmitStoreGpr(u32 bits, u32 rt, u32 rs, s32 imm);
@@ -536,3 +539,4 @@ void armEmitPEXT5(u32 rd, u32 rt);
 void armEmitPPAC5(u32 rd, u32 rt);
 bool armEmitPMFHL(u32 rd, u32 sa);
 void armEmitPMTHL(u32 rs, u32 sa);
+void armEmitQFSRV(u32 rd, u32 rs, u32 rt);
