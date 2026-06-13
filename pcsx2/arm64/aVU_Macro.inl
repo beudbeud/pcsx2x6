@@ -72,8 +72,12 @@ namespace {
 static constexpr int MVU_MACRO_FLAGS = 0x10;
 
 // Repoint x19 (RESTATEPTR -> RVUSTATE) to &vuRegs[0] and prime the microVU state
-// for a single macro op. Mirrors x86 setupMacroOp(0x10, ...).
-static void mVUsetupMacroOp(u32 code)
+// for a single macro op. Mirrors x86 setupMacroOp. `updateFlags` selects mode 0x10
+// (FMAC family: updates Status+MAC) vs mode 0x0 (ITOF/FTOI/ABS/MAX/MINI/MOVE/MR32:
+// no flag side effects). For the no-flag ops we skip the IRinfo flag setup AND the
+// status-flag denorm/norm entirely — they don't read or write the flag instances,
+// so leaving gprF0/the flag pipeline untouched matches the interpreter exactly.
+static void mVUsetupMacroOp(u32 code, bool updateFlags)
 {
 	microVU& mVU = microVU0;
 
@@ -85,34 +89,40 @@ static void mVUsetupMacroOp(u32 code)
 	mVU.code           = code;
 	std::memset(&mVU.prog.IRinfo.info[0], 0, sizeof(mVU.prog.IRinfo.info[0]));
 
-	// Status flag: write/lastWrite both reference flag instance 0 (gprF0); the
-	// family updates the non-sticky O/U/S/Z bits. (x86: mode & 0x10 branch.)
-	mVU.prog.IRinfo.info[0].sFlag.doFlag      = true;
-	mVU.prog.IRinfo.info[0].sFlag.doNonSticky = true;
-	mVU.prog.IRinfo.info[0].sFlag.write       = 0;
-	mVU.prog.IRinfo.info[0].sFlag.lastWrite   = 0;
+	if (updateFlags)
+	{
+		// Status flag: write/lastWrite both reference flag instance 0 (gprF0); the
+		// family updates the non-sticky O/U/S/Z bits. (x86: mode & 0x10 branch.)
+		mVU.prog.IRinfo.info[0].sFlag.doFlag      = true;
+		mVU.prog.IRinfo.info[0].sFlag.doNonSticky = true;
+		mVU.prog.IRinfo.info[0].sFlag.write       = 0;
+		mVU.prog.IRinfo.info[0].sFlag.lastWrite   = 0;
 
-	// MAC flag: write instance 0xff (>= 4) => mVUallocMFLAGb stores straight to
-	// vuRegs[0].VI[REG_MAC_FLAG] (the macroVU path), matching the interpreter.
-	mVU.prog.IRinfo.info[0].mFlag.doFlag = true;
-	mVU.prog.IRinfo.info[0].mFlag.write  = 0xff;
+		// MAC flag: write instance 0xff (>= 4) => mVUallocMFLAGb stores straight to
+		// vuRegs[0].VI[REG_MAC_FLAG] (the macroVU path), matching the interpreter.
+		mVU.prog.IRinfo.info[0].mFlag.doFlag = true;
+		mVU.prog.IRinfo.info[0].mFlag.write  = 0xff;
+	}
 
 	// Point RVUSTATE (x19) at &vuRegs[0] for the macro op. The EE rec's
 	// RESTATEPTR(&cpuRegs) is restored in mVUendMacroOp.
 	armMoveAddressToReg(RVUSTATE, &::vuRegs[0]);
 
-	// The interpreter keeps vuRegs[0].VI[REG_STATUS_FLAG] *normalized*. The mVU
-	// flag pipeline works on a *denormalized* status flag kept in gprF0. Load &
-	// denormalize it here (x86 setupMacroOp: mVUallocSFLAGd with the
-	// DENORMALIZE_STATUS path, which on this port is unconditional since we always
-	// arrive with a normalized in-memory flag).
-	mVUallocSFLAGd(&::vuRegs[0].VI[REG_STATUS_FLAG].UL, gprF0, gprT1, gprT2);
+	if (updateFlags)
+	{
+		// The interpreter keeps vuRegs[0].VI[REG_STATUS_FLAG] *normalized*. The mVU
+		// flag pipeline works on a *denormalized* status flag kept in gprF0. Load &
+		// denormalize it here (x86 setupMacroOp: mVUallocSFLAGd with the
+		// DENORMALIZE_STATUS path, which on this port is unconditional since we always
+		// arrive with a normalized in-memory flag).
+		mVUallocSFLAGd(&::vuRegs[0].VI[REG_STATUS_FLAG].UL, gprF0, gprT1, gprT2);
+	}
 }
 
 // Flush the macro op's results back to vuRegs[0] memory, re-normalize the Status
-// flag, and restore x19 = &cpuRegs for the rest of the EE block. Mirrors x86
-// endMacroOp(0x10, ...).
-static void mVUendMacroOp()
+// flag (FMAC family only), and restore x19 = &cpuRegs for the rest of the EE block.
+// Mirrors x86 endMacroOp.
+static void mVUendMacroOp(bool updateFlags)
 {
 	microVU& mVU = microVU0;
 
@@ -121,12 +131,15 @@ static void mVUendMacroOp()
 	// is correct — nothing must remain live across the macro-op boundary.)
 	mVU.regAlloc->flushAll();
 
-	// Re-normalize the Status flag from gprF0 back into vuRegs[0] memory, so the
-	// interpreter (and the next macro op's denormalize) see the canonical form.
-	// (x86 endMacroOp: mVUallocSFLAGc + store, the NORMALIZE_STATUS path.)
-	mVUallocSFLAGc(gprT1, gprF0, 0);
-	armMoveAddressToReg(RSCRATCHADDR, &::vuRegs[0].VI[REG_STATUS_FLAG].UL);
-	armAsm->Str(gprT1, a64::MemOperand(RSCRATCHADDR));
+	if (updateFlags)
+	{
+		// Re-normalize the Status flag from gprF0 back into vuRegs[0] memory, so the
+		// interpreter (and the next macro op's denormalize) see the canonical form.
+		// (x86 endMacroOp: mVUallocSFLAGc + store, the NORMALIZE_STATUS path.)
+		mVUallocSFLAGc(gprT1, gprF0, 0);
+		armMoveAddressToReg(RSCRATCHADDR, &::vuRegs[0].VI[REG_STATUS_FLAG].UL);
+		armAsm->Str(gprT1, a64::MemOperand(RSCRATCHADDR));
+	}
 
 	mVU.cop2 = 0;
 	mVU.regAlloc->reset();
@@ -137,16 +150,25 @@ static void mVUendMacroOp()
 	armMoveAddressToReg(RVUSTATE, &cpuRegs);
 }
 
-// Drive one FMACa-family macro op: setup, run the emitter's pass-2 (recompile)
-// against microVU0, tear down. The VADD/VSUB family is mode 0x10 (no analysis
-// pass, bit 0x04 clear), so we only run recPass == 1 — exactly like x86
-// REC_COP2_mVU0's `else` branch.
+// Drive one macro op: setup, run the emitter's pass-2 (recompile) against
+// microVU0, tear down. All the ops we JIT are mode 0x10 (FMAC) or mode 0x0
+// (no-flag) — neither sets bit 0x04, so we only run recPass == 1, exactly like
+// x86 REC_COP2_mVU0's `else` branch. FMAC ops update Status+MAC (updateFlags=true);
+// the no-flag ops (ITOF/FTOI/ABS/MAX/MINI/MOVE/MR32) pass false.
 #define MVU_MACRO_FMAC(name, emitter)                 \
 	void recCOP2_##name(u32 code)                     \
 	{                                                 \
-		mVUsetupMacroOp(code);                        \
+		mVUsetupMacroOp(code, /*updateFlags=*/true);  \
 		emitter(microVU0, /*recPass=*/1);             \
-		mVUendMacroOp();                              \
+		mVUendMacroOp(/*updateFlags=*/true);          \
+	}
+
+#define MVU_MACRO_NOFLAG(name, emitter)               \
+	void recCOP2_##name(u32 code)                     \
+	{                                                 \
+		mVUsetupMacroOp(code, /*updateFlags=*/false); \
+		emitter(microVU0, /*recPass=*/1);             \
+		mVUendMacroOp(/*updateFlags=*/false);         \
 	}
 
 } // anonymous namespace
@@ -233,11 +255,44 @@ MVU_MACRO_FMAC(VMSUBAw, mVU_MSUBAw)
 MVU_MACRO_FMAC(VOPMSUB, mVU_OPMSUB) // SPECIAL1
 MVU_MACRO_FMAC(VOPMULA, mVU_OPMULA) // SPECIAL2
 
+// --- mode 0x0 (no flag side effects) -------------------------------------------
+// Integer<->float conversions, the dominant remaining COP2 fallback in 3D scenes
+// (fixed-point geometry constantly converts via ITOF/FTOI).
+MVU_MACRO_NOFLAG(VITOF0,  mVU_ITOF0)   // SPECIAL2
+MVU_MACRO_NOFLAG(VITOF4,  mVU_ITOF4)
+MVU_MACRO_NOFLAG(VITOF12, mVU_ITOF12)
+MVU_MACRO_NOFLAG(VITOF15, mVU_ITOF15)
+MVU_MACRO_NOFLAG(VFTOI0,  mVU_FTOI0)
+MVU_MACRO_NOFLAG(VFTOI4,  mVU_FTOI4)
+MVU_MACRO_NOFLAG(VFTOI12, mVU_FTOI12)
+MVU_MACRO_NOFLAG(VFTOI15, mVU_FTOI15)
+MVU_MACRO_NOFLAG(VABS,    mVU_ABS)     // SPECIAL2
+
+// MAX / MINI (clamping) — no flags. SPECIAL1.
+MVU_MACRO_NOFLAG(VMAX,    mVU_MAX)
+MVU_MACRO_NOFLAG(VMAXi,   mVU_MAXi)
+MVU_MACRO_NOFLAG(VMAXx,   mVU_MAXx)
+MVU_MACRO_NOFLAG(VMAXy,   mVU_MAXy)
+MVU_MACRO_NOFLAG(VMAXz,   mVU_MAXz)
+MVU_MACRO_NOFLAG(VMAXw,   mVU_MAXw)
+MVU_MACRO_NOFLAG(VMINI,   mVU_MINI)
+MVU_MACRO_NOFLAG(VMINIi,  mVU_MINIi)
+MVU_MACRO_NOFLAG(VMINIx,  mVU_MINIx)
+MVU_MACRO_NOFLAG(VMINIy,  mVU_MINIy)
+MVU_MACRO_NOFLAG(VMINIz,  mVU_MINIz)
+MVU_MACRO_NOFLAG(VMINIw,  mVU_MINIw)
+
+// MOVE / MR32 (VF<->VF copy / rotate) — no flags. SPECIAL2 (Lower emitters).
+MVU_MACRO_NOFLAG(VMOVE,   mVU_MOVE)
+MVU_MACRO_NOFLAG(VMR32,   mVU_MR32)
+
 #undef MVU_MACRO_FMAC
+#undef MVU_MACRO_NOFLAG
 
 // EE-rec dispatch: route the SPECIAL1/SPECIAL2 funct of a COP2 op to one of the
 // JIT'd macro ops above. Returns true if the op was emitted natively, false if it
-// must stay on the interpreter fallback (every op not in the VADD/VSUB family).
+// must stay on the interpreter fallback (Q-forms, DIV/SQRT/RSQRT, CLIP, the integer
+// ALU ops, CALLMS, and anything else not in the FMAC / no-flag families below).
 //
 // COP2 op layout (matches x86 microVU_Macro.inl recCOP2SPECIAL1t/2t indexing):
 //   SPECIAL1 (rs==0x10..0x1f i.e. cpuRegs.code bit26-set group): index = funct(0..63)
@@ -269,10 +324,19 @@ bool recCOP2_TryMacroFMAC(u32 code)
 			case 0x0d: recCOP2_VMSUBAy(code); return true;
 			case 0x0e: recCOP2_VMSUBAz(code); return true;
 			case 0x0f: recCOP2_VMSUBAw(code); return true;
+			case 0x10: recCOP2_VITOF0(code);  return true; // ITOF (no flags)
+			case 0x11: recCOP2_VITOF4(code);  return true;
+			case 0x12: recCOP2_VITOF12(code); return true;
+			case 0x13: recCOP2_VITOF15(code); return true;
+			case 0x14: recCOP2_VFTOI0(code);  return true; // FTOI (no flags)
+			case 0x15: recCOP2_VFTOI4(code);  return true;
+			case 0x16: recCOP2_VFTOI12(code); return true;
+			case 0x17: recCOP2_VFTOI15(code); return true;
 			case 0x18: recCOP2_VMULAx(code);  return true;
 			case 0x19: recCOP2_VMULAy(code);  return true;
 			case 0x1a: recCOP2_VMULAz(code);  return true;
 			case 0x1b: recCOP2_VMULAw(code);  return true;
+			case 0x1d: recCOP2_VABS(code);    return true; // ABS (no flags)
 			case 0x1e: recCOP2_VMULAi(code);  return true; // MULAi
 			case 0x22: recCOP2_VADDAi(code);  return true; // ADDAi
 			case 0x23: recCOP2_VMADDAi(code); return true; // MADDAi
@@ -284,6 +348,8 @@ bool recCOP2_TryMacroFMAC(u32 code)
 			case 0x2c: recCOP2_VSUBA(code);   return true; // SUBA
 			case 0x2d: recCOP2_VMSUBA(code);  return true; // MSUBA
 			case 0x2e: recCOP2_VOPMULA(code); return true; // OPMULA
+			case 0x30: recCOP2_VMOVE(code);   return true; // MOVE (no flags)
+			case 0x31: recCOP2_VMR32(code);   return true; // MR32 (no flags)
 			default: return false;
 		}
 	}
@@ -307,11 +373,21 @@ bool recCOP2_TryMacroFMAC(u32 code)
 		case 0x0d: recCOP2_VMSUBy(code); return true;
 		case 0x0e: recCOP2_VMSUBz(code); return true;
 		case 0x0f: recCOP2_VMSUBw(code); return true;
+		case 0x10: recCOP2_VMAXx(code);  return true; // MAX (no flags)
+		case 0x11: recCOP2_VMAXy(code);  return true;
+		case 0x12: recCOP2_VMAXz(code);  return true;
+		case 0x13: recCOP2_VMAXw(code);  return true;
+		case 0x14: recCOP2_VMINIx(code); return true; // MINI (no flags)
+		case 0x15: recCOP2_VMINIy(code); return true;
+		case 0x16: recCOP2_VMINIz(code); return true;
+		case 0x17: recCOP2_VMINIw(code); return true;
 		case 0x18: recCOP2_VMULx(code);  return true;
 		case 0x19: recCOP2_VMULy(code);  return true;
 		case 0x1a: recCOP2_VMULz(code);  return true;
 		case 0x1b: recCOP2_VMULw(code);  return true;
+		case 0x1d: recCOP2_VMAXi(code);  return true; // MAXi (no flags)
 		case 0x1e: recCOP2_VMULi(code);  return true; // MULi
+		case 0x1f: recCOP2_VMINIi(code); return true; // MINIi (no flags)
 		case 0x22: recCOP2_VADDi(code);  return true; // ADDi
 		case 0x23: recCOP2_VMADDi(code); return true; // MADDi
 		case 0x26: recCOP2_VSUBi(code);  return true; // SUBi
@@ -319,9 +395,11 @@ bool recCOP2_TryMacroFMAC(u32 code)
 		case 0x28: recCOP2_VADD(code);   return true; // ADD
 		case 0x29: recCOP2_VMADD(code);  return true; // MADD
 		case 0x2a: recCOP2_VMUL(code);   return true; // MUL
+		case 0x2b: recCOP2_VMAX(code);   return true; // MAX (no flags)
 		case 0x2c: recCOP2_VSUB(code);   return true; // SUB
 		case 0x2d: recCOP2_VMSUB(code);  return true; // MSUB
 		case 0x2e: recCOP2_VOPMSUB(code);return true; // OPMSUB
+		case 0x2f: recCOP2_VMINI(code);  return true; // MINI (no flags)
 		default: return false;
 	}
 }
