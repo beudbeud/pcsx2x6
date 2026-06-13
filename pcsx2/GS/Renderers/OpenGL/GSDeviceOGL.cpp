@@ -1562,6 +1562,13 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 
 		// Signal shaders that they are compiled for GLES (e.g. to skip built-in redeclarations).
 		header += "#define GLES 1\n";
+
+		// No EXT_clip_control (e.g. V3D/RPi5 Mesa): clip-space depth stays [-1,1]
+		// instead of [0,1], so the TFX vertex shader must remap its [0,1] z to the
+		// full [-1,1] range — otherwise depth compresses into [0.5,1] and coplanar
+		// surfaces Z-fight (eyes / shirt layers / alpha foliage drop out).
+		if (!GLAD_GL_EXT_clip_control)
+			header += "#define GLES_NO_CLIP_CONTROL 1\n";
 	}
 	else if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
 	{
