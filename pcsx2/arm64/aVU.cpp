@@ -1549,6 +1549,12 @@ static void  mVUcleanUpVU1() { mVUcleanUp<1>(); }
 // This replaces the former mVUblockFetch/mVUentryGet pxFailRel stubs.
 #include "arm64/aVU_Compile.inl"
 
+// COP2 macro-mode driver (Phase 7.9, STEP 1) — the EE/R5900-thread VU0 macro ops.
+// Included last so the mVU_ADD/mVU_SUB Upper emitters, the regAlloc, and the flag
+// allocators it drives are all already defined. Provides recCOP2_TryMacroVADDSUB,
+// which the EE recompiler (aR5900.cpp) calls to route the VADD/VSUB family to JIT.
+#include "arm64/aVU_Macro.inl"
+
 //------------------------------------------------------------------
 // Build-time validation
 //------------------------------------------------------------------

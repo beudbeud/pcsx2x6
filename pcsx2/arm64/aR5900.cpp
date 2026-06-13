@@ -400,6 +400,14 @@ enum : u32
 static void recEmitInterpInline(u32 op);
 static bool recTranslateOp(u32 op);
 
+// COP2 VU0 macro-mode JIT (Phase 7.9, STEP 1; defined in pcsx2/arm64/aVU_Macro.inl).
+// Routes ONLY the VADD/VSUB arithmetic family to the reused microVU0 op emitters;
+// returns true if the op was emitted natively, false to keep the interpreter
+// fallback. Repoints RVUSTATE(x19)=&vuRegs[0] for the macro op and restores
+// RESTATEPTR(x19)=&cpuRegs afterwards (safe: the EE GPR cache is already flushed +
+// killed before recTranslateOp runs — see recTranslateOpOptimized).
+extern bool recCOP2_TryMacroVADDSUB(u32 code);
+
 struct RecGprConstState
 {
 	bool known[32] = {};
@@ -1878,6 +1886,15 @@ static bool recTranslateOp(u32 op)
 		case 0x12:
 			if (rs == 0x08)
 				return false; // BC2F/BC2T/BC2FL/BC2TL — single-step (writes PC)
+			// STEP 1: JIT the VADD/VSUB float family via reused microVU0 emitters
+			// (96-98% of EE fallbacks are COP2 on 3D titles). The SPECIAL1/SPECIAL2
+			// groups carry the VU op in `funct`; recCOP2_TryMacroVADDSUB returns true
+			// only for the ported family and emits it natively. Everything else
+			// (MUL/MADD/MAX/MINI/CFC2/transfers/…) keeps the unchanged interpreter
+			// fallback below — zero regression on unported ops. rs >= 0x10 is the
+			// SPECIAL group; rs < 0x10 (QMFC2/CFC2/QMTC2/CTC2) is never in the family.
+			if (rs >= 0x10 && recCOP2_TryMacroVADDSUB(op))
+				return true;
 			recEmitInterpInline(op);
 			return true;
 
