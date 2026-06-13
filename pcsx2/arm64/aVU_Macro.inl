@@ -72,6 +72,7 @@ namespace {
 static constexpr int MVU_MODE_NOFLAG = 0x00;
 static constexpr int MVU_MODE_FMAC   = 0x10;
 static constexpr int MVU_MODE_CLIP   = 0x08;
+static constexpr int MVU_MODE_QDIV   = 0x12; // Status (0x10) + writes Q (0x02): DIV/SQRT/RSQRT
 
 // Repoint x19 (RESTATEPTR -> RVUSTATE) to &vuRegs[0] and prime the microVU state
 // for a single macro op. `mode` selects which flag plumbing to emit (see bits above).
@@ -140,6 +141,16 @@ static void mVUendMacroOp(u32 code, int mode)
 	// is correct — nothing must remain live across the macro-op boundary.)
 	mVU.regAlloc->flushAll();
 
+	if (mode & 0x02)
+	{
+		// DIV/SQRT/RSQRT wrote the result into Q-lane 0 of mVU_xmmPQ (writeQreg with
+		// instance 0). Store that lane back to vuRegs[0].VI[REG_Q] (x86 endMacroOp:
+		// xMOVSS(ptr32[&vu0Regs.VI[REG_Q].UL], xmmPQ)). The div-by-zero/invalid flags
+		// were already merged into gprF0 by the emitter's own `if (mVU.cop2)` branch.
+		armMoveAddressToReg(RSCRATCHADDR, &::vuRegs[0].VI[REG_Q].UL);
+		armAsm->Str(mVU_xmmPQ.S(), a64::MemOperand(RSCRATCHADDR));
+	}
+
 	if (mode & 0x10)
 	{
 		// Re-normalize the Status flag from gprF0 back into vuRegs[0] memory, so the
@@ -173,6 +184,7 @@ static void mVUendMacroOp(u32 code, int mode)
 #define MVU_MACRO_FMAC(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_FMAC)
 #define MVU_MACRO_NOFLAG(name, emitter) MVU_MACRO_OP(name, emitter, MVU_MODE_NOFLAG)
 #define MVU_MACRO_CLIP(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_CLIP)
+#define MVU_MACRO_QDIV(name, emitter)   MVU_MACRO_OP(name, emitter, MVU_MODE_QDIV)
 
 } // anonymous namespace
 
@@ -295,9 +307,20 @@ MVU_MACRO_NOFLAG(VMR32,   mVU_MR32)
 // straight to vuRegs[0].VI[REG_CLIP_FLAG] (macroVU path), so no teardown is needed.
 MVU_MACRO_CLIP(VCLIP, mVU_CLIP) // SPECIAL2
 
+// --- mode 0x12 (Status + writes Q) ---------------------------------------------
+// DIV/SQRT/RSQRT: perspective divide + vector normalisation — heavy in 3D. The
+// result lands in Q (mVU_xmmPQ lane 0, stored to VI[REG_Q] by the driver), and the
+// div-by-zero/invalid status bits are merged into gprF0 by the emitters' own
+// `if (mVU.cop2)` branch (cop2 is set by the driver). No analysis pass needed:
+// the zeroed IRinfo gives writeQ instance 0 (lane 0), which the driver stores.
+MVU_MACRO_QDIV(VDIV,   mVU_DIV)   // SPECIAL2
+MVU_MACRO_QDIV(VSQRT,  mVU_SQRT)  // SPECIAL2
+MVU_MACRO_QDIV(VRSQRT, mVU_RSQRT) // SPECIAL2
+
 #undef MVU_MACRO_FMAC
 #undef MVU_MACRO_NOFLAG
 #undef MVU_MACRO_CLIP
+#undef MVU_MACRO_QDIV
 #undef MVU_MACRO_OP
 
 // EE-rec dispatch: route the SPECIAL1/SPECIAL2 funct of a COP2 op to one of the
@@ -362,6 +385,9 @@ bool recCOP2_TryMacroFMAC(u32 code)
 			case 0x2e: recCOP2_VOPMULA(code); return true; // OPMULA
 			case 0x30: recCOP2_VMOVE(code);   return true; // MOVE (no flags)
 			case 0x31: recCOP2_VMR32(code);   return true; // MR32 (no flags)
+			case 0x38: recCOP2_VDIV(code);    return true; // DIV (Q + status)
+			case 0x39: recCOP2_VSQRT(code);   return true; // SQRT (Q + status)
+			case 0x3a: recCOP2_VRSQRT(code);  return true; // RSQRT (Q + status)
 			default: return false;
 		}
 	}
