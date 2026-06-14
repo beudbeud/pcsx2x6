@@ -29,7 +29,7 @@ assembles that structure for you:
 Then launch it:
 
 ```bash
-retroarch -L pcsx2_libretro.so "~/roms/namco2x6/Soul Calibur 3.acgame"
+retroarch -L pcsx2x6_libretro.so "~/roms/namco2x6/Soul Calibur 3.acgame"
 ```
 
 ## Options

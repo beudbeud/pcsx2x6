@@ -2,7 +2,7 @@ add_library(pcsx2_libretro MODULE)
 
 set_target_properties(pcsx2_libretro PROPERTIES
 	PREFIX ""
-	OUTPUT_NAME "pcsx2_libretro"
+	OUTPUT_NAME "pcsx2x6_libretro"
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 	LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

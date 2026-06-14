@@ -238,4 +238,4 @@ sed 's/^/    | /' "$manifest"
 echo "  $gamedir/"
 ls -1 "$gamedir" | sed 's/^/    /'
 echo ""
-echo "à lancer avec : retroarch -L pcsx2_libretro.so \"$manifest\""
+echo "à lancer avec : retroarch -L pcsx2x6_libretro.so \"$manifest\""

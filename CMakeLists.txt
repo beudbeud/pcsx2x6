@@ -71,7 +71,7 @@ else()
 endif()
 
 # libretro core
-option(BUILD_LIBRETRO_CORE "Build the libretro core (pcsx2_libretro.so)" OFF)
+option(BUILD_LIBRETRO_CORE "Build the libretro core (pcsx2x6_libretro.so)" OFF)
 if(BUILD_LIBRETRO_CORE)
 	add_subdirectory(pcsx2-libretro)
 endif()
