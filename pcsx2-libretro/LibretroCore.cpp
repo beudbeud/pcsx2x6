@@ -493,6 +493,13 @@ void LibretroHost::RegisterCoreOptions()
 			{{"0", "Disabled (Default)"}, {"1", "1"}, {"2", "2"}, {"3", "3"}, {"4", "4"}, {"5", "5"},
 				{"6", "6"}, {"8", "8"}, {"10", "10"}, {nullptr, nullptr}},
 			"0"},
+		{"pcsx2_disable_framebuffer_fetch", "Disable Framebuffer Fetch", nullptr,
+			"Diagnostic: disables shader framebuffer-fetch software blending and uses the RT-copy path "
+			"instead. On buggy tiled drivers (e.g. RPi5/V3D) fbfetch can corrupt alpha blending "
+			"(opaque shadows, texture flicker). Hardware (OpenGL) renderer only.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"enabled", "Enabled (use RT copy)"}, {nullptr, nullptr}},
+			"disabled"},
 		{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr, nullptr}}, nullptr},
 	};
 
@@ -614,6 +621,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		std::strcmp(get_option("pcsx2_fxaa", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/GS", "GLESReducedPrecision",
 		std::strcmp(get_option("pcsx2_reduce_shader_precision", "disabled"), "enabled") == 0);
+	s_settings_interface.SetBoolValue("EmuCore/GS", "DisableFramebufferFetch",
+		std::strcmp(get_option("pcsx2_disable_framebuffer_fetch", "disabled"), "enabled") == 0);
 
 	const bool widescreen = std::strcmp(get_option("pcsx2_widescreen_patches", "disabled"), "enabled") == 0;
 	s_settings_interface.SetBoolValue("EmuCore", "EnableWideScreenPatches", widescreen);
