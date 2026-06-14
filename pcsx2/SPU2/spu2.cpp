@@ -158,12 +158,13 @@ void SPU2::UpdateSampleRate()
 
 u32 SPU2::GetOutputVolume()
 {
-	return s_output_stream->GetOutputVolume();
+	return s_output_stream ? s_output_stream->GetOutputVolume() : 0;
 }
 
 void SPU2::SetOutputVolume(u32 volume)
 {
-	s_output_stream->SetOutputVolume(volume);
+	if (s_output_stream)
+		s_output_stream->SetOutputVolume(volume);
 }
 
 float SPU2::GetNominalRate()
