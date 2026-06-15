@@ -1367,7 +1367,9 @@ static void UpdateInput()
 	if (!s_input_poll_cb || !s_input_state_cb)
 		return;
 
-	if (s_frame_width == 0)
+	// Gate input on the first produced frame. In dmabuf HW-render mode the readback never
+	// runs (so s_frame_width stays 0) — use the HW-render-active flag as the readiness signal.
+	if (s_frame_width == 0 && !s_hw_render_active.load(std::memory_order_acquire))
 		return;
 
 	s_input_poll_cb();
