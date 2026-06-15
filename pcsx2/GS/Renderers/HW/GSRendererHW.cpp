@@ -5580,20 +5580,6 @@ void GSRendererHW::EmulateZbuffer(const GSTextureCache::Target* ds)
 	const u32 max_z = 0xFFFFFFFF >> (GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].fmt * 8);
 	const bool large_z = static_cast<u32>(GSVector4i(m_vt.m_max.p).z) > max_z;
 
-	// One-shot: report the Z-buffer format actually used (decides reverse-Z worth on
-	// V3D/GLES, which has no EXT_clip_control). fmt 0=Z32 1=Z24 2=Z16.
-	{
-		static int s_logged_zfmt = -1;
-		const int zfmt = GSLocalMemory::m_psm[m_cached_ctx.ZBUF.PSM].fmt;
-		if (zfmt != s_logged_zfmt && m_cached_ctx.DepthWrite())
-		{
-			s_logged_zfmt = zfmt;
-			Console.WriteLnFmt("GS: ZBUF.PSM=0x{:02x} fmt={} ({}), max_z=0x{:08x}",
-				static_cast<u32>(m_cached_ctx.ZBUF.PSM), zfmt,
-				zfmt == 0 ? "Z32" : (zfmt == 1 ? "Z24" : "Z16"), max_z);
-		}
-	}
-
 	// No interpolation for flat Z so we can make some optimizations.
 	const bool flat_z = m_vt.m_eq.z || m_vt.m_primclass == GS_POINT_CLASS || m_vt.m_primclass == GS_SPRITE_CLASS;
 

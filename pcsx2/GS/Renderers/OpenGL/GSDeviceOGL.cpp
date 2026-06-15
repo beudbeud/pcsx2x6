@@ -306,23 +306,6 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		glEnable(GL_DEBUG_OUTPUT);
 		//glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_ARB);
 	}
-	// DIAGNOSTIC (V3D/RPi5 texture flicker): force the driver's own debug output on GLES so
-	// the V3D driver reports incomplete textures / sync stalls / format fallbacks during the
-	// Tekken 4 flicker. Uses the KHR entry points (the non-KHR ones are NULL on a GLES context)
-	// and runs SYNCHRONOUS so each message is attributed to the draw that triggered it.
-	// REMOVE at final cleanup (diagnostic-only; synchronous debug output hurts perf).
-	else if (m_is_gles && GLAD_GL_KHR_debug)
-	{
-		glDebugMessageCallbackKHR(DebugMessageCallback, nullptr);
-		glDebugMessageControlKHR(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, true);
-		glEnable(GL_DEBUG_OUTPUT);
-		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS_ARB);
-		Console.WriteLn("GLES: V3D debug output ENABLED (diagnostic) — watching for texture/sync warnings.");
-	}
-	else if (m_is_gles)
-	{
-		Console.Warning("GLES: GL_KHR_debug not available — cannot capture driver debug output.");
-	}
 
 	// WARNING it must be done after the control setup (at least on MESA)
 	GL_PUSH("GSDeviceOGL::Create");
@@ -963,12 +946,6 @@ bool GSDeviceOGL::CheckFeatures()
 			Console.WriteLn("GLES: GL_EXT_clip_control available — depth precision OK.");
 		else
 			Console.Warning("GLES: GL_EXT_clip_control not available — depth precision reduced.");
-
-		// Diagnostic: is dual-source blending (EXT_blend_func_extended) exposed?
-		// On v3d the Mesa release notes list ARB_blend_func_extended only from 25.2.0;
-		// this confirms what the actual driver reports at runtime.
-		Console.WriteLnFmt("GLES: GL_EXT_blend_func_extended (dual-source) = {}",
-			GLAD_GL_EXT_blend_func_extended ? "available" : "NOT available");
 	}
 	
 	m_features.aa1 = GSConfig.HWAA1 && m_features.vs_expand && m_features.feedback_loops();
@@ -3438,27 +3415,8 @@ void GSDeviceOGL::DebugMessageCallback(GLenum gl_source, GLenum gl_type, GLuint 
 		default                                  : source = "???"; break;
 	}
 
-	// DIAGNOSTIC (V3D texture flicker): print ALL severities including NOTIFICATION so V3D
-	// fallback/texture messages aren't filtered out. Skip our own GL_PUSH markers, and dedup
-	// consecutive identical messages so a per-frame warning doesn't flood the synchronous log.
-	// REVERT to the notification filter at cleanup.
-	if (gl_source != GL_DEBUG_SOURCE_APPLICATION)
-	{
-		static std::string s_last_msg;
-		static int s_repeat = 0;
-		if (message == s_last_msg)
-		{
-			if ((++s_repeat % 600) != 0) // ~once per 10s at 60fps
-				return;
-			Console.Error("T:%s\tID:%d\tS:%s\t=> %s (x%d)", type.c_str(), GSState::s_n, severity.c_str(), message.c_str(), s_repeat);
-		}
-		else
-		{
-			s_last_msg = message;
-			s_repeat = 0;
-			Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), GSState::s_n, severity.c_str(), message.c_str());
-		}
-	}
+	if (gl_severity != GL_DEBUG_SEVERITY_NOTIFICATION)
+		Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), GSState::s_n, severity.c_str(), message.c_str());
 }
 
 #ifdef ENABLE_OGL_DEBUG
