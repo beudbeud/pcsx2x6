@@ -49,11 +49,17 @@ static GSTexture* s_fb_readback_rt = nullptr;
 static std::unique_ptr<GSDownloadTexture> s_fb_readback_dl[2];
 static bool s_fb_readback_pending[2] = {};
 static u32 s_fb_readback_slot = 0;
+static std::atomic_bool s_fb_dmabuf_export{false};
 
 void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height)
 {
 	s_fb_readback_cb = callback;
 	s_fb_readback_size.store((static_cast<u64>(width) << 32) | height, std::memory_order_release);
+}
+
+void GSSetFramebufferDMABUFExport(bool enable)
+{
+	s_fb_dmabuf_export.store(enable, std::memory_order_release);
 }
 
 void GSReleaseFramebufferReadbackResources()
@@ -107,6 +113,26 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 	g_gs_device->ClearRenderTarget(s_fb_readback_rt, 0);
 	g_gs_device->StretchRect(current, src_uv, s_fb_readback_rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
 		BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
+
+	// Zero-copy HW render D1: prove the composited RT can be exported as a dmabuf on this
+	// GPU (one-shot log; readback present continues below so the screen still works). D2 will
+	// hand the fd to the libretro frontend for import+blit instead of the readback.
+	if (s_fb_dmabuf_export.load(std::memory_order_acquire))
+	{
+		static bool s_logged_dmabuf = false;
+		if (!s_logged_dmabuf)
+		{
+			s_logged_dmabuf = true;
+			int fd = -1;
+			u32 stride = 0, offset = 0, fourcc = 0;
+			u64 modifier = 0;
+			if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, &fd, &stride, &offset, &fourcc, &modifier))
+				Console.WriteLnFmt("dmabuf export OK: {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
+					width, height, fd, stride, offset, fourcc, modifier);
+			else
+				Console.Warning("dmabuf export FAILED on the composited RT.");
+		}
+	}
 
 	const GSVector4i rc(0, 0, static_cast<s32>(width), static_cast<s32>(height));
 	const u32 idx = s_fb_readback_slot;

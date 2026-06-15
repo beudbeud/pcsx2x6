@@ -28,6 +28,8 @@ public:
 	bool SetSwapInterval(s32 interval) override;
 	virtual std::unique_ptr<GLContext> CreateSharedContext(const WindowInfo& wi, Error* error) override;
 
+	bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) override;
+
 protected:
 	virtual EGLDisplay GetPlatformDisplay(Error* error);
 	virtual EGLSurface CreatePlatformSurface(EGLConfig config, void* win, Error* error);

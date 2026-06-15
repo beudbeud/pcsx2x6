@@ -1637,6 +1637,11 @@ public:
 
 	virtual std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) = 0;
 
+	// Zero-copy HW render (OpenGL only): export a render target as a single-plane dmabuf for
+	// the libretro frontend context to import. Out-params avoid coupling this common header to
+	// the GL backend. Returns false if unsupported (all non-OGL backends).
+	virtual bool ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) { return false; }
+
 	virtual void CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, u32 destX, u32 destY) = 0;
 
 	// StretchRect - all options

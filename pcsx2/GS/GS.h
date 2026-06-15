@@ -116,6 +116,10 @@ using GSFramebufferReadbackCallback = void (*)(const u32* pixels, u32 pitch_px, 
 void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height);
 void GSReleaseFramebufferReadbackResources();
 
+/// Zero-copy HW render (experimental): when enabled, the readback present additionally
+/// exports the composited frame RT as a dmabuf (probe/D1: logs success once). OpenGL only.
+void GSSetFramebufferDMABUFExport(bool enable);
+
 namespace Host
 {
 	/// Called when the GS is creating a render device.

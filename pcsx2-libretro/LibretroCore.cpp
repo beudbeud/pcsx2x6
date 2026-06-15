@@ -915,6 +915,10 @@ static void TryInitHWRender()
 		return;
 	}
 	INFO_LOG("HW render: GLES3 HW context requested (experimental, stage 1).");
+
+	// D1: have the GS export the composited frame RT as a dmabuf (one-shot log) to confirm
+	// export works on this GPU. Present is still the readback path until the D2 blit lands.
+	GSSetFramebufferDMABUFExport(true);
 }
 
 bool retro_load_game(const struct retro_game_info* game)

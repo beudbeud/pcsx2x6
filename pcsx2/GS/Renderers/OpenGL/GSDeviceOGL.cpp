@@ -1425,6 +1425,23 @@ std::unique_ptr<GSDownloadTexture> GSDeviceOGL::CreateDownloadTexture(u32 width,
 	return GSDownloadTextureOGL::Create(width, height, format);
 }
 
+bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier)
+{
+	if (!tex || !m_gl_context)
+		return false;
+
+	GLContext::DmaBufFrame frame;
+	if (!m_gl_context->ExportTextureDMABUF(static_cast<GSTextureOGL*>(tex)->GetID(), &frame))
+		return false;
+
+	*fd = frame.fd;
+	*stride = frame.stride;
+	*offset = frame.offset;
+	*fourcc = frame.fourcc;
+	*modifier = frame.modifier;
+	return true;
+}
+
 GLuint GSDeviceOGL::CreateSampler(PSSamplerSelector sel)
 {
 	GL_PUSH("Create Sampler");

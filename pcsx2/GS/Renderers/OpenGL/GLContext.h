@@ -25,6 +25,23 @@ public:
 		bool is_gles = false;
 	};
 
+	// Zero-copy HW render: a single-plane dmabuf exported from a GL texture, for the
+	// libretro frontend context to import. fd is owned by the caller (close it).
+	struct DmaBufFrame
+	{
+		int fd = -1;
+		u32 width = 0;
+		u32 height = 0;
+		u32 stride = 0;
+		u32 offset = 0;
+		u32 fourcc = 0;
+		u64 modifier = 0;
+	};
+
+	// Export a GL 2D texture as a dmabuf via EGL_MESA_image_dma_buf_export. Returns false
+	// if unsupported. Implemented by the EGL context; called on the GS thread (context current).
+	virtual bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) { return false; }
+
 	__fi const WindowInfo& GetWindowInfo() const { return m_wi; }
 
 	virtual bool IsGLES() const { return false; }

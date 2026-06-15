@@ -163,6 +163,47 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 	return false;
 }
 
+bool GLContextEGL::ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out)
+{
+	// Zero-copy HW render: wrap the GL texture in an EGLImage and export it as a dmabuf the
+	// libretro frontend context can import. Called on the GS thread (its context is current).
+	if (!GLAD_EGL_MESA_image_dma_buf_export)
+		return false;
+
+	const EGLImageKHR image = eglCreateImage(m_display, eglGetCurrentContext(), EGL_GL_TEXTURE_2D,
+		reinterpret_cast<EGLClientBuffer>(static_cast<uintptr_t>(texture_id)), nullptr);
+	if (image == EGL_NO_IMAGE)
+	{
+		Console.WarningFmt("dmabuf export: eglCreateImage failed (0x{:x})", static_cast<int>(eglGetError()));
+		return false;
+	}
+
+	int fourcc = 0, num_planes = 0;
+	EGLuint64KHR modifier = 0;
+	int fd = -1;
+	EGLint stride = 0, offset = 0;
+	const bool ok = eglExportDMABUFImageQueryMESA(m_display, image, &fourcc, &num_planes, &modifier) &&
+		num_planes == 1 && eglExportDMABUFImageMESA(m_display, image, &fd, &stride, &offset) && fd >= 0;
+
+	eglDestroyImage(m_display, image); // the dmabuf fd keeps the underlying buffer alive
+
+	if (!ok)
+	{
+		Console.WarningFmt("dmabuf export: query/export failed (planes={}, err 0x{:x})", num_planes,
+			static_cast<int>(eglGetError()));
+		if (fd >= 0)
+			close(fd);
+		return false;
+	}
+
+	out->fd = fd;
+	out->stride = static_cast<u32>(stride);
+	out->offset = static_cast<u32>(offset);
+	out->fourcc = static_cast<u32>(fourcc);
+	out->modifier = static_cast<u64>(modifier);
+	return true;
+}
+
 EGLDisplay GLContextEGL::GetPlatformDisplay(Error* error)
 {
 	// For surfaceless contexts (libretro/headless), try GBM first.
