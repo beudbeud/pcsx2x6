@@ -914,6 +914,13 @@ static void HWRenderContextReset()
 {
 	INFO_LOG("HW render: context reset — libretro GLES3 context is current on the frontend thread.");
 	s_hw_render_active.store(true, std::memory_order_release);
+	// The GL context was (re)created: our blitter objects + imported texture are gone. Rebuild
+	// lazily, and ask the GS to re-export so we get a fresh dmabuf fd to import into the new ctx.
+	s_blit_gl_loaded = false;
+	s_blit_prog = s_blit_vao = s_blit_tex = 0;
+	s_blit_image = EGL_NO_IMAGE_KHR;
+	s_blit_w = s_blit_h = 0;
+	GSForceDMABUFReexport();
 }
 
 static void HWRenderContextDestroy()
@@ -938,6 +945,16 @@ static void OnDMABUFFrame(int fd, u32 width, u32 height, u32 stride, u32 offset,
 	if (s_dmabuf.dirty && s_dmabuf.fd >= 0)
 		close(s_dmabuf.fd); // a previous fd never got imported
 	s_dmabuf = DmaBufDesc{fd, width, height, stride, offset, fourcc, modifier, true};
+}
+
+// One-shot-per-label GL error logger (drains the queue) to localise blit failures.
+static void HWGLCheck(const char* label)
+{
+	static int s_budget = 80; // cap total log lines
+	GLenum e;
+	while ((e = glGetError()) != GL_NO_ERROR)
+		if (s_budget-- > 0)
+			Console.WarningFmt("HW blit: GL error 0x{:x} at {}", static_cast<unsigned>(e), label);
 }
 
 static GLuint HWCompileShader(GLenum type, const char* src)
@@ -1058,6 +1075,7 @@ static bool HWImportDmaBuf(const DmaBufDesc& d)
 	}
 	glBindTexture(GL_TEXTURE_2D, s_blit_tex);
 	s_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, static_cast<GLeglImageOES>(s_blit_image));
+	HWGLCheck("EGLImageTargetTexture2DOES");
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1094,20 +1112,25 @@ static bool HWPresentDMABuf()
 	if (s_blit_image == EGL_NO_IMAGE_KHR || s_blit_w == 0)
 		return false;
 
+	while (glGetError() != GL_NO_ERROR) {} // drain pre-existing errors so checks below are ours
 	glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(s_hw_render.get_current_framebuffer()));
 	glViewport(0, 0, static_cast<GLsizei>(s_blit_w), static_cast<GLsizei>(s_blit_h));
 	glDisable(GL_BLEND);
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_SCISSOR_TEST);
 	glDisable(GL_CULL_FACE);
+	HWGLCheck("bind-fbo/state");
 	glUseProgram(s_blit_prog);
+	HWGLCheck("useProgram");
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, s_blit_tex);
 	const GLint loc = glGetUniformLocation(s_blit_prog, "u_tex");
 	if (loc >= 0)
 		glUniform1i(loc, 0);
+	HWGLCheck("bind-tex/uniform");
 	glBindVertexArray(s_blit_vao);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
+	HWGLCheck("drawArrays");
 	glBindVertexArray(0);
 	glBindTexture(GL_TEXTURE_2D, 0);
 

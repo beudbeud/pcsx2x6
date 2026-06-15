@@ -69,6 +69,11 @@ void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb)
 	s_fb_dmabuf_cb = cb;
 }
 
+void GSForceDMABUFReexport()
+{
+	s_fb_dmabuf_last_rt = nullptr;
+}
+
 void GSReleaseFramebufferReadbackResources()
 {
 	for (u32 i = 0; i < 2; i++)

@@ -125,6 +125,10 @@ void GSSetFramebufferDMABUFExport(bool enable);
 using GSFramebufferDMABUFCallback = void (*)(int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc, u64 modifier);
 void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb);
 
+/// Force the next frame to re-export + re-fire the dmabuf callback (e.g. after the frontend's
+/// GL context was recreated and the previous import is gone).
+void GSForceDMABUFReexport();
+
 namespace Host
 {
 	/// Called when the GS is creating a render device.
