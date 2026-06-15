@@ -167,21 +167,31 @@ bool GLContextEGL::ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out)
 {
 	// Zero-copy HW render: wrap the GL texture in an EGLImage and export it as a dmabuf the
 	// libretro frontend context can import. Called on the GS thread (its context is current).
-	// Use the KHR image entry points: V3D's eglGetProcAddress doesn't reliably return the
-	// EGL 1.5 *core* eglCreateImage (calling the null core pointer was the sig=11/pc=nil crash).
-	// Guard every entry point so a missing one logs instead of crashing.
-	if (!GLAD_EGL_KHR_image_base || !GLAD_EGL_MESA_image_dma_buf_export || !eglCreateImageKHR ||
-		!eglDestroyImageKHR || !eglExportDMABUFImageQueryMESA || !eglExportDMABUFImageMESA)
+	//
+	// glad loaded the GS EGL via dlsym on libEGL.so, which resolves CORE symbols but NOT the
+	// KHR/MESA extension entry points (on Mesa those are only reachable through
+	// eglGetProcAddress) — so glad's eglCreateImageKHR/etc pointers are null even though the
+	// extension flags are set. Load them ourselves via eglGetProcAddress (same pattern as the
+	// eglGetPlatformDisplayEXT lookup above). Cached: resolved once.
+	static const auto s_eglCreateImageKHR =
+		reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
+	static const auto s_eglDestroyImageKHR =
+		reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+	static const auto s_eglExportDMABUFImageQueryMESA =
+		reinterpret_cast<PFNEGLEXPORTDMABUFIMAGEQUERYMESAPROC>(eglGetProcAddress("eglExportDMABUFImageQueryMESA"));
+	static const auto s_eglExportDMABUFImageMESA =
+		reinterpret_cast<PFNEGLEXPORTDMABUFIMAGEMESAPROC>(eglGetProcAddress("eglExportDMABUFImageMESA"));
+
+	if (!s_eglCreateImageKHR || !s_eglDestroyImageKHR || !s_eglExportDMABUFImageQueryMESA ||
+		!s_eglExportDMABUFImageMESA)
 	{
-		Console.WarningFmt("dmabuf export: missing entry points (KHR_image={}, MESA_export={}, "
-			"createKHR={}, destroyKHR={}, queryMESA={}, exportMESA={}).",
-			static_cast<bool>(GLAD_EGL_KHR_image_base), static_cast<bool>(GLAD_EGL_MESA_image_dma_buf_export),
-			eglCreateImageKHR != nullptr, eglDestroyImageKHR != nullptr,
-			eglExportDMABUFImageQueryMESA != nullptr, eglExportDMABUFImageMESA != nullptr);
+		Console.WarningFmt("dmabuf export: eglGetProcAddress missing (create={}, destroy={}, query={}, export={}).",
+			s_eglCreateImageKHR != nullptr, s_eglDestroyImageKHR != nullptr,
+			s_eglExportDMABUFImageQueryMESA != nullptr, s_eglExportDMABUFImageMESA != nullptr);
 		return false;
 	}
 
-	const EGLImageKHR image = eglCreateImageKHR(m_display, eglGetCurrentContext(), EGL_GL_TEXTURE_2D_KHR,
+	const EGLImageKHR image = s_eglCreateImageKHR(m_display, eglGetCurrentContext(), EGL_GL_TEXTURE_2D_KHR,
 		reinterpret_cast<EGLClientBuffer>(static_cast<uintptr_t>(texture_id)), nullptr);
 	if (image == EGL_NO_IMAGE_KHR)
 	{
@@ -193,10 +203,10 @@ bool GLContextEGL::ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out)
 	EGLuint64KHR modifier = 0;
 	int fd = -1;
 	EGLint stride = 0, offset = 0;
-	const bool ok = eglExportDMABUFImageQueryMESA(m_display, image, &fourcc, &num_planes, &modifier) &&
-		num_planes == 1 && eglExportDMABUFImageMESA(m_display, image, &fd, &stride, &offset) && fd >= 0;
+	const bool ok = s_eglExportDMABUFImageQueryMESA(m_display, image, &fourcc, &num_planes, &modifier) &&
+		num_planes == 1 && s_eglExportDMABUFImageMESA(m_display, image, &fd, &stride, &offset) && fd >= 0;
 
-	eglDestroyImageKHR(m_display, image); // the dmabuf fd keeps the underlying buffer alive
+	s_eglDestroyImageKHR(m_display, image); // the dmabuf fd keeps the underlying buffer alive
 
 	if (!ok)
 	{
