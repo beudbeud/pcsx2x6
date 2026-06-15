@@ -16,10 +16,22 @@
 #include "GS/Renderers/OpenGL/GLContextEGL.h"
 #endif
 
+#include "GS/Renderers/OpenGL/GLContextLibretro.h"
+
 #include "common/Console.h"
 #include "common/Error.h"
 
 #include "glad/gl.h"
+
+// libretro HW render: frontend get_proc_address (set by the libretro core in context_reset).
+static GLContext::LibretroGetProcFn s_libretro_proc = nullptr;
+static bool s_libretro_is_gles = true;
+
+void GLContext::SetLibretroHWContext(LibretroGetProcFn proc, bool is_gles)
+{
+	s_libretro_proc = proc;
+	s_libretro_is_gles = is_gles;
+}
 
 GLContext::GLContext(const WindowInfo& wi)
 	: m_wi(wi)
@@ -47,16 +59,30 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
 
 	std::unique_ptr<GLContext> context;
 	Error local_error;
+
+	// libretro zero-copy HW render: wrap the frontend's HW context instead of creating a
+	// standalone one (avoids a second EGLDisplay, which conflicts with the frontend's KMS
+	// presentation on tiled drivers). The GLES/GL choice follows the negotiated HW context.
+	if (s_libretro_proc)
+	{
+		context = GLContextLibretro::Create(wi, s_libretro_proc, s_libretro_is_gles);
+		if (!context)
+		{
+			Error::SetStringView(error, "Failed to wrap the libretro HW context.");
+			return nullptr;
+		}
+	}
 #if defined(_WIN32)
-	context = GLContextWGL::Create(wi, vlist, error);
+	if (!context)
+		context = GLContextWGL::Create(wi, vlist, error);
 #else // Linux
 #if defined(X11_API)
-	if (wi.type == WindowInfo::Type::X11)
+	if (!context && wi.type == WindowInfo::Type::X11)
 		context = GLContextEGLX11::Create(wi, vlist, error);
 #endif
 
 #if defined(WAYLAND_API)
-	if (wi.type == WindowInfo::Type::Wayland)
+	if (!context && wi.type == WindowInfo::Type::Wayland)
 		context = GLContextEGLWayland::Create(wi, vlist, error);
 #endif
 

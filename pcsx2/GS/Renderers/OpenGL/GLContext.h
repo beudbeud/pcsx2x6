@@ -44,6 +44,12 @@ public:
 
 	static std::unique_ptr<GLContext> Create(const WindowInfo& wi, Error* error);
 
+	// libretro zero-copy HW render: when the frontend's get_proc_address is registered,
+	// Create() returns a GLContextLibretro that wraps the frontend's HW context instead of
+	// creating a standalone one. Pass nullptr to disable (revert to standalone contexts).
+	using LibretroGetProcFn = void* (*)(const char* name);
+	static void SetLibretroHWContext(LibretroGetProcFn proc, bool is_gles);
+
 protected:
 	WindowInfo m_wi;
 	Version m_version = {};
