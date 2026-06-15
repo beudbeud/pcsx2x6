@@ -283,6 +283,66 @@ void armEmitQMTC2(u32 rt, u32 rd) // VF[rd] = GPR[rt]
 }
 
 // ------------------------------------------------------------------------
+//  COP2 control register transfers (CFC2/CTC2) — VU0.VI[rd] <-> EE GPR[rt].
+//  Like QMFC2/QMTC2, the caller restricts these to the non-interlock encoding
+//  (code&1 == 0); the interlock form runs a pending VU0 microprogram first and
+//  stays on the interpreter (see the dispatch in aR5900.cpp). VI[] holds 16-bit
+//  control/integer regs in a 32-bit field (REG_VI.UL); the transfers are 32-bit.
+//  GPRs are memory-authoritative here (COP2 dispatch runs after the GPR cache is
+//  flushed+killed), so cpuRegs.GPR.r[] is read/written directly.
+// ------------------------------------------------------------------------
+void armEmitCFC2(u32 rt, u32 rd) // GPR[rt] = VI[rd]
+{
+	if (rt == 0)
+		return; // writes to r0 are discarded
+	armMoveAddressToReg(RSCRATCHADDR, &vuRegs[0].VI[rd].UL);
+	if (rd == REG_R)
+	{
+		// REG_R: only the low 32 bits are written, masked to 23 bits; the upper
+		// 96 bits of GPR[rt] are left UNCHANGED (matches the interpreter, which
+		// assigns UL[0] only for REG_R). A 32-bit store touches just UL[0].
+		armAsm->Ldr(RWARG1, a64::MemOperand(RSCRATCHADDR));
+		armAsm->And(RWARG1, RWARG1, 0x7FFFFF);
+		armAsm->Str(RWARG1, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
+	}
+	else
+	{
+		// Normal control reg: the 32-bit value is sign-extended into the low 64
+		// bits of GPR[rt] (UL[0]=value, UL[1]=sign); UL[2]/UL[3] stay unchanged.
+		armAsm->Ldrsw(RXARG1, a64::MemOperand(RSCRATCHADDR));
+		armAsm->Str(RXARG1, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
+	}
+}
+
+// ------------------------------------------------------------------------
+bool recCTC2FsIsJittable(u32 rd) // false -> keep CTC2 on the interpreter
+{
+	// FBRST resets the VUs, CMSAR1 launches a VU1 microprogram, and CLIP_FLAG
+	// also writes the side `clipflag` field — all real side effects. Everything
+	// else is a plain VI[] write (or a read-only / VI0 no-op).
+	return rd != REG_FBRST && rd != REG_CMSAR1 && rd != REG_CLIP_FLAG;
+}
+
+// ------------------------------------------------------------------------
+void armEmitCTC2(u32 rt, u32 rd) // VI[rd] = GPR[rt]  (JIT-able targets only)
+{
+	// VI[0] is the hardwired zero register, and MAC_FLAG/TPC/VPU_STAT are
+	// read-only — the interpreter writes nothing for these.
+	if (rd == 0 || rd == REG_MAC_FLAG || rd == REG_TPC || rd == REG_VPU_STAT)
+		return;
+	// rt==0 reads cpuRegs.GPR.r[0] (always zero), matching the interpreter.
+	armAsm->Ldr(RWARG1, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
+	if (rd == REG_R)
+	{
+		// REG_R: stored value is (GPR[rt] & 0x7FFFFF) | 0x3F800000.
+		armAsm->And(RWARG1, RWARG1, 0x7FFFFF);
+		armAsm->Orr(RWARG1, RWARG1, 0x3F800000);
+	}
+	armMoveAddressToReg(RSCRATCHADDR, &vuRegs[0].VI[rd].UL);
+	armAsm->Str(RWARG1, a64::MemOperand(RSCRATCHADDR));
+}
+
+// ------------------------------------------------------------------------
 //  Unaligned GPR load/store (LWL/LWR/SWL/SWR/LDL/LDR/SDL/SDR) — ported from
 //  ARMSX2. Previously these fell back to interpreter single-steps (one block per
 //  instruction), which is slow in the memcpy-style loops that use them. Inline

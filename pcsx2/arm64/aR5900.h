@@ -210,6 +210,11 @@ void armEmitStoreQuadCop2(u32 ft, u32 rs, s32 imm);
 // COP2 quad register transfers: VU0.VF[rd] <-> EE GPR[rt] (QMFC2/QMTC2).
 void armEmitQMFC2(u32 rt, u32 rd);
 void armEmitQMTC2(u32 rt, u32 rd);
+// COP2 control register transfers: VU0.VI[rd] <-> EE GPR[rt] (CFC2/CTC2).
+// CTC2 must only be emitted for a JIT-able VI target (see recCTC2FsIsJittable).
+void armEmitCFC2(u32 rt, u32 rd);
+void armEmitCTC2(u32 rt, u32 rd);
+bool recCTC2FsIsJittable(u32 rd);
 
 // --------------------------------------------------------------------------------------
 //  EE immediate arithmetic opcode generators (Phase 3.1)

@@ -2229,6 +2229,14 @@ static bool recTranslateOp(u32 op)
 			// genuinely-no-op vu0Sync.)
 			if (rs == 0x01 && (op & 1) == 0) { armEmitQMFC2(rt, rd); return true; } // QMFC2: GPR[rt]=VF[rd]
 			if (rs == 0x05 && (op & 1) == 0) { armEmitQMTC2(rt, rd); return true; } // QMTC2: VF[rd]=GPR[rt]
+			// Control register transfers (CFC2/CTC2): the other half of the VU0-macro
+			// data plumbing — reading clip/status/R/I/Q flags and integer regs back to
+			// the EE and writing them. Non-interlock encoding only (code&1 == 0); the
+			// interlock form runs a pending VU0 program and stays interpreted. CFC2 is a
+			// pure read (always native); CTC2 is native only for plain VI targets —
+			// FBRST/CMSAR1/CLIP_FLAG have side effects and keep the interpreter fallback.
+			if (rs == 0x02 && (op & 1) == 0) { armEmitCFC2(rt, rd); return true; } // CFC2: GPR[rt]=VI[rd]
+			if (rs == 0x06 && (op & 1) == 0 && recCTC2FsIsJittable(rd)) { armEmitCTC2(rt, rd); return true; } // CTC2: VI[rd]=GPR[rt]
 			recEmitInterpInline(op);
 			return true;
 
