@@ -33,6 +33,13 @@
 #include <arm_neon.h> // NEON-accelerated RGBA->XRGB readback swizzle
 #endif
 
+// Zero-copy HW render (experimental): import the GS dmabuf into the frontend GL context and
+// blit it into the libretro framebuffer. GL via glad (loaded from hw_render.get_proc_address),
+// EGL import via eglGetProcAddress (dlsym'd from libEGL).
+#include "glad/gl.h"
+#include "glad/egl.h"
+#include <dlfcn.h>
+
 
 #include "common/Assertions.h"
 #include "common/Console.h"
@@ -94,6 +101,31 @@ namespace LibretroHost
 	static retro_hw_render_callback s_hw_render = {};
 	static bool s_hw_render_requested = false;
 	static std::atomic_bool s_hw_render_active{false};
+
+	// Zero-copy dmabuf present: the GS thread hands a dmabuf fd (+ layout) for the composited
+	// frame RT; the frontend thread imports it once and blits the aliasing texture each frame.
+	struct DmaBufDesc
+	{
+		int fd = -1;
+		u32 width = 0, height = 0, stride = 0, offset = 0, fourcc = 0;
+		u64 modifier = 0;
+		bool dirty = false; // a new fd is waiting to be imported
+	};
+	static std::mutex s_dmabuf_mutex;
+	static DmaBufDesc s_dmabuf;
+	// blitter state — all touched only on the frontend thread (retro_run / context_reset)
+	static bool s_blit_gl_loaded = false;
+	static GLuint s_blit_prog = 0;
+	static GLuint s_blit_vao = 0;
+	static GLuint s_blit_tex = 0;
+	static u32 s_blit_w = 0, s_blit_h = 0;
+	static EGLImageKHR s_blit_image = EGL_NO_IMAGE_KHR;
+	// EGL import entry points (dlsym'd from libEGL; the GL HW context can't be assumed to
+	// expose them through get_proc_address)
+	static PFNEGLCREATEIMAGEKHRPROC s_eglCreateImageKHR = nullptr;
+	static PFNEGLDESTROYIMAGEKHRPROC s_eglDestroyImageKHR = nullptr;
+	static EGLDisplay (*s_eglGetCurrentDisplay)() = nullptr;
+	static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC s_glEGLImageTargetTexture2DOES = nullptr;
 
 	// configuration
 	static MemorySettingsInterface s_settings_interface;
@@ -888,6 +920,199 @@ static void HWRenderContextDestroy()
 {
 	INFO_LOG("HW render: context destroy.");
 	s_hw_render_active.store(false, std::memory_order_release);
+	// The GL objects belong to the now-destroyed context; forget them so they are rebuilt.
+	s_blit_gl_loaded = false;
+	s_blit_prog = s_blit_vao = s_blit_tex = 0;
+	s_blit_image = EGL_NO_IMAGE_KHR;
+	s_blit_w = s_blit_h = 0;
+	std::unique_lock lk(s_dmabuf_mutex);
+	if (s_dmabuf.fd >= 0)
+		close(s_dmabuf.fd);
+	s_dmabuf = DmaBufDesc{};
+}
+
+// GS thread: a new exported dmabuf (first frame / resize). Stash it for the frontend to import.
+static void OnDMABUFFrame(int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc, u64 modifier)
+{
+	std::unique_lock lk(s_dmabuf_mutex);
+	if (s_dmabuf.dirty && s_dmabuf.fd >= 0)
+		close(s_dmabuf.fd); // a previous fd never got imported
+	s_dmabuf = DmaBufDesc{fd, width, height, stride, offset, fourcc, modifier, true};
+}
+
+static GLuint HWCompileShader(GLenum type, const char* src)
+{
+	GLuint s = glCreateShader(type);
+	glShaderSource(s, 1, &src, nullptr);
+	glCompileShader(s);
+	GLint ok = 0;
+	glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+	if (!ok)
+	{
+		char log[512] = {};
+		glGetShaderInfoLog(s, sizeof(log), nullptr, log);
+		Console.WarningFmt("HW blit: shader compile failed: {}", log);
+		glDeleteShader(s);
+		return 0;
+	}
+	return s;
+}
+
+// Frontend thread: load GL + EGL-import entry points and build the fullscreen blit program. Once.
+static bool HWBlitInit()
+{
+	if (s_blit_gl_loaded)
+		return s_blit_prog != 0;
+	s_blit_gl_loaded = true;
+
+	if (gladLoadGLES2([](const char* n) { return reinterpret_cast<GLADapiproc>(s_hw_render.get_proc_address(n)); }) == 0)
+	{
+		Console.Warning("HW blit: gladLoadGLES2 failed.");
+		return false;
+	}
+
+	void* egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_LOCAL);
+	if (!egl)
+		egl = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
+	if (egl)
+	{
+		using GetProc = void* (*)(const char*);
+		auto egl_gpa = reinterpret_cast<GetProc>(dlsym(egl, "eglGetProcAddress"));
+		s_eglGetCurrentDisplay = reinterpret_cast<EGLDisplay (*)()>(dlsym(egl, "eglGetCurrentDisplay"));
+		if (egl_gpa)
+		{
+			s_eglCreateImageKHR = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(egl_gpa("eglCreateImageKHR"));
+			s_eglDestroyImageKHR = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(egl_gpa("eglDestroyImageKHR"));
+			s_glEGLImageTargetTexture2DOES =
+				reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(egl_gpa("glEGLImageTargetTexture2DOES"));
+		}
+	}
+	if (!s_eglCreateImageKHR || !s_eglDestroyImageKHR || !s_eglGetCurrentDisplay || !s_glEGLImageTargetTexture2DOES)
+	{
+		Console.WarningFmt("HW blit: missing EGL import entry points (create={}, destroy={}, dpy={}, target={}).",
+			s_eglCreateImageKHR != nullptr, s_eglDestroyImageKHR != nullptr,
+			s_eglGetCurrentDisplay != nullptr, s_glEGLImageTargetTexture2DOES != nullptr);
+		return false;
+	}
+
+	static const char* vs =
+		"#version 310 es\n"
+		"out vec2 v_uv;\n"
+		"void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));"
+		"v_uv=p;gl_Position=vec4(p*2.0-1.0,0.0,1.0);}\n";
+	static const char* fs =
+		"#version 310 es\n"
+		"precision mediump float;\n"
+		"in vec2 v_uv;\nuniform sampler2D u_tex;\nout vec4 o;\n"
+		"void main(){o=texture(u_tex,vec2(v_uv.x,1.0-v_uv.y));}\n"; // Y-flip: GS top-left -> GL bottom-left
+
+	GLuint v = HWCompileShader(GL_VERTEX_SHADER, vs);
+	GLuint f = HWCompileShader(GL_FRAGMENT_SHADER, fs);
+	if (!v || !f)
+		return false;
+	s_blit_prog = glCreateProgram();
+	glAttachShader(s_blit_prog, v);
+	glAttachShader(s_blit_prog, f);
+	glLinkProgram(s_blit_prog);
+	GLint ok = 0;
+	glGetProgramiv(s_blit_prog, GL_LINK_STATUS, &ok);
+	glDeleteShader(v);
+	glDeleteShader(f);
+	if (!ok)
+	{
+		Console.Warning("HW blit: program link failed.");
+		glDeleteProgram(s_blit_prog);
+		s_blit_prog = 0;
+		return false;
+	}
+	glGenVertexArrays(1, &s_blit_vao);
+	glGenTextures(1, &s_blit_tex);
+	INFO_LOG("HW blit: initialized (zero-copy dmabuf present).");
+	return true;
+}
+
+// Frontend thread: import the dmabuf into s_blit_tex (the texture then aliases the GS RT buffer).
+static bool HWImportDmaBuf(const DmaBufDesc& d)
+{
+	if (s_blit_image != EGL_NO_IMAGE_KHR)
+	{
+		s_eglDestroyImageKHR(s_eglGetCurrentDisplay(), s_blit_image);
+		s_blit_image = EGL_NO_IMAGE_KHR;
+	}
+	const EGLint attribs[] = {
+		EGL_WIDTH, static_cast<EGLint>(d.width),
+		EGL_HEIGHT, static_cast<EGLint>(d.height),
+		EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(d.fourcc),
+		EGL_DMA_BUF_PLANE0_FD_EXT, d.fd,
+		EGL_DMA_BUF_PLANE0_OFFSET_EXT, static_cast<EGLint>(d.offset),
+		EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(d.stride),
+		EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(d.modifier & 0xFFFFFFFFu),
+		EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>(d.modifier >> 32),
+		EGL_NONE};
+	s_blit_image = s_eglCreateImageKHR(s_eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT,
+		static_cast<EGLClientBuffer>(nullptr), attribs);
+	if (s_blit_image == EGL_NO_IMAGE_KHR)
+	{
+		Console.Warning("HW blit: eglCreateImageKHR(dmabuf) failed.");
+		return false;
+	}
+	glBindTexture(GL_TEXTURE_2D, s_blit_tex);
+	s_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, static_cast<GLeglImageOES>(s_blit_image));
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	s_blit_w = d.width;
+	s_blit_h = d.height;
+	INFO_LOG("HW blit: imported dmabuf {}x{}.", d.width, d.height);
+	return true;
+}
+
+// Frontend thread (retro_run): blit the imported dmabuf into the libretro framebuffer.
+// Returns true if it presented (so the caller skips the software path).
+static bool HWPresentDMABuf()
+{
+	if (!s_hw_render_active.load(std::memory_order_acquire) || !HWBlitInit())
+		return false;
+
+	DmaBufDesc local;
+	{
+		std::unique_lock lk(s_dmabuf_mutex);
+		if (s_dmabuf.dirty)
+		{
+			local = s_dmabuf;
+			s_dmabuf.dirty = false;
+			s_dmabuf.fd = -1; // ownership transferred to `local`
+		}
+	}
+	if (local.dirty && local.fd >= 0)
+	{
+		HWImportDmaBuf(local);
+		close(local.fd); // the EGLImage keeps the buffer alive
+	}
+	if (s_blit_image == EGL_NO_IMAGE_KHR || s_blit_w == 0)
+		return false;
+
+	glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(s_hw_render.get_current_framebuffer()));
+	glViewport(0, 0, static_cast<GLsizei>(s_blit_w), static_cast<GLsizei>(s_blit_h));
+	glDisable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_SCISSOR_TEST);
+	glDisable(GL_CULL_FACE);
+	glUseProgram(s_blit_prog);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, s_blit_tex);
+	const GLint loc = glGetUniformLocation(s_blit_prog, "u_tex");
+	if (loc >= 0)
+		glUniform1i(loc, 0);
+	glBindVertexArray(s_blit_vao);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	glBindVertexArray(0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	s_video_cb(RETRO_HW_FRAME_BUFFER_VALID, s_blit_w, s_blit_h, 0);
+	return true;
 }
 
 // Negotiate a libretro GLES3 hardware-render context when pcsx2_hw_render is enabled.
@@ -916,9 +1141,10 @@ static void TryInitHWRender()
 	}
 	INFO_LOG("HW render: GLES3 HW context requested (experimental, stage 1).");
 
-	// D1: have the GS export the composited frame RT as a dmabuf (one-shot log) to confirm
-	// export works on this GPU. Present is still the readback path until the D2 blit lands.
+	// Zero-copy present: the GS exports the composited RT as a dmabuf and hands the fd here;
+	// retro_run imports it and blits into the libretro framebuffer (no readback).
 	GSSetFramebufferDMABUFExport(true);
+	GSSetFramebufferDMABUFCallback(&OnDMABUFFrame);
 }
 
 bool retro_load_game(const struct retro_game_info* game)
@@ -1242,7 +1468,11 @@ void retro_run(void)
 	const bool got_frame = s_frame_cv.wait_for(lock, std::chrono::milliseconds(2000), []() { return s_frame_ready; });
 	s_frame_ready = false;
 
-	if (got_frame && s_frame_width > 0 && s_frame_height > 0 && s_video_cb)
+	if (got_frame && s_hw_render_active.load(std::memory_order_acquire) && HWPresentDMABuf())
+	{
+		// Presented zero-copy via the imported dmabuf (HWPresentDMABuf called video_cb itself).
+	}
+	else if (got_frame && s_frame_width > 0 && s_frame_height > 0 && s_video_cb)
 	{
 		s_video_cb(s_frame_pixels.data(), s_frame_width, s_frame_height, s_frame_width * sizeof(u32));
 	}

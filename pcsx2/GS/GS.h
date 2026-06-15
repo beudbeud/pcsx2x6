@@ -116,9 +116,14 @@ using GSFramebufferReadbackCallback = void (*)(const u32* pixels, u32 pitch_px, 
 void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height);
 void GSReleaseFramebufferReadbackResources();
 
-/// Zero-copy HW render (experimental): when enabled, the readback present additionally
-/// exports the composited frame RT as a dmabuf (probe/D1: logs success once). OpenGL only.
+/// Zero-copy HW render (experimental): when enabled, the composited frame RT is exported as
+/// a dmabuf for the libretro frontend to import instead of the GPU->CPU readback. OpenGL only.
 void GSSetFramebufferDMABUFExport(bool enable);
+
+/// Fires on the GS thread when the exported dmabuf changes (first frame / resize): hands the
+/// fd + layout to the frontend, which imports it once and blits it each frame.
+using GSFramebufferDMABUFCallback = void (*)(int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc, u64 modifier);
+void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb);
 
 namespace Host
 {

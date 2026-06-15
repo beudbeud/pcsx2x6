@@ -50,6 +50,8 @@ static std::unique_ptr<GSDownloadTexture> s_fb_readback_dl[2];
 static bool s_fb_readback_pending[2] = {};
 static u32 s_fb_readback_slot = 0;
 static std::atomic_bool s_fb_dmabuf_export{false};
+static GSFramebufferDMABUFCallback s_fb_dmabuf_cb = nullptr;
+static GSTexture* s_fb_dmabuf_last_rt = nullptr; // re-export only when the RT changes (resize)
 
 void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height)
 {
@@ -60,6 +62,11 @@ void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width,
 void GSSetFramebufferDMABUFExport(bool enable)
 {
 	s_fb_dmabuf_export.store(enable, std::memory_order_release);
+}
+
+void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb)
+{
+	s_fb_dmabuf_cb = cb;
 }
 
 void GSReleaseFramebufferReadbackResources()
@@ -74,6 +81,7 @@ void GSReleaseFramebufferReadbackResources()
 		g_gs_device->Recycle(s_fb_readback_rt);
 		s_fb_readback_rt = nullptr;
 	}
+	s_fb_dmabuf_last_rt = nullptr; // force a re-export of the new RT
 }
 
 static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_uv)
@@ -95,7 +103,11 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 		if (!s_fb_readback_rt)
 			return;
 	}
-	if (!s_fb_readback_dl[0])
+
+	// Zero-copy HW render (D2): in dmabuf mode the frontend imports the RT directly, so there
+	// is no GPU->CPU readback at all — skip the staging download textures.
+	const bool dmabuf_mode = s_fb_dmabuf_export.load(std::memory_order_acquire) && s_fb_dmabuf_cb;
+	if (!dmabuf_mode && !s_fb_readback_dl[0])
 	{
 		for (u32 i = 0; i < 2; i++)
 		{
@@ -114,24 +126,30 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 	g_gs_device->StretchRect(current, src_uv, s_fb_readback_rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
 		BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
 
-	// Zero-copy HW render D1: prove the composited RT can be exported as a dmabuf on this
-	// GPU (one-shot log; readback present continues below so the screen still works). D2 will
-	// hand the fd to the libretro frontend for import+blit instead of the readback.
-	if (s_fb_dmabuf_export.load(std::memory_order_acquire))
+	if (dmabuf_mode)
 	{
-		static bool s_logged_dmabuf = false;
-		if (!s_logged_dmabuf)
+		// Export the composited RT as a dmabuf and hand the fd to the libretro frontend, which
+		// imports + blits it into its HW framebuffer (no readback, swizzle or re-upload). The RT
+		// is reused frame-to-frame, so export only when it changes (first frame / resize): the
+		// frontend keeps one imported texture that aliases the same buffer the GS renders into.
+		if (s_fb_readback_rt != s_fb_dmabuf_last_rt)
 		{
-			s_logged_dmabuf = true;
 			int fd = -1;
 			u32 stride = 0, offset = 0, fourcc = 0;
 			u64 modifier = 0;
 			if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, &fd, &stride, &offset, &fourcc, &modifier))
+			{
 				Console.WriteLnFmt("dmabuf export OK: {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
 					width, height, fd, stride, offset, fourcc, modifier);
+				s_fb_dmabuf_cb(fd, width, height, stride, offset, fourcc, modifier);
+				s_fb_dmabuf_last_rt = s_fb_readback_rt;
+			}
 			else
-				Console.Warning("dmabuf export FAILED on the composited RT.");
+			{
+				Console.Warning("dmabuf export FAILED on the composited RT; staying on readback.");
+			}
 		}
+		return;
 	}
 
 	const GSVector4i rc(0, 0, static_cast<s32>(width), static_cast<s32>(height));
