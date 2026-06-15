@@ -29,6 +29,10 @@
 #include <cstdio>
 #include <cstdlib>
 
+#if defined(__aarch64__)
+#include <arm_neon.h> // NEON-accelerated RGBA->XRGB readback swizzle
+#endif
+
 
 #include "common/Assertions.h"
 #include "common/Console.h"
@@ -180,14 +184,27 @@ namespace LibretroHost
 	{
 		std::unique_lock lock(s_frame_mutex);
 		s_frame_pixels.resize(static_cast<size_t>(width) * height);
+		// RGBA8 (driver readback) -> XRGB8888 (libretro): swap the R and B bytes, keep G and
+		// the high byte. Runs on the GS thread for the whole upscaled frame each present, so
+		// vectorise it on ARM64 (V3D readback is up to 1280x960 = ~1.2M px/frame).
 		for (u32 y = 0; y < height; y++)
 		{
 			const u32* src = pixels + static_cast<size_t>(y) * pitch_px;
 			u32* dst = s_frame_pixels.data() + static_cast<size_t>(y) * width;
-			for (u32 x = 0; x < width; x++)
+			u32 x = 0;
+#if defined(__aarch64__)
+			// NEON: swap byte 0<->2 within each 32-bit pixel, 4 pixels per iteration.
+			static const uint8_t s_rb_swap_idx[16] = {2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15};
+			const uint8x16_t idx = vld1q_u8(s_rb_swap_idx);
+			for (; x + 4 <= width; x += 4)
+			{
+				const uint8x16_t v = vld1q_u8(reinterpret_cast<const uint8_t*>(src + x));
+				vst1q_u8(reinterpret_cast<uint8_t*>(dst + x), vqtbl1q_u8(v, idx));
+			}
+#endif
+			for (; x < width; x++)
 			{
 				const u32 px = src[x];
-				// RGBA -> XRGB8888
 				dst[x] = (px & 0xFF00FF00u) | ((px & 0xFFu) << 16) | ((px >> 16) & 0xFFu);
 			}
 		}
