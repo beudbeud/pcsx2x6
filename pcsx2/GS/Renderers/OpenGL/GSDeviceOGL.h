@@ -178,6 +178,18 @@ private:
 	GLuint m_fbo_read = 0; // frame buffer container only for reading
 	GLuint m_fbo_write = 0;	// frame buffer container only for writing
 
+	// Zero-copy HW render: linear dmabuf the composited RT is blitted into each frame (the texture
+	// itself + bo/fd live in the GLContext). Tracked here to detect a resize -> recreate and to
+	// re-emit the layout to the frontend. (Fields kept flat to avoid pulling GLContext.h here.)
+	GLuint m_dmabuf_lin_tex = 0;
+	u32 m_dmabuf_lin_w = 0;
+	u32 m_dmabuf_lin_h = 0;
+	int m_dmabuf_fd = -1;
+	u32 m_dmabuf_stride = 0;
+	u32 m_dmabuf_offset = 0;
+	u32 m_dmabuf_fourcc = 0;
+	u64 m_dmabuf_modifier = 0;
+
 	std::unique_ptr<GLStreamBuffer> m_texture_upload_buffer;
 
 	std::unique_ptr<GLStreamBuffer> m_vertex_stream_buffer;
@@ -365,7 +377,7 @@ public:
 
 	std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) override;
 
-	bool ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) override;
+	bool ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) override;
 	void FlushRenderingCommands() override;
 
 	GSTexture* InitPrimDateTexture(GSTexture* rt, const GSVector4i& area, SetDATM datm);

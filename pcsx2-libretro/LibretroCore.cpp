@@ -1062,16 +1062,23 @@ static bool HWImportDmaBuf(const DmaBufDesc& d)
 		s_eglDestroyImageKHR(s_eglGetCurrentDisplay(), s_blit_image);
 		s_blit_image = EGL_NO_IMAGE_KHR;
 	}
-	const EGLint attribs[] = {
-		EGL_WIDTH, static_cast<EGLint>(d.width),
-		EGL_HEIGHT, static_cast<EGLint>(d.height),
-		EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(d.fourcc),
-		EGL_DMA_BUF_PLANE0_FD_EXT, d.fd,
-		EGL_DMA_BUF_PLANE0_OFFSET_EXT, static_cast<EGLint>(d.offset),
-		EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(d.stride),
-		EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(d.modifier & 0xFFFFFFFFu),
-		EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>(d.modifier >> 32),
-		EGL_NONE};
+	// For a LINEAR buffer (modifier 0) omit the modifier attribs entirely: the default import
+	// layout is linear, and this avoids relying on EGL_EXT_image_dma_buf_import_modifiers. Only
+	// a tiled buffer (modifier != 0) needs the explicit modifier passed through.
+	EGLint attribs[20];
+	int n = 0;
+	attribs[n++] = EGL_WIDTH;                     attribs[n++] = static_cast<EGLint>(d.width);
+	attribs[n++] = EGL_HEIGHT;                    attribs[n++] = static_cast<EGLint>(d.height);
+	attribs[n++] = EGL_LINUX_DRM_FOURCC_EXT;      attribs[n++] = static_cast<EGLint>(d.fourcc);
+	attribs[n++] = EGL_DMA_BUF_PLANE0_FD_EXT;     attribs[n++] = d.fd;
+	attribs[n++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attribs[n++] = static_cast<EGLint>(d.offset);
+	attribs[n++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;  attribs[n++] = static_cast<EGLint>(d.stride);
+	if (d.modifier != 0)
+	{
+		attribs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT; attribs[n++] = static_cast<EGLint>(d.modifier & 0xFFFFFFFFu);
+		attribs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT; attribs[n++] = static_cast<EGLint>(d.modifier >> 32);
+	}
+	attribs[n++] = EGL_NONE;
 	s_blit_image = s_eglCreateImageKHR(s_eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT,
 		static_cast<EGLClientBuffer>(nullptr), attribs);
 	if (s_blit_image == EGL_NO_IMAGE_KHR)

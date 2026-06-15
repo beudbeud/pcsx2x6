@@ -42,6 +42,13 @@ public:
 	// if unsupported. Implemented by the EGL context; called on the GS thread (context current).
 	virtual bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) { return false; }
 
+	// Allocate a LINEAR dmabuf (via GBM) and import it as a GL 2D texture in this context, to
+	// render into. Linear so a consumer on another EGLDisplay can sample it without GPU-tiling
+	// (UIF) ambiguity. Fills `out` (out->fd owned by this context) + the GL texture id. Returns
+	// false if unsupported. Called on the GS thread (its context current).
+	virtual bool CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture) { return false; }
+	virtual void DestroyLinearDmaBufTexture() {}
+
 	__fi const WindowInfo& GetWindowInfo() const { return m_wi; }
 
 	virtual bool IsGLES() const { return false; }

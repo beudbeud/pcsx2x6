@@ -1637,10 +1637,12 @@ public:
 
 	virtual std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) = 0;
 
-	// Zero-copy HW render (OpenGL only): export a render target as a single-plane dmabuf for
-	// the libretro frontend context to import. Out-params avoid coupling this common header to
-	// the GL backend. Returns false if unsupported (all non-OGL backends).
-	virtual bool ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) { return false; }
+	// Zero-copy HW render (OpenGL only): blit `tex` into an internally-managed LINEAR dmabuf
+	// (no GPU tiling, so a consumer on another EGLDisplay samples it without UIF-tile artifacts)
+	// every frame, and — when `force_export` or the buffer was just (re)allocated — return a fresh
+	// fd + layout for the frontend to (re)import (*fd = -1 otherwise). Out-params avoid coupling
+	// this common header to the GL backend. Returns false if unsupported (all non-OGL backends).
+	virtual bool ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) { return false; }
 
 	// Finish pending GL commands so a dmabuf consumer on another context/display sees a fully
 	// rendered frame (implicit fencing isn't reliable across displays -> tearing). No-op on

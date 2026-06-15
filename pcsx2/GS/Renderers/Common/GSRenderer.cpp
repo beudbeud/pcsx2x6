@@ -133,29 +133,29 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 
 	if (dmabuf_mode)
 	{
-		// Export the composited RT as a dmabuf and hand the fd to the libretro frontend, which
-		// imports + blits it into its HW framebuffer (no readback, swizzle or re-upload). The RT
-		// is reused frame-to-frame, so export only when it changes (first frame / resize): the
-		// frontend keeps one imported texture that aliases the same buffer the GS renders into.
-		if (s_fb_readback_rt != s_fb_dmabuf_last_rt)
+		// Blit the composited RT into a LINEAR dmabuf and hand its fd to the libretro frontend,
+		// which imports + blits it into its HW framebuffer (no readback, swizzle or re-upload).
+		// The blit happens every frame; the fd is re-exported only when the buffer is (re)created
+		// (first frame / resize) or forced after a frontend context reset (last_rt cleared).
+		const bool force = (s_fb_readback_rt != s_fb_dmabuf_last_rt);
+		int fd = -1;
+		u32 stride = 0, offset = 0, fourcc = 0;
+		u64 modifier = 0;
+		if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, force, &fd, &stride, &offset, &fourcc, &modifier))
 		{
-			int fd = -1;
-			u32 stride = 0, offset = 0, fourcc = 0;
-			u64 modifier = 0;
-			if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, &fd, &stride, &offset, &fourcc, &modifier))
+			if (fd >= 0)
 			{
-				Console.WriteLnFmt("dmabuf export OK: {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
+				Console.WriteLnFmt("dmabuf (linear) export OK: {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
 					width, height, fd, stride, offset, fourcc, modifier);
 				s_fb_dmabuf_cb(fd, width, height, stride, offset, fourcc, modifier);
-				s_fb_dmabuf_last_rt = s_fb_readback_rt;
 			}
-			else
-			{
-				Console.Warning("dmabuf export FAILED on the composited RT; staying on readback.");
-			}
+			s_fb_dmabuf_last_rt = s_fb_readback_rt;
 		}
-		// Submit this frame's StretchRect so the frontend's import sees it (the readback path's
-		// Map used to force this; without it the frontend samples the just-cleared buffer).
+		else
+		{
+			Console.Warning("dmabuf linear export FAILED on the composited RT.");
+		}
+		// Finish this frame's blit so the frontend samples a complete, stable buffer.
 		g_gs_device->FlushRenderingCommands();
 		return;
 	}

@@ -29,6 +29,8 @@ public:
 	virtual std::unique_ptr<GLContext> CreateSharedContext(const WindowInfo& wi, Error* error) override;
 
 	bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) override;
+	bool CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture) override;
+	void DestroyLinearDmaBufTexture() override;
 
 protected:
 	virtual EGLDisplay GetPlatformDisplay(Error* error);
@@ -65,4 +67,11 @@ protected:
 	int m_gbm_fd = -1;
 	void* m_gbm_lib = nullptr;
 	void* m_gbm_device = nullptr;
+
+	// Linear dmabuf render target (zero-copy HW render): a GBM bo + EGLImage + GL texture the GS
+	// blits each frame into, exported to the libretro frontend. Owned here; freed on destroy/resize.
+	void* m_lin_bo = nullptr;
+	void* m_lin_image = nullptr; // EGLImageKHR
+	u32 m_lin_tex = 0;
+	int m_lin_fd = -1;
 };

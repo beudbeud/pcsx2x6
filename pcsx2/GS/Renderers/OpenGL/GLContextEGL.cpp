@@ -3,6 +3,8 @@
 
 #include "GS/Renderers/OpenGL/GLContextEGL.h"
 
+#include "glad/gl.h" // gl* entry points for the linear dmabuf render target
+
 #include "common/Assertions.h"
 #include "common/Console.h"
 #include "common/DynamicLibrary.h"
@@ -80,6 +82,7 @@ GLContextEGL::GLContextEGL(const WindowInfo& wi)
 
 GLContextEGL::~GLContextEGL()
 {
+	DestroyLinearDmaBufTexture(); // before the context/GBM teardown below
 	DestroySurface();
 	DestroyContext();
 
@@ -223,6 +226,156 @@ bool GLContextEGL::ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out)
 	out->fourcc = static_cast<u32>(fourcc);
 	out->modifier = static_cast<u64>(modifier);
 	return true;
+}
+
+#ifndef _WIN32
+// GBM / EGL dmabuf-import bits not guaranteed in the EGL headers we link against.
+#ifndef EGL_LINUX_DMA_BUF_EXT
+#define EGL_LINUX_DMA_BUF_EXT 0x3270
+#define EGL_LINUX_DRM_FOURCC_EXT 0x3271
+#define EGL_DMA_BUF_PLANE0_FD_EXT 0x3272
+#define EGL_DMA_BUF_PLANE0_OFFSET_EXT 0x3273
+#define EGL_DMA_BUF_PLANE0_PITCH_EXT 0x3274
+#endif
+static constexpr u32 PCSX2_GBM_FORMAT_ABGR8888 = 0x34324241; // 'AB24' == GL_RGBA8 byte order
+static constexpr u32 PCSX2_GBM_BO_USE_RENDERING = (1u << 2);
+static constexpr u32 PCSX2_GBM_BO_USE_LINEAR = (1u << 4);
+typedef void* (*PFN_gbm_bo_create)(void*, u32, u32, u32, u32);
+typedef int (*PFN_gbm_bo_get_fd)(void*);
+typedef u32 (*PFN_gbm_bo_get_stride)(void*);
+typedef void (*PFN_gbm_bo_destroy)(void*);
+typedef void (*PFN_glEGLImageTargetTexture2DOES_local)(GLenum, void*); // GL_APIENTRY is empty on Linux
+#endif
+
+bool GLContextEGL::CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture)
+{
+#ifndef _WIN32
+	if (!m_gbm_device || !m_gbm_lib)
+	{
+		Console.Warning("dmabuf linear: no GBM device (export needs the GBM platform).");
+		return false;
+	}
+
+	auto gbm_bo_create = reinterpret_cast<PFN_gbm_bo_create>(dlsym(m_gbm_lib, "gbm_bo_create"));
+	auto gbm_bo_get_fd = reinterpret_cast<PFN_gbm_bo_get_fd>(dlsym(m_gbm_lib, "gbm_bo_get_fd"));
+	auto gbm_bo_get_stride = reinterpret_cast<PFN_gbm_bo_get_stride>(dlsym(m_gbm_lib, "gbm_bo_get_stride"));
+	if (!gbm_bo_create || !gbm_bo_get_fd || !gbm_bo_get_stride)
+	{
+		Console.Warning("dmabuf linear: missing gbm_bo_* symbols.");
+		return false;
+	}
+
+	static const auto s_eglCreateImageKHR =
+		reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
+	static const auto s_glEGLImageTargetTexture2DOES =
+		reinterpret_cast<PFN_glEGLImageTargetTexture2DOES_local>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+	if (!s_eglCreateImageKHR || !s_glEGLImageTargetTexture2DOES)
+	{
+		Console.Warning("dmabuf linear: eglGetProcAddress missing image entry points.");
+		return false;
+	}
+
+	void* bo = gbm_bo_create(m_gbm_device, width, height, PCSX2_GBM_FORMAT_ABGR8888,
+		PCSX2_GBM_BO_USE_RENDERING | PCSX2_GBM_BO_USE_LINEAR);
+	if (!bo)
+	{
+		Console.Warning("dmabuf linear: gbm_bo_create(LINEAR|RENDERING) failed (driver may not support a "
+						"linear render target).");
+		return false;
+	}
+
+	const int fd = gbm_bo_get_fd(bo);
+	const u32 stride = gbm_bo_get_stride(bo);
+	if (fd < 0)
+	{
+		Console.Warning("dmabuf linear: gbm_bo_get_fd failed.");
+		auto destroy = reinterpret_cast<PFN_gbm_bo_destroy>(dlsym(m_gbm_lib, "gbm_bo_destroy"));
+		if (destroy)
+			destroy(bo);
+		return false;
+	}
+
+	// Import the (linear) dmabuf as an EGLImage -> GL texture in this context. No modifier attribs:
+	// the buffer is linear, so the default layout is exactly right (and avoids needing the
+	// import-modifiers extension for the simple case).
+	const EGLint attribs[] = {
+		EGL_WIDTH, static_cast<EGLint>(width),
+		EGL_HEIGHT, static_cast<EGLint>(height),
+		EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(PCSX2_GBM_FORMAT_ABGR8888),
+		EGL_DMA_BUF_PLANE0_FD_EXT, fd,
+		EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+		EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(stride),
+		EGL_NONE};
+	const EGLImageKHR image = s_eglCreateImageKHR(m_display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT,
+		static_cast<EGLClientBuffer>(nullptr), attribs);
+	if (image == EGL_NO_IMAGE_KHR)
+	{
+		Console.WarningFmt("dmabuf linear: eglCreateImageKHR failed (0x{:x}).", static_cast<int>(eglGetError()));
+		close(fd);
+		auto destroy = reinterpret_cast<PFN_gbm_bo_destroy>(dlsym(m_gbm_lib, "gbm_bo_destroy"));
+		if (destroy)
+			destroy(bo);
+		return false;
+	}
+
+	GLuint tex = 0;
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	s_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0); // classic binding only; GS uses DSA, so GLState stays consistent
+
+	m_lin_bo = bo;
+	m_lin_image = image;
+	m_lin_tex = tex;
+	m_lin_fd = fd;
+
+	out->fd = fd;
+	out->width = width;
+	out->height = height;
+	out->stride = stride;
+	out->offset = 0;
+	out->fourcc = PCSX2_GBM_FORMAT_ABGR8888;
+	out->modifier = 0; // DRM_FORMAT_MOD_LINEAR
+	*out_texture = tex;
+	return true;
+#else
+	return false;
+#endif
+}
+
+void GLContextEGL::DestroyLinearDmaBufTexture()
+{
+#ifndef _WIN32
+	if (m_lin_tex)
+	{
+		glDeleteTextures(1, &m_lin_tex);
+		m_lin_tex = 0;
+	}
+	if (m_lin_image)
+	{
+		static const auto s_eglDestroyImageKHR =
+			reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+		if (s_eglDestroyImageKHR)
+			s_eglDestroyImageKHR(m_display, m_lin_image);
+		m_lin_image = nullptr;
+	}
+	if (m_lin_bo && m_gbm_lib)
+	{
+		auto destroy = reinterpret_cast<PFN_gbm_bo_destroy>(dlsym(m_gbm_lib, "gbm_bo_destroy"));
+		if (destroy)
+			destroy(m_lin_bo);
+		m_lin_bo = nullptr;
+	}
+	if (m_lin_fd >= 0)
+	{
+		close(m_lin_fd);
+		m_lin_fd = -1;
+	}
+#endif
 }
 
 EGLDisplay GLContextEGL::GetPlatformDisplay(Error* error)

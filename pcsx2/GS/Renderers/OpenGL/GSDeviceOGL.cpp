@@ -22,6 +22,10 @@
 #include <fstream>
 #include <sstream>
 
+#ifndef _WIN32
+#include <unistd.h> // dup() for handing the dmabuf fd to the frontend
+#endif
+
 static constexpr u32 g_vs_pc_index        = 4;
 static constexpr u32 g_vs_ib_index        = 3;
 static constexpr u32 g_vs_vb_index        = 2;
@@ -1425,20 +1429,63 @@ std::unique_ptr<GSDownloadTexture> GSDeviceOGL::CreateDownloadTexture(u32 width,
 	return GSDownloadTextureOGL::Create(width, height, format);
 }
 
-bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier)
+bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier)
 {
+	*fd = -1;
 	if (!tex || !m_gl_context)
 		return false;
 
-	GLContext::DmaBufFrame frame;
-	if (!m_gl_context->ExportTextureDMABUF(static_cast<GSTextureOGL*>(tex)->GetID(), &frame))
-		return false;
+	const u32 w = static_cast<u32>(tex->GetWidth());
+	const u32 h = static_cast<u32>(tex->GetHeight());
 
-	*fd = frame.fd;
-	*stride = frame.stride;
-	*offset = frame.offset;
-	*fourcc = frame.fourcc;
-	*modifier = frame.modifier;
+	// (Re)allocate the linear dmabuf target on first use / resize. We render (composite) into the
+	// GS's own tiled RT, then blit it into this LINEAR buffer so the frontend — which imports the
+	// dmabuf on a separate EGLDisplay — samples it without UIF tile-format ambiguity (the artifact
+	// that showed as a static garbage band over the lower quarter of the frame).
+	bool recreated = false;
+	if (m_dmabuf_lin_tex == 0 || m_dmabuf_lin_w != w || m_dmabuf_lin_h != h)
+	{
+		m_gl_context->DestroyLinearDmaBufTexture();
+		m_dmabuf_lin_tex = 0;
+		GLContext::DmaBufFrame frame;
+		if (!m_gl_context->CreateLinearDmaBufTexture(w, h, &frame, &m_dmabuf_lin_tex))
+			return false;
+		m_dmabuf_lin_w = w;
+		m_dmabuf_lin_h = h;
+		m_dmabuf_fd = frame.fd;
+		m_dmabuf_stride = frame.stride;
+		m_dmabuf_offset = frame.offset;
+		m_dmabuf_fourcc = frame.fourcc;
+		m_dmabuf_modifier = frame.modifier;
+		recreated = true;
+	}
+
+	// GPU-side blit tiled RT -> linear dmabuf texture. Mirror RenderBlankFrame's scissor/FBO
+	// dance so GLState stays consistent (scissor test is normally on; the scratch FBOs' draw/read
+	// buffers default to COLOR_ATTACHMENT0 so no glDrawBuffer — absent in GLES — is needed).
+	const GLuint src_id = static_cast<GSTextureOGL*>(tex)->GetID();
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_read);
+	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src_id, 0);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_fbo_write);
+	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_dmabuf_lin_tex, 0);
+	glDisable(GL_SCISSOR_TEST);
+	glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	glEnable(GL_SCISSOR_TEST);
+	// Restore both read+draw to the tracked FBO (GS always binds GL_FRAMEBUFFER, so keep them equal).
+	glBindFramebuffer(GL_FRAMEBUFFER, GLState::fbo);
+
+	if (recreated || force_export)
+	{
+		// Hand the frontend its own fd (it imports + closes it); the context keeps its own for the bo.
+#ifndef _WIN32
+		*fd = dup(m_dmabuf_fd);
+#endif
+		*stride = m_dmabuf_stride;
+		*offset = m_dmabuf_offset;
+		*fourcc = m_dmabuf_fourcc;
+		*modifier = m_dmabuf_modifier;
+	}
 	return true;
 }
 
