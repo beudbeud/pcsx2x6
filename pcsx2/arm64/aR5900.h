@@ -334,6 +334,20 @@ void armEmitMULTU1(u32 rd, u32 rs, u32 rt);
 void armEmitDIV1(u32 rs, u32 rt);
 void armEmitDIVU1(u32 rs, u32 rt);
 
+// MMI multiply-accumulate (HI/LO += rs*rt) — pipeline 0 (MADD/MADDU) and the
+// "1" pipeline-1 variants (HI1/LO1). The accumulator and result use only the low
+// 32 bits of each HI/LO doubleword, sign-extended back (matches MMI.cpp).
+void armEmitMADD(u32 rd, u32 rs, u32 rt);
+void armEmitMADDU(u32 rd, u32 rs, u32 rt);
+void armEmitMADD1(u32 rd, u32 rs, u32 rt);
+void armEmitMADDU1(u32 rd, u32 rs, u32 rt);
+
+// MMI pipeline-1 HI/LO moves (HI1/LO1 <-> GPR), the upper doubleword.
+void armEmitMFHI1(u32 rd);
+void armEmitMFLO1(u32 rd);
+void armEmitMTHI1(u32 rs);
+void armEmitMTLO1(u32 rs);
+
 // --------------------------------------------------------------------------------------
 //  EE jump opcode generators (Phase 4.1)
 // --------------------------------------------------------------------------------------

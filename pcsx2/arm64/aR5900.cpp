@@ -1993,8 +1993,9 @@ static bool recTranslateOp(u32 op)
 				default:   return false;
 			}
 
-		// MMI — second-pipeline multiply/divide (Phase 3.5). Other MMI ops (SIMD,
-		// MFHI1/MFLO1, ...) are not yet implemented and fall through to false.
+		// MMI — second-pipeline multiply/divide (Phase 3.5) + multiply-accumulate
+		// and the pipeline-1 HI/LO moves. Remaining MMI ops (SIMD sub-groups handled
+		// below) fall through to false.
 		case 0x1C:
 			switch (funct)
 			{
@@ -2002,6 +2003,16 @@ static bool recTranslateOp(u32 op)
 				case 0x19: armEmitMULTU1(rd, rs, rt); return true;
 				case 0x1A: armEmitDIV1(rs, rt); return true;
 				case 0x1B: armEmitDIVU1(rs, rt); return true;
+				// Multiply-accumulate: pipeline 0 (MADD/MADDU) and pipeline 1.
+				case 0x00: armEmitMADD(rd, rs, rt); return true;
+				case 0x01: armEmitMADDU(rd, rs, rt); return true;
+				case 0x20: armEmitMADD1(rd, rs, rt); return true;
+				case 0x21: armEmitMADDU1(rd, rs, rt); return true;
+				// Pipeline-1 HI/LO moves (HI1/LO1).
+				case 0x10: armEmitMFHI1(rd); return true;
+				case 0x11: armEmitMTHI1(rs); return true;
+				case 0x12: armEmitMFLO1(rd); return true;
+				case 0x13: armEmitMTLO1(rs); return true;
 				// Direct tbl_MMI entries (indexed by funct = op & 0x3F).
 				case 0x04: armEmitPLZCW(rd, rs); return true;
 				// MMI0/1/2/3 SIMD sub-groups (Phase 5.4); sub-op in `sa`.

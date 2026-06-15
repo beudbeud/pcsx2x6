@@ -167,3 +167,77 @@ void armEmitMULT1(u32 rd, u32 rs, u32 rt) { emitMult(true, rd, rs, rt, EE_LO1_OF
 void armEmitMULTU1(u32 rd, u32 rs, u32 rt) { emitMult(false, rd, rs, rt, EE_LO1_OFFSET, EE_HI1_OFFSET); }
 void armEmitDIV1(u32 rs, u32 rt) { emitDivS(rs, rt, EE_LO1_OFFSET, EE_HI1_OFFSET); }
 void armEmitDIVU1(u32 rs, u32 rt) { emitDivU(rs, rt, EE_LO1_OFFSET, EE_HI1_OFFSET); }
+
+// ------------------------------------------------------------------------
+// Shared multiply-accumulate (MADD/MADDU and their pipeline-1 variants).
+//   temp = (LO.UL | (HI.UL << 32)) + rs*rt        [low 32 bits of LO/HI only]
+//   LO = (s32)(temp & 0xffffffff)  (sign-extended to 64)
+//   HI = (s32)(temp >> 32)         (sign-extended to 64)
+//   if rd != 0: GPR[rd].SD[0] = LO
+// The accumulator's two 32-bit halves don't overlap, so it is reconstructed by
+// adding LO.UL and (HI.UL << 32) onto the product instead of OR-ing them.
+// ------------------------------------------------------------------------
+static void emitMadd(bool sign, u32 rd, u32 rs, u32 rt, u32 lo_off, u32 hi_off)
+{
+	armAsm->Ldr(RSCRATCHW, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rs)));
+	armAsm->Ldr(RSCRATCH2W, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rt)));
+	if (sign)
+		armAsm->Smull(RSCRATCH, RSCRATCHW, RSCRATCH2W);
+	else
+		armAsm->Umull(RSCRATCH, RSCRATCHW, RSCRATCH2W);
+
+	// temp = product + LO.UL[low] + (HI.UL[low] << 32). Ldr-W zero-extends the
+	// 32-bit accumulator halves, matching the interpreter's (u64)UL composition.
+	armAsm->Ldr(RSCRATCH2W, a64::MemOperand(RESTATEPTR, lo_off));
+	armAsm->Add(RSCRATCH, RSCRATCH, RSCRATCH2);
+	armAsm->Ldr(RSCRATCH2W, a64::MemOperand(RESTATEPTR, hi_off));
+	armAsm->Add(RSCRATCH, RSCRATCH, a64::Operand(RSCRATCH2, a64::LSL, 32));
+
+	// LO = sign-extended low 32 of temp (also Rd in the 3-operand form).
+	armAsm->Sxtw(RSCRATCH2, RSCRATCHW);
+	armAsm->Str(RSCRATCH2, a64::MemOperand(RESTATEPTR, lo_off));
+	if (rd != 0)
+		armAsm->Str(RSCRATCH2, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rd)));
+
+	// HI = sign-extended high 32 of temp (asr #32, same as the MULT path).
+	armAsm->Asr(RSCRATCH, RSCRATCH, 32);
+	armAsm->Str(RSCRATCH, a64::MemOperand(RESTATEPTR, hi_off));
+}
+
+void armEmitMADD(u32 rd, u32 rs, u32 rt) { emitMadd(true, rd, rs, rt, EE_LO_OFFSET, EE_HI_OFFSET); }
+void armEmitMADDU(u32 rd, u32 rs, u32 rt) { emitMadd(false, rd, rs, rt, EE_LO_OFFSET, EE_HI_OFFSET); }
+void armEmitMADD1(u32 rd, u32 rs, u32 rt) { emitMadd(true, rd, rs, rt, EE_LO1_OFFSET, EE_HI1_OFFSET); }
+void armEmitMADDU1(u32 rd, u32 rs, u32 rt) { emitMadd(false, rd, rs, rt, EE_LO1_OFFSET, EE_HI1_OFFSET); }
+
+// ------------------------------------------------------------------------
+// MMI pipeline-1 HI/LO moves (the upper doubleword HI.UD[1]/LO.UD[1]).
+//   MFHI1/MFLO1: GPR[rd].UD[0] = HI1/LO1   (rd==0 discarded; upper 64 of rd kept)
+//   MTHI1/MTLO1: HI1/LO1 = GPR[rs].UD[0]   (rs==0 reads zero)
+// ------------------------------------------------------------------------
+void armEmitMFHI1(u32 rd)
+{
+	if (rd == 0)
+		return;
+	armAsm->Ldr(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_HI1_OFFSET));
+	armAsm->Str(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rd)));
+}
+
+void armEmitMFLO1(u32 rd)
+{
+	if (rd == 0)
+		return;
+	armAsm->Ldr(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_LO1_OFFSET));
+	armAsm->Str(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rd)));
+}
+
+void armEmitMTHI1(u32 rs)
+{
+	armAsm->Ldr(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rs)));
+	armAsm->Str(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_HI1_OFFSET));
+}
+
+void armEmitMTLO1(u32 rs)
+{
+	armAsm->Ldr(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_GPR_OFFSET(rs)));
+	armAsm->Str(RSCRATCH, a64::MemOperand(RESTATEPTR, EE_LO1_OFFSET));
+}
