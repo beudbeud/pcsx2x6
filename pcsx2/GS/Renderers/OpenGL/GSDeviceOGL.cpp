@@ -1442,6 +1442,11 @@ bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* o
 	return true;
 }
 
+void GSDeviceOGL::FlushRenderingCommands()
+{
+	glFlush();
+}
+
 GLuint GSDeviceOGL::CreateSampler(PSSamplerSelector sel)
 {
 	GL_PUSH("Create Sampler");

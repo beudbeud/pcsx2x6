@@ -1111,6 +1111,15 @@ static bool HWPresentDMABuf()
 	glBindVertexArray(0);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
+	static bool s_logged_present = false;
+	if (!s_logged_present)
+	{
+		s_logged_present = true;
+		const GLenum err = glGetError();
+		INFO_LOG("HW blit: first present — fbo={} {}x{} glerr=0x{:x}",
+			static_cast<unsigned>(s_hw_render.get_current_framebuffer()), s_blit_w, s_blit_h, static_cast<unsigned>(err));
+	}
+
 	s_video_cb(RETRO_HW_FRAME_BUFFER_VALID, s_blit_w, s_blit_h, 0);
 	return true;
 }

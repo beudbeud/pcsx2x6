@@ -149,6 +149,9 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 				Console.Warning("dmabuf export FAILED on the composited RT; staying on readback.");
 			}
 		}
+		// Submit this frame's StretchRect so the frontend's import sees it (the readback path's
+		// Map used to force this; without it the frontend samples the just-cleared buffer).
+		g_gs_device->FlushRenderingCommands();
 		return;
 	}
 

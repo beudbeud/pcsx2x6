@@ -366,6 +366,7 @@ public:
 	std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) override;
 
 	bool ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) override;
+	void FlushRenderingCommands() override;
 
 	GSTexture* InitPrimDateTexture(GSTexture* rt, const GSVector4i& area, SetDATM datm);
 
