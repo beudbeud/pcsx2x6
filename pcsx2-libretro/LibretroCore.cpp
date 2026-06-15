@@ -136,17 +136,11 @@ namespace LibretroHost
 	// GunCon2 lightguns on USB ports (bit 0 = USB1, bit 1 = USB2)
 	static u32 s_lightgun_mask = 0;
 
-	// rumble state: packed as (large << 16) | small, each 0..65535
-	static std::array<std::atomic<u32>, 8> s_pad_rumble;
-	static bool s_rumble_enabled = true;
-	static retro_rumble_interface s_rumble_interface = {};
-
 	static constexpr u32 SAMPLE_RATE = 48000;
 	static constexpr u32 MAX_AUDIO_FRAMES_PER_RUN = 2048;
 
 	static std::atomic<u32> s_vm_fps_bits{0};
 	static std::atomic<u32> s_audio_sample_rate{SAMPLE_RATE};
-	static bool s_memory_map_sent = false;
 	static std::atomic<u32> s_aspect_bits{0};
 
 	class LibretroAudioStream final : public AudioStream
@@ -658,9 +652,9 @@ void LibretroHost::ReadCoreOptions(bool startup)
 	}
 
 	{
-		// System 246/256 arcade: input is JVS (2 players max), so no multitap and no
-		// DualShock2 stick tuning. Two pads are still configured for the brief window
-		// before the game starts its JVS driver (and so the emulated ports exist).
+		// System 246/256 arcade: input is JVS (2 players max), so no multitap, no
+		// analog sticks and no vibration. Two pads are still configured for the brief
+		// window before the game starts its JVS driver (and so the emulated ports exist).
 		s_settings_interface.SetBoolValue("Pad", "MultitapPort1", false);
 		s_settings_interface.SetBoolValue("Pad", "MultitapPort2", false);
 
@@ -672,12 +666,7 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		{
 			const std::string section = fmt::format("Pad{}", pad + 1);
 			s_settings_interface.SetStringValue(section.c_str(), "Type", "DualShock2");
-			s_settings_interface.SetFloatValue(section.c_str(), "AxisScale", 1.33f);
-			s_settings_interface.SetFloatValue(section.c_str(), "Deadzone", 0.0f);
 		}
-
-		// JVS arcade controls have no vibration.
-		s_rumble_enabled = false;
 	}
 
 	if (startup)
@@ -863,7 +852,6 @@ bool retro_load_game(const struct retro_game_info* game)
 	SettingsOverride();
 
 	SPU2::CustomOutputStreamFactory = &CreateLibretroAudioStream;
-	s_environ_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &s_rumble_interface);
 
 	// Arcade manifest: show the JVS roles in the frontend instead of PS2 pad names.
 	// (The per-game button numbering depends on the fighting layout, so the face
@@ -954,7 +942,6 @@ void retro_unload_game(void)
 
 	s_audio_stream = nullptr;
 	GSSetFramebufferReadback(nullptr, 0, 0);
-	s_memory_map_sent = false;
 }
 
 void retro_reset(void)
@@ -1066,25 +1053,6 @@ static void UpdateInput()
 			const int16_t state = s_input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, retro_id);
 			Pad::SetControllerState(pad, ds2_bind, state ? 1.0f : 0.0f);
 		}
-
-		static constexpr auto axis_value = [](int16_t v, bool negative) {
-			const float f = static_cast<float>(v) / 32767.0f;
-			return negative ? std::max(-f, 0.0f) : std::max(f, 0.0f);
-		};
-
-		const int16_t lx = s_input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
-		const int16_t ly = s_input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
-		const int16_t rx = s_input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
-		const int16_t ry = s_input_state_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
-
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_L_LEFT, axis_value(lx, true));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_L_RIGHT, axis_value(lx, false));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_L_UP, axis_value(ly, true));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_L_DOWN, axis_value(ly, false));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_R_LEFT, axis_value(rx, true));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_R_RIGHT, axis_value(rx, false));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_R_UP, axis_value(ry, true));
-		Pad::SetControllerState(pad, PadDualshock2::Inputs::PAD_R_DOWN, axis_value(ry, false));
 	}
 }
 
@@ -1162,27 +1130,8 @@ void retro_run(void)
 
 	UpdateAVInfoIfChanged();
 
-	if (!s_memory_map_sent && eeMem && s_running.load(std::memory_order_acquire))
-	{
-		static retro_memory_descriptor descs[2];
-		descs[0] = {RETRO_MEMDESC_SYSTEM_RAM, eeMem->Main, 0, 0x00000000u, 0, 0, Ps2MemSize::MainRam, "EE RAM"};
-		descs[1] = {RETRO_MEMDESC_SYSTEM_RAM, eeMem->Scratch, 0, 0x70000000u, 0, 0, sizeof(eeMem->Scratch), "Scratchpad"};
-		retro_memory_map mmap = {descs, 2};
-		s_memory_map_sent = s_environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmap);
-	}
-
 	if (s_running.load(std::memory_order_acquire))
 		UpdateInput();
-
-	if (s_rumble_interface.set_rumble_state)
-	{
-		for (u32 port = 0; port < static_cast<u32>(s_pad_map.size()); port++)
-		{
-			const u32 packed = s_rumble_enabled ? s_pad_rumble[s_pad_map[port]].load(std::memory_order_relaxed) : 0;
-			s_rumble_interface.set_rumble_state(port, RETRO_RUMBLE_STRONG, static_cast<u16>(packed >> 16));
-			s_rumble_interface.set_rumble_state(port, RETRO_RUMBLE_WEAK, static_cast<u16>(packed & 0xFFFF));
-		}
-	}
 
 	if (!s_running.load(std::memory_order_acquire))
 	{
@@ -1314,17 +1263,14 @@ unsigned retro_get_region(void)
 
 void retro_set_controller_port_device(unsigned port, unsigned device) {}
 
+// Arcade core: EE memory is not exposed to the frontend (no achievements/cheats).
 void* retro_get_memory_data(unsigned id)
 {
-	if (id == RETRO_MEMORY_SYSTEM_RAM && eeMem && s_running.load(std::memory_order_acquire))
-		return eeMem->Main;
 	return nullptr;
 }
 
 size_t retro_get_memory_size(unsigned id)
 {
-	if (id == RETRO_MEMORY_SYSTEM_RAM)
-		return Ps2MemSize::MainRam;
 	return 0;
 }
 
