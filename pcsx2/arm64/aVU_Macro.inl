@@ -415,11 +415,20 @@ bool recCOP2_TryMacroFMAC(u32 code)
 			case 0x2c: recCOP2_VSUBA(code);   return true; // SUBA
 			case 0x2d: recCOP2_VMSUBA(code);  return true; // MSUBA
 			case 0x2e: recCOP2_VOPMULA(code); return true; // OPMULA
+			case 0x2f: return true;                        // VNOP — no operation, emit nothing
 			case 0x30: recCOP2_VMOVE(code);   return true; // MOVE (no flags)
 			case 0x31: recCOP2_VMR32(code);   return true; // MR32 (no flags)
 			case 0x38: recCOP2_VDIV(code);    return true; // DIV (Q + status)
 			case 0x39: recCOP2_VSQRT(code);   return true; // SQRT (Q + status)
 			case 0x3a: recCOP2_VRSQRT(code);  return true; // RSQRT (Q + status)
+			case 0x3b: return true;                        // VWAITQ — Q is resolved synchronously
+			                                               // by the CpuVU0 interpreter (DIV/SQRT/RSQRT
+			                                               // write Q immediately, no latency pipeline),
+			                                               // so there is nothing to wait for: the
+			                                               // interpreter body _vuWAITQ() is empty.
+			                                               // Emit nothing instead of an interp call —
+			                                               // VWAITQ is the dominant COP2 fallback in
+			                                               // VU0-macro geometry (after every divide).
 			default: return false;
 		}
 	}
