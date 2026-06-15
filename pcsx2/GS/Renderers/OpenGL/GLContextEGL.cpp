@@ -167,14 +167,25 @@ bool GLContextEGL::ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out)
 {
 	// Zero-copy HW render: wrap the GL texture in an EGLImage and export it as a dmabuf the
 	// libretro frontend context can import. Called on the GS thread (its context is current).
-	if (!GLAD_EGL_MESA_image_dma_buf_export)
-		return false;
-
-	const EGLImageKHR image = eglCreateImage(m_display, eglGetCurrentContext(), EGL_GL_TEXTURE_2D,
-		reinterpret_cast<EGLClientBuffer>(static_cast<uintptr_t>(texture_id)), nullptr);
-	if (image == EGL_NO_IMAGE)
+	// Use the KHR image entry points: V3D's eglGetProcAddress doesn't reliably return the
+	// EGL 1.5 *core* eglCreateImage (calling the null core pointer was the sig=11/pc=nil crash).
+	// Guard every entry point so a missing one logs instead of crashing.
+	if (!GLAD_EGL_KHR_image_base || !GLAD_EGL_MESA_image_dma_buf_export || !eglCreateImageKHR ||
+		!eglDestroyImageKHR || !eglExportDMABUFImageQueryMESA || !eglExportDMABUFImageMESA)
 	{
-		Console.WarningFmt("dmabuf export: eglCreateImage failed (0x{:x})", static_cast<int>(eglGetError()));
+		Console.WarningFmt("dmabuf export: missing entry points (KHR_image={}, MESA_export={}, "
+			"createKHR={}, destroyKHR={}, queryMESA={}, exportMESA={}).",
+			static_cast<bool>(GLAD_EGL_KHR_image_base), static_cast<bool>(GLAD_EGL_MESA_image_dma_buf_export),
+			eglCreateImageKHR != nullptr, eglDestroyImageKHR != nullptr,
+			eglExportDMABUFImageQueryMESA != nullptr, eglExportDMABUFImageMESA != nullptr);
+		return false;
+	}
+
+	const EGLImageKHR image = eglCreateImageKHR(m_display, eglGetCurrentContext(), EGL_GL_TEXTURE_2D_KHR,
+		reinterpret_cast<EGLClientBuffer>(static_cast<uintptr_t>(texture_id)), nullptr);
+	if (image == EGL_NO_IMAGE_KHR)
+	{
+		Console.WarningFmt("dmabuf export: eglCreateImageKHR failed (0x{:x})", static_cast<int>(eglGetError()));
 		return false;
 	}
 
@@ -185,7 +196,7 @@ bool GLContextEGL::ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out)
 	const bool ok = eglExportDMABUFImageQueryMESA(m_display, image, &fourcc, &num_planes, &modifier) &&
 		num_planes == 1 && eglExportDMABUFImageMESA(m_display, image, &fd, &stride, &offset) && fd >= 0;
 
-	eglDestroyImage(m_display, image); // the dmabuf fd keeps the underlying buffer alive
+	eglDestroyImageKHR(m_display, image); // the dmabuf fd keeps the underlying buffer alive
 
 	if (!ok)
 	{
