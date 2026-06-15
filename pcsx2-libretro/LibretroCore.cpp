@@ -397,7 +397,11 @@ bool LibretroHost::InitializeConfig()
 
 void LibretroHost::SettingsOverride()
 {
-	s_settings_interface.SetBoolValue("EmuCore/GS", "FrameLimitEnable", false);
+	// Lock emulation to the game's nominal vsync rate (59.94 NTSC / 50 PAL) via PCSX2's own
+	// frame limiter, so the VM can't outrun real time when the frontend's pacing is loose
+	// (CRT switchres at 59.83/60Hz, vsync off) — that's what produced the >60fps overshoot.
+	// VsyncEnable stays off: the limiter (not host vsync) does the throttling.
+	s_settings_interface.SetBoolValue("EmuCore/GS", "FrameLimitEnable", true);
 	s_settings_interface.SetIntValue("EmuCore/GS", "VsyncEnable", false);
 
 	s_settings_interface.SetBoolValue("InputSources", "SDL", false);
@@ -771,7 +775,9 @@ void LibretroHost::CPUThreadMain()
 			if (VMManager::Initialize(s_boot_params, &vm_error) == VMBootResult::StartupSuccess)
 			{
 				VMManager::SetState(VMState::Running);
-				VMManager::SetLimiterMode(LimiterModeType::Unlimited);
+				// Nominal = throttle to the game's vsync rate (59.94/50). Locks out the >60fps
+				// overshoot; the frontend still gates per-frame via the run-token handshake.
+				VMManager::SetLimiterMode(LimiterModeType::Nominal);
 				while (VMManager::GetState() == VMState::Running && s_running.load(std::memory_order_acquire))
 					VMManager::Execute();
 				VMManager::Shutdown(false);
