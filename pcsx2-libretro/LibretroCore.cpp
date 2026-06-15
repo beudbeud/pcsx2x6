@@ -83,6 +83,14 @@ namespace LibretroHost
 	static retro_input_state_t s_input_state_cb;
 	static retro_log_printf_t s_log_cb;
 
+	// Experimental libretro hardware-render present path (zero-copy). When enabled and
+	// the frontend grants a GLES3 HW context, the GL frame is blitted straight into the
+	// frontend FBO instead of the GPU->CPU readback + swizzle + re-upload. Wired in
+	// stages; see retro_load_game / HWRenderContextReset. Default off -> readback path.
+	static retro_hw_render_callback s_hw_render = {};
+	static bool s_hw_render_requested = false;
+	static std::atomic_bool s_hw_render_active{false};
+
 	// configuration
 	static MemorySettingsInterface s_settings_interface;
 	static std::string s_system_dir;
@@ -494,6 +502,14 @@ void LibretroHost::RegisterCoreOptions()
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", "Enabled (use RT copy)"}, {nullptr, nullptr}},
 			"disabled"},
+		{"pcsx2_hw_render", "Hardware Render (zero-copy, experimental)", nullptr,
+			"EXPERIMENTAL: present the GL frame directly through the libretro hardware-render context "
+			"instead of the GPU->CPU readback path. Removes the per-frame readback stall + CPU swizzle "
+			"+ re-upload that bottleneck the GS thread on weak GPUs (e.g. RPi5/V3D). Requires a restart. "
+			"OpenGL renderer only; falls back to readback if the frontend has no GLES3 HW context.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"enabled", "Enabled (experimental)"}, {nullptr, nullptr}},
+			"disabled"},
 		{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr, nullptr}}, nullptr},
 	};
 
@@ -833,6 +849,57 @@ void retro_deinit(void)
 	}
 }
 
+// Reads a core option from anywhere (the ReadCoreOptions lambda is local to it).
+static const char* GetCoreOption(const char* key, const char* fallback)
+{
+	retro_variable var{key, nullptr};
+	if (s_environ_cb && s_environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+		return var.value;
+	return fallback;
+}
+
+// libretro HW render callbacks. Invoked on the FRONTEND thread with the libretro
+// GLES3 context current — this is where the zero-copy present resources live (and,
+// later, where the frontend EGL context is captured to share with the GS context).
+static void HWRenderContextReset()
+{
+	INFO_LOG("HW render: context reset — libretro GLES3 context is current on the frontend thread.");
+	s_hw_render_active.store(true, std::memory_order_release);
+}
+
+static void HWRenderContextDestroy()
+{
+	INFO_LOG("HW render: context destroy.");
+	s_hw_render_active.store(false, std::memory_order_release);
+}
+
+// Negotiate a libretro GLES3 hardware-render context when pcsx2_hw_render is enabled.
+// Stage 1 only establishes the context (verified via the context-reset log); the frame
+// is still presented through the readback path until the blit path is wired.
+static void TryInitHWRender()
+{
+	s_hw_render_requested = (std::strcmp(GetCoreOption("pcsx2_hw_render", "disabled"), "enabled") == 0);
+	if (!s_hw_render_requested)
+		return;
+
+	s_hw_render = {};
+	s_hw_render.context_type = RETRO_HW_CONTEXT_OPENGLES3;
+	s_hw_render.context_reset = &HWRenderContextReset;
+	s_hw_render.context_destroy = &HWRenderContextDestroy;
+	s_hw_render.bottom_left_origin = true; // GL framebuffers are bottom-left origin
+	s_hw_render.depth = false;
+	s_hw_render.stencil = false;
+	s_hw_render.cache_context = true;
+
+	if (!s_environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER, &s_hw_render))
+	{
+		Console.Warning("HW render: frontend rejected the GLES3 HW context; falling back to readback.");
+		s_hw_render_requested = false;
+		return;
+	}
+	INFO_LOG("HW render: GLES3 HW context requested (experimental, stage 1).");
+}
+
 bool retro_load_game(const struct retro_game_info* game)
 {
 	if (!game || !game->path)
@@ -850,6 +917,10 @@ bool retro_load_game(const struct retro_game_info* game)
 
 	ReadCoreOptions(true);
 	SettingsOverride();
+
+	// Experimental zero-copy present: must be negotiated before the frontend brings up
+	// video. No-op (readback path) unless pcsx2_hw_render is enabled.
+	TryInitHWRender();
 
 	SPU2::CustomOutputStreamFactory = &CreateLibretroAudioStream;
 
