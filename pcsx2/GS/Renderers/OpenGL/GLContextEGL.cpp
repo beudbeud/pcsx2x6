@@ -137,6 +137,19 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 	if (!LoadGLADEGL(m_display, error))
 		return false;
 
+	// Zero-copy HW render feasibility probe (one driver = V3D, so this display's support is
+	// representative of the frontend's). dmabuf export of the GS render target + import on
+	// the frontend context is the route that avoids both the dual-EGLDisplay/KMS conflict
+	// and the mid-frame EE<->GS sync deadlock. Export side: EGL_MESA_image_dma_buf_export;
+	// import side: EGL_EXT_image_dma_buf_import (+ GL_OES_EGL_image, checked once GL loads).
+	{
+		const char* dpy_ext = eglQueryString(m_display, EGL_EXTENSIONS);
+		const bool has_export = dpy_ext && std::strstr(dpy_ext, "EGL_MESA_image_dma_buf_export");
+		const bool has_import = dpy_ext && std::strstr(dpy_ext, "EGL_EXT_image_dma_buf_import");
+		Console.WriteLnFmt("dmabuf probe: EGL_MESA_image_dma_buf_export={}, EGL_EXT_image_dma_buf_import={}",
+			has_export ? "yes" : "NO", has_import ? "yes" : "NO");
+	}
+
 	if (!GLAD_EGL_KHR_surfaceless_context)
 		Console.Warning("EGL implementation does not support surfaceless contexts, emulating with pbuffers");
 
