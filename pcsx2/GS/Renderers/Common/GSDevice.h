@@ -1642,8 +1642,9 @@ public:
 	// the GL backend. Returns false if unsupported (all non-OGL backends).
 	virtual bool ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) { return false; }
 
-	// Submit pending GL commands (glFlush) so a dmabuf consumer in another context/thread sees
-	// the rendering once the kernel's implicit fence resolves. No-op on non-OGL backends.
+	// Finish pending GL commands so a dmabuf consumer on another context/display sees a fully
+	// rendered frame (implicit fencing isn't reliable across displays -> tearing). No-op on
+	// non-OGL backends.
 	virtual void FlushRenderingCommands() {}
 
 	virtual void CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, u32 destX, u32 destY) = 0;

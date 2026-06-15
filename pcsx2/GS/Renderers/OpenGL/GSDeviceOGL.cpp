@@ -1444,7 +1444,10 @@ bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, int* fd, u32* stride, u32* o
 
 void GSDeviceOGL::FlushRenderingCommands()
 {
-	glFlush();
+	// glFinish (not glFlush): the dmabuf consumer is on a separate EGLDisplay where implicit
+	// fencing doesn't reliably order against our render, causing tearing. Wait for the GPU to
+	// finish the frame before the frontend samples it. Cheap here — the V3D GPU sits near 0%.
+	glFinish();
 }
 
 GLuint GSDeviceOGL::CreateSampler(PSSamplerSelector sel)
