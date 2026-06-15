@@ -46,6 +46,7 @@
 #include "pcsx2/Achievements.h"
 #include "pcsx2/Config.h"
 #include "pcsx2/GS/GS.h"
+#include "pcsx2/GS/Renderers/OpenGL/GLContextEGL.h" // zero-copy HW render: adopt frontend EGL ctx
 #include "pcsx2/Host/AudioStream.h"
 #include "pcsx2/Host/AudioStreamTypes.h"
 #include "pcsx2/SIO/Pad/PadDualshock2.h"
@@ -864,12 +865,16 @@ static const char* GetCoreOption(const char* key, const char* fallback)
 static void HWRenderContextReset()
 {
 	INFO_LOG("HW render: context reset — libretro GLES3 context is current on the frontend thread.");
+	// Capture the frontend's EGL display + context so the GS root context (created later,
+	// when the VM boots GSopen on the CPU/MTGS thread) shares it for zero-copy present.
+	GLContextEGL::AdoptExternalCurrentContext();
 	s_hw_render_active.store(true, std::memory_order_release);
 }
 
 static void HWRenderContextDestroy()
 {
 	INFO_LOG("HW render: context destroy.");
+	GLContextEGL::ClearExternalContext();
 	s_hw_render_active.store(false, std::memory_order_release);
 }
 

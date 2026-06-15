@@ -100,6 +100,37 @@ GLContextEGL::~GLContextEGL()
 	UnloadEGL();
 }
 
+// libretro zero-copy HW render: the frontend's EGL display + context, captured on the
+// frontend thread so the GS's root context can adopt the display and share its objects.
+static EGLDisplay s_external_display = EGL_NO_DISPLAY;
+static EGLContext s_external_share = EGL_NO_CONTEXT;
+
+void GLContextEGL::AdoptExternalCurrentContext()
+{
+	// Runs on the frontend thread inside context_reset, BEFORE the GS opens — our glad
+	// EGL pointers aren't loaded yet, so load the display-independent ones first.
+	if (!LoadGLADEGL(EGL_NO_DISPLAY, nullptr))
+	{
+		Console.Warning("GLContextEGL: could not load EGL to adopt the frontend HW context.");
+		return;
+	}
+	s_external_display = eglGetCurrentDisplay();
+	s_external_share = eglGetCurrentContext();
+	Console.WriteLnFmt("GLContextEGL: adopted frontend HW context (display={}, context={})",
+		s_external_display, s_external_share);
+}
+
+void GLContextEGL::ClearExternalContext()
+{
+	s_external_display = EGL_NO_DISPLAY;
+	s_external_share = EGL_NO_CONTEXT;
+}
+
+bool GLContextEGL::HasExternalContext()
+{
+	return s_external_share != EGL_NO_CONTEXT;
+}
+
 std::unique_ptr<GLContext> GLContextEGL::Create(const WindowInfo& wi, std::span<const Version> versions_to_try,
 	Error* error)
 {
@@ -115,7 +146,19 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 	if (!LoadGLADEGL(EGL_NO_DISPLAY, error))
 		return false;
 
-	m_display = GetPlatformDisplay(error);
+	// Zero-copy HW render: if the frontend's display was adopted, create the GS context on
+	// THAT display so it can share objects with the frontend's HW context (see below). The
+	// display is owned by the frontend — never terminate it.
+	if (s_external_display != EGL_NO_DISPLAY)
+	{
+		m_display = s_external_display;
+		m_owns_display = false;
+		Console.WriteLnFmt("GLContextEGL: using adopted frontend EGL display {}", m_display);
+	}
+	else
+	{
+		m_display = GetPlatformDisplay(error);
+	}
 	if (m_display == EGL_NO_DISPLAY)
 		return false;
 
@@ -140,9 +183,11 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 	if (!GLAD_EGL_KHR_surfaceless_context)
 		Console.Warning("EGL implementation does not support surfaceless contexts, emulating with pbuffers");
 
+	// Share with the frontend's HW context when adopted (s_external_share is EGL_NO_CONTEXT
+	// otherwise, i.e. identical to the previous nullptr — normal standalone behaviour).
 	for (const Version& cv : versions_to_try)
 	{
-		if (CreateContextAndSurface(cv, nullptr, true))
+		if (CreateContextAndSurface(cv, s_external_share, true))
 			return true;
 	}
 

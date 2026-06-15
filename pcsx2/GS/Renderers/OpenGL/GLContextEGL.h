@@ -17,6 +17,14 @@ public:
 
 	static std::unique_ptr<GLContext> Create(const WindowInfo& wi, std::span<const Version> versions_to_try, Error* error);
 
+	// libretro zero-copy HW render: capture the frontend's CURRENT EGL display + context
+	// (call on the frontend thread inside the HW context_reset). The next GS GLContextEGL
+	// created will adopt that display and share its objects, so the GS render target is
+	// directly sampleable by the frontend. ClearExternalContext() reverts to normal.
+	static void AdoptExternalCurrentContext();
+	static void ClearExternalContext();
+	static bool HasExternalContext();
+
 	void* GetProcAddress(const char* name) override;
 	virtual bool ChangeSurface(const WindowInfo& new_wi) override;
 	virtual void ResizeSurface(u32 new_surface_width = 0, u32 new_surface_height = 0) override;
@@ -50,6 +58,9 @@ protected:
 	EGLDisplay m_display = EGL_NO_DISPLAY;
 	EGLSurface m_surface = EGL_NO_SURFACE;
 	EGLContext m_context = EGL_NO_CONTEXT;
+
+	// When true, m_display is the frontend's (adopted) display — do not eglTerminate it.
+	bool m_owns_display = true;
 
 	EGLConfig m_config = {};
 
