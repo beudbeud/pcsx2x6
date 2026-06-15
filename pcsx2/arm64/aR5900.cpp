@@ -2116,6 +2116,18 @@ static bool recTranslateOp(u32 op)
 		case OP_LWC1: armEmitLWC1(rt, rs, imm); return true;
 		case OP_SWC1: armEmitSWC1(rt, rs, imm); return true;
 
+		// CACHE — EE cache management. The recompiler does not emulate the EE cache
+		// (EnableEECache is an interpreter-only accuracy option, default off; the x86
+		// rec's recCACHE is likewise a pure no-op). So unless cache emulation is
+		// enabled, compile CACHE as a native no-op instead of an interpreter call —
+		// it is the single hottest EE fallback in these arcade titles (steady-state
+		// ~0.5M/interval). When CHECK_CACHE is on, fall back so the interpreter can
+		// run the real cache ops.
+		case 0x2F:
+			if (CHECK_CACHE)
+				return false;
+			return true;
+
 		// PREF — data prefetch hint. The interpreter handler is empty, so compile it
 		// as a native no-op (keeps the block intact instead of single-stepping it;
 		// PREF is one of the hottest fallbacks in 3D titles).
