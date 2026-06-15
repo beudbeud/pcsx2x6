@@ -946,8 +946,34 @@ bool GSDeviceOGL::CheckFeatures()
 			Console.WriteLn("GLES: GL_EXT_clip_control available — depth precision OK.");
 		else
 			Console.Warning("GLES: GL_EXT_clip_control not available — depth precision reduced.");
+
+		// HW colclip needs the ColorClip render target (GL_RGBA16) to be COLOR-renderable.
+		// On v3d, 16-bit normalised formats only became color-renderable in Mesa 25.3; on
+		// older drivers the FBO is incomplete and the colclip draw is aborted. m_features
+		// defaults color_clip to true (desktop GL always supports it), so probe it on GLES
+		// with a throwaway FBO — the portable check, since GL_FRAMEBUFFER_RENDERABLE is not
+		// in GLES core — and fall back to shader-only SW colclip if unsupported, mirroring
+		// the Vulkan backend's VkFormatProperties check. Runs before GLState::Clear() and
+		// before the device FBOs exist, so the temporary binding is safe.
+		GLuint cc_tex = 0, cc_fbo = 0;
+		glGenTextures(1, &cc_tex);
+		glBindTexture(GL_TEXTURE_2D, cc_tex);
+		glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16, 1, 1);
+		glGenFramebuffers(1, &cc_fbo);
+		glBindFramebuffer(GL_FRAMEBUFFER, cc_fbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, cc_tex, 0);
+		m_features.color_clip = (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glDeleteFramebuffers(1, &cc_fbo);
+		glDeleteTextures(1, &cc_tex);
+		while (glGetError() != GL_NO_ERROR) {} // drain probe errors (unsupported format on old drivers)
+		if (m_features.color_clip)
+			Console.WriteLn("GLES: ColorClip RT (GL_RGBA16) is renderable — HW colclip enabled.");
+		else
+			Console.Warning("GLES: ColorClip RT (GL_RGBA16) not color-renderable (needs Mesa >= 25.3 on v3d) — HW colclip disabled, using SW colclip.");
 	}
-	
+
 	m_features.aa1 = GSConfig.HWAA1 && m_features.vs_expand && m_features.feedback_loops();
 
 	if (GSConfig.HWROV)
