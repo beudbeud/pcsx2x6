@@ -6,6 +6,7 @@
 #include "CDVD/CDVD_internal.h"
 #include "CDVD/IsoReader.h"
 #include "CDVD/IsoFileFormats.h"
+#include "DEV9/ACATA.h"
 #include "GS.h"
 #include "SIO/Sio.h"
 #include "Elfheader.h"
@@ -449,6 +450,24 @@ bool cdvdLoadElf(ElfObject* elfo, const std::string_view elfpath, bool isPSXElf,
 			return false;
 
 		return cdvdLoadDiscElf(elfo, isor, elfpath, isPSXElf, error);
+	}
+	else if (elfpath.starts_with("ac0:"))
+	{
+		// Arcade media ELF: the disc/HDD image is already open through ACATA
+		// (the System 246/256 ATA interface). Read its ISO9660 filesystem
+		// directly off that image rather than re-mounting it as a CDVD Iso
+		// source — CDVD auto-detection mis-reads the geometry of the arcade
+		// media and truncates the disc, breaking the file read.
+		if (ACATA::imgpath.empty())
+		{
+			Error::SetString(error, fmt::format("cdvdLoadElf(): ac0: path '{}' but no arcade media configured", elfpath));
+			return false;
+		}
+		IsoReader isor;
+		if (!isor.Open(&ACATA::ReadIsoSector, error))
+			return false;
+		const std::string cdrom_path = fmt::format("cdrom0:\\{}", elfpath.substr(4));
+		return cdvdLoadDiscElf(elfo, isor, cdrom_path, isPSXElf, error);
 	}
 	else
 	{
