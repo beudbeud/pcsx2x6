@@ -140,9 +140,16 @@ public:
 
 	const ISOPrimaryVolumeDescriptor& GetPVD() const { return m_pvd; }
 
+	// Optional sector source: reads one 2048-byte logical sector into buf for the
+	// given LSN, returning true on success. When supplied to Open(), it replaces
+	// the default global-CDVD read path (used by the arcade ac0: loader to read
+	// straight off the open ACATA media image).
+	using SectorReader = bool (*)(u8* buf, u32 lsn);
+
 	// TODO: Eventually we'll want to pass a handle to the currently-open file here.
 	// ... once I have the energy to make CDVD not depend on a global object.
 	bool Open(Error* error = nullptr);
+	bool Open(SectorReader reader, Error* error = nullptr);
 
 	std::vector<std::string> GetFilesInDirectory(const std::string_view path, Error* error = nullptr);
 
@@ -163,4 +170,5 @@ private:
 		u32 directory_record_lba, u32 directory_record_size, Error* error);
 
 	ISOPrimaryVolumeDescriptor m_pvd = {};
+	SectorReader m_sector_reader = nullptr;
 };

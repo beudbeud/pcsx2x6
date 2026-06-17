@@ -31,8 +31,25 @@ bool IsoReader::Open(Error* error)
 	return true;
 }
 
+bool IsoReader::Open(SectorReader reader, Error* error)
+{
+	m_sector_reader = reader;
+	return Open(error);
+}
+
 bool IsoReader::ReadSector(u8* buf, u32 lsn, Error* error)
 {
+	if (m_sector_reader)
+	{
+		if (!m_sector_reader(buf, lsn))
+		{
+			Error::SetString(error, fmt::format("Failed to read sector LSN #{}", lsn));
+			return false;
+		}
+
+		return true;
+	}
+
 	if (DoCDVDreadSector(buf, lsn, CDVD_MODE_2048) != 0)
 	{
 		Error::SetString(error, fmt::format("Failed to read sector LSN #{}", lsn));
