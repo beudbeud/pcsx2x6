@@ -79,9 +79,7 @@ static constexpr VkClearValue s_present_clear_color = {{{0.0f, 0.0f, 0.0f, 1.0f}
 static std::mutex s_instance_mutex;
 
 // Device extensions that are required for PCSX2.
-static constexpr const char* s_required_device_extensions[] = {
-	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-};
+static constexpr const char* s_required_device_extensions[] = {};
 
 GSDeviceVK::GSDeviceVK()
 {
@@ -445,6 +443,7 @@ bool GSDeviceVK::SelectDeviceExtensions(ExtensionList* extension_list, bool enab
 #endif
 
 	m_optional_extensions.vk_ext_fragment_shader_interlock = SupportsExtension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, false);
+	m_optional_extensions.vk_khr_push_descriptor = SupportsExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, false);
 
 	return true;
 }
@@ -771,17 +770,19 @@ bool GSDeviceVK::ProcessDeviceExtensions()
 
 	VkPhysicalDevicePushDescriptorPropertiesKHR push_descriptor_properties = {
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
-	Vulkan::AddPointerToChain(&properties2, &push_descriptor_properties);
+	if (m_optional_extensions.vk_khr_push_descriptor)
+		Vulkan::AddPointerToChain(&properties2, &push_descriptor_properties);
 
 	// query
 	vkGetPhysicalDeviceProperties2(m_physical_device, &properties2);
 
-	// confirm we actually support it
-	if (push_descriptor_properties.maxPushDescriptors < NUM_TFX_TEXTURES)
+	// confirm push_descriptor has enough slots; if not, fall back to transient descriptor sets
+	if (m_optional_extensions.vk_khr_push_descriptor &&
+		push_descriptor_properties.maxPushDescriptors < NUM_TFX_TEXTURES)
 	{
-		Console.Error("VK: maxPushDescriptors (%u) is below required (%u)", push_descriptor_properties.maxPushDescriptors,
-			NUM_TFX_TEXTURES);
-		return false;
+		Console.Warning("VK: maxPushDescriptors (%u) < required (%u), disabling push descriptors",
+			push_descriptor_properties.maxPushDescriptors, NUM_TFX_TEXTURES);
+		m_optional_extensions.vk_khr_push_descriptor = false;
 	}
 
 	if (m_optional_extensions.vk_ext_line_rasterization && !line_rasterization_feature.bresenhamLines)
@@ -957,6 +958,30 @@ bool GSDeviceVK::CreateCommandBuffers()
 			return false;
 		}
 		Vulkan::SetObjectName(m_device, resources.fence, "Frame Fence %u", frame_index);
+
+		if (!m_optional_extensions.vk_khr_push_descriptor)
+		{
+			// Fallback path: allocate a per-frame pool for transient descriptor sets.
+			// The pool is reset at the start of each frame instead of freeing individual sets.
+			static constexpr VkDescriptorPoolSize transient_pool_sizes[] = {
+				{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_DRAW_CALLS_PER_FRAME + 32},
+				{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, MAX_DRAW_CALLS_PER_FRAME * 4 + 32},
+				{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_DRAW_CALLS_PER_FRAME * 2 + 32},
+				{VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, MAX_DRAW_CALLS_PER_FRAME * 2},
+			};
+			VkDescriptorPoolCreateInfo pool_ci = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0,
+				MAX_DESCRIPTOR_SETS_PER_FRAME, static_cast<u32>(std::size(transient_pool_sizes)),
+				transient_pool_sizes};
+			res = vkCreateDescriptorPool(m_device, &pool_ci, nullptr, &resources.transient_descriptor_pool);
+			if (res != VK_SUCCESS)
+			{
+				LOG_VULKAN_ERROR(res, "vkCreateDescriptorPool (transient) failed: ");
+				return false;
+			}
+			Vulkan::SetObjectName(m_device, resources.transient_descriptor_pool,
+				"Frame Transient Descriptor Pool %u", frame_index);
+		}
+
 		++frame_index;
 	}
 
@@ -1083,6 +1108,23 @@ VkDescriptorSet GSDeviceVK::AllocatePersistentDescriptorSet(VkDescriptorSetLayou
 void GSDeviceVK::FreePersistentDescriptorSet(VkDescriptorSet set)
 {
 	vkFreeDescriptorSets(m_device, m_global_descriptor_pool, 1, &set);
+}
+
+VkDescriptorSet GSDeviceVK::AllocateTransientDescriptorSet(VkDescriptorSetLayout layout)
+{
+	VkDescriptorPool pool = m_frame_resources[m_current_frame].transient_descriptor_pool;
+	if (pool == VK_NULL_HANDLE)
+		return VK_NULL_HANDLE;
+
+	VkDescriptorSetAllocateInfo ai = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr, pool, 1, &layout};
+	VkDescriptorSet set;
+	VkResult res = vkAllocateDescriptorSets(m_device, &ai, &set);
+	if (res != VK_SUCCESS)
+	{
+		LOG_VULKAN_ERROR(res, "vkAllocateDescriptorSets (transient) failed: ");
+		return VK_NULL_HANDLE;
+	}
+	return set;
 }
 
 void GSDeviceVK::WaitForFenceCounter(u64 fence_counter)
@@ -1388,6 +1430,13 @@ void GSDeviceVK::ActivateCommandBuffer(u32 index)
 	res = vkResetCommandPool(m_device, resources.command_pool, 0);
 	if (res != VK_SUCCESS)
 		LOG_VULKAN_ERROR(res, "vkResetCommandPool failed: ");
+
+	if (resources.transient_descriptor_pool != VK_NULL_HANDLE)
+	{
+		res = vkResetDescriptorPool(m_device, resources.transient_descriptor_pool, 0);
+		if (res != VK_SUCCESS)
+			LOG_VULKAN_ERROR(res, "vkResetDescriptorPool (transient) failed: ");
+	}
 
 	// Enable commands to be recorded to the two buffers again.
 	VkCommandBufferBeginInfo begin_info = {
@@ -2360,9 +2409,12 @@ GSDevice::PresentResult GSDeviceVK::BeginPresent(bool frame_skip)
 	if (frame_skip)
 		return PresentResult::FrameSkipped;
 
-	// If we're running surfaceless, kick the command buffer so we don't run out of descriptors.
+	// If we're running surfaceless (libretro), transition current texture to ShaderReadOnly
+	// so PerformFramebufferReadback() can StretchRect from it, then submit the command buffer.
 	if (!m_swap_chain)
 	{
+		if (m_current)
+			static_cast<GSTextureVK*>(m_current)->TransitionToLayout(GSTextureVK::Layout::ShaderReadOnly);
 		ExecuteCommandBuffer(false);
 		return PresentResult::FrameSkipped;
 	}
@@ -2736,6 +2788,7 @@ bool GSDeviceVK::CheckFeatures()
 		m_features.line_expand ? "hardware" : "vertex expanding");
 
 	// Check texture format support before we try to create them.
+	m_features.color_clip = false; // Will be set true below only if ColorClip is renderable.
 	for (u32 fmt = static_cast<u32>(GSTexture::Format::Color); fmt < static_cast<u32>(GSTexture::Format::PrimID); fmt++)
 	{
 		const VkFormat vkfmt = LookupNativeFormat(static_cast<GSTexture::Format>(fmt));
@@ -2748,11 +2801,21 @@ bool GSDeviceVK::CheckFeatures()
 		vkGetPhysicalDeviceFormatProperties(m_physical_device, vkfmt, &props);
 		if ((props.optimalTilingFeatures & bits) != bits)
 		{
+			if (static_cast<GSTexture::Format>(fmt) == GSTexture::Format::ColorClip)
+			{
+				// Non-fatal: R16G16B16A16_UNORM is not a mandatory render target format.
+				// HW colclip emulation will be disabled; games using COLCLAMP=OFF may have minor color errors.
+				Console.Warning("VK: ColorClip format (R16G16B16A16_UNORM) is not renderable on this GPU, "
+					"disabling HW colclip. (has:0x%x, needs:0x%x)", props.optimalTilingFeatures, bits);
+				continue;
+			}
 			Host::ReportFormattedErrorAsync("VK: Renderer Unavailable",
 				"Required format %u is missing bits, you may need to update your driver. (vk:%u, has:0x%x, needs:0x%x)",
 				fmt, static_cast<unsigned>(vkfmt), props.optimalTilingFeatures, bits);
 			return false;
 		}
+		if (static_cast<GSTexture::Format>(fmt) == GSTexture::Format::ColorClip)
+			m_features.color_clip = true;
 	}
 
 	m_features.dxt_textures = m_device_features.textureCompressionBC;
@@ -3902,7 +3965,8 @@ bool GSDeviceVK::CreatePipelineLayouts()
 	// Convert Pipeline Layout
 	//////////////////////////////////////////////////////////////////////////
 
-	dslb.SetPushFlag();
+	if (m_optional_extensions.vk_khr_push_descriptor)
+		dslb.SetPushFlag();
 	dslb.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, NUM_UTILITY_SAMPLERS, VK_SHADER_STAGE_FRAGMENT_BIT);
 	if ((m_utility_ds_layout = dslb.Create(dev)) == VK_NULL_HANDLE)
 		return false;
@@ -3931,7 +3995,8 @@ bool GSDeviceVK::CreatePipelineLayouts()
 		return false;
 	Vulkan::SetObjectName(dev, m_tfx_ubo_ds_layout, "TFX UBO descriptor layout");
 
-	dslb.SetPushFlag();
+	if (m_optional_extensions.vk_khr_push_descriptor)
+		dslb.SetPushFlag();
 	dslb.AddBinding(TFX_TEXTURE_TEXTURE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
 	dslb.AddBinding(TFX_TEXTURE_PALETTE, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
 	dslb.AddBinding(TFX_TEXTURE_RT,
@@ -3999,7 +4064,7 @@ bool GSDeviceVK::CreateRenderPasses()
 								for (u32 opb = VK_ATTACHMENT_LOAD_OP_LOAD; opb <= VK_ATTACHMENT_LOAD_OP_DONT_CARE; opb++)
 								{
 									const VkFormat rp_rt_format =
-										(rt != 0) ? ((colclip != 0) ? colclip_rt_format : rt_format) : VK_FORMAT_UNDEFINED;
+										(rt != 0) ? ((colclip != 0 && m_features.color_clip) ? colclip_rt_format : rt_format) : VK_FORMAT_UNDEFINED;
 									const VkFormat rp_depth_format = (ds != 0) ? depth_format : VK_FORMAT_UNDEFINED;
 									const VkAttachmentLoadOp opc = (!stencil || !m_features.stencil_buffer) ?
 									                                   VK_ATTACHMENT_LOAD_OP_DONT_CARE :
@@ -4460,7 +4525,8 @@ bool GSDeviceVK::CompileCASPipelines()
 	Vulkan::DescriptorSetLayoutBuilder dslb;
 	Vulkan::PipelineLayoutBuilder plb;
 
-	dslb.SetPushFlag();
+	if (m_optional_extensions.vk_khr_push_descriptor)
+		dslb.SetPushFlag();
 	dslb.AddBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
 	dslb.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
 	if ((m_cas_ds_layout = dslb.Create(dev)) == VK_NULL_HANDLE)
@@ -4668,7 +4734,11 @@ bool GSDeviceVK::DoCAS(
 	Vulkan::DescriptorSetUpdateBuilder dsub;
 	dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, 0, sTexVK->GetView(), sTexVK->GetVkLayout());
 	dsub.AddStorageImageDescriptorWrite(VK_NULL_HANDLE, 1, dTexVK->GetView(), dTexVK->GetVkLayout());
-	dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, m_cas_pipeline_layout, 0, false);
+	if (m_optional_extensions.vk_khr_push_descriptor)
+		dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, m_cas_pipeline_layout, 0, false);
+	else
+		dsub.UpdateAndBind(m_device, AllocateTransientDescriptorSet(m_cas_ds_layout), cmdbuf,
+			VK_PIPELINE_BIND_POINT_COMPUTE, m_cas_pipeline_layout, 0);
 
 	// the actual meat and potatoes! only four commands.
 	static const int threadGroupWorkRegionDim = 16;
@@ -4796,6 +4866,8 @@ void GSDeviceVK::DestroyResources()
 			it();
 		resources.cleanup_resources.clear();
 
+		if (resources.transient_descriptor_pool != VK_NULL_HANDLE)
+			vkDestroyDescriptorPool(m_device, resources.transient_descriptor_pool, nullptr);
 		if (resources.fence != VK_NULL_HANDLE)
 			vkDestroyFence(m_device, resources.fence, nullptr);
 		if (resources.command_buffers[0] != VK_NULL_HANDLE)
@@ -5717,7 +5789,46 @@ bool GSDeviceVK::ApplyTFXState(bool already_execed)
 				m_tfx_textures[TFX_TEXTURE_DEPTH_ROV]->GetVkLayout(), true);
 		}
 
-		dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tfx_pipeline_layout, TFX_DESCRIPTOR_SET_TEXTURES);
+		if (m_optional_extensions.vk_khr_push_descriptor)
+		{
+			dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tfx_pipeline_layout, TFX_DESCRIPTOR_SET_TEXTURES);
+		}
+		else
+		{
+			// Fallback: allocated sets start undefined, so write all bindings from current state.
+			VkDescriptorSet ds = AllocateTransientDescriptorSet(m_tfx_texture_ds_layout);
+			if (ds != VK_NULL_HANDLE)
+			{
+				Vulkan::DescriptorSetUpdateBuilder full_dsub;
+				full_dsub.AddCombinedImageSamplerDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_TEXTURE,
+					m_tfx_textures[TFX_TEXTURE_TEXTURE]->GetView(), m_tfx_sampler,
+					m_tfx_textures[TFX_TEXTURE_TEXTURE]->GetVkLayout());
+				full_dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_PALETTE,
+					m_tfx_textures[TFX_TEXTURE_PALETTE]->GetView(), m_tfx_textures[TFX_TEXTURE_PALETTE]->GetVkLayout());
+				if (m_features.texture_barrier && !UseFeedbackLoopLayout())
+				{
+					full_dsub.AddInputAttachmentDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_RT,
+						m_tfx_textures[TFX_TEXTURE_RT]->GetView(), VK_IMAGE_LAYOUT_GENERAL);
+					full_dsub.AddInputAttachmentDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_DEPTH,
+						m_tfx_textures[TFX_TEXTURE_DEPTH]->GetView(), VK_IMAGE_LAYOUT_GENERAL);
+				}
+				else
+				{
+					full_dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_RT,
+						m_tfx_textures[TFX_TEXTURE_RT]->GetView(), m_tfx_textures[TFX_TEXTURE_RT]->GetVkLayout());
+					full_dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_DEPTH,
+						m_tfx_textures[TFX_TEXTURE_DEPTH]->GetView(), m_tfx_textures[TFX_TEXTURE_DEPTH]->GetVkLayout());
+				}
+				full_dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_PRIMID,
+					m_tfx_textures[TFX_TEXTURE_PRIMID]->GetView(), m_tfx_textures[TFX_TEXTURE_PRIMID]->GetVkLayout());
+				full_dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_RT_ROV,
+					m_tfx_textures[TFX_TEXTURE_RT_ROV]->GetView(), m_tfx_textures[TFX_TEXTURE_RT_ROV]->GetVkLayout(), true);
+				full_dsub.AddImageDescriptorWrite(VK_NULL_HANDLE, TFX_TEXTURE_DEPTH_ROV,
+					m_tfx_textures[TFX_TEXTURE_DEPTH_ROV]->GetView(), m_tfx_textures[TFX_TEXTURE_DEPTH_ROV]->GetVkLayout(), true);
+				full_dsub.UpdateAndBind(m_device, ds, cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS,
+					m_tfx_pipeline_layout, TFX_DESCRIPTOR_SET_TEXTURES);
+			}
+		}
 	}
 
 	ApplyBaseState(flags, cmdbuf);
@@ -5740,7 +5851,11 @@ bool GSDeviceVK::ApplyUtilityState(bool already_execed)
 		Vulkan::DescriptorSetUpdateBuilder dsub;
 		dsub.AddCombinedImageSamplerDescriptorWrite(
 			VK_NULL_HANDLE, 0, m_utility_texture->GetView(), m_utility_sampler, m_utility_texture->GetVkLayout());
-		dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_utility_pipeline_layout, 0, false);
+		if (m_optional_extensions.vk_khr_push_descriptor)
+			dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_utility_pipeline_layout, 0, false);
+		else
+			dsub.UpdateAndBind(m_device, AllocateTransientDescriptorSet(m_utility_ds_layout), cmdbuf,
+				VK_PIPELINE_BIND_POINT_GRAPHICS, m_utility_pipeline_layout, 0);
 	}
 
 

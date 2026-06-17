@@ -239,6 +239,8 @@ namespace Vulkan
 		void Update(VkDevice device, bool clear = true);
 		void PushUpdate(VkCommandBuffer cmdbuf, VkPipelineBindPoint bind_point, VkPipelineLayout layout, u32 set,
 			bool clear = true);
+		void UpdateAndBind(VkDevice device, VkDescriptorSet set, VkCommandBuffer cmdbuf,
+			VkPipelineBindPoint bind_point, VkPipelineLayout layout, u32 set_index, bool clear = true);
 
 		void AddImageDescriptorWrite(VkDescriptorSet set, u32 binding, VkImageView view,
 			VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, bool storage_image = false);
