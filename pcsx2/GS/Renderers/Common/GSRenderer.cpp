@@ -15,6 +15,7 @@
 #include "pcsx2/Config.h"
 #include "VMManager.h"
 
+#include "common/Console.h"
 #include "common/FileSystem.h"
 #include "common/Image.h"
 #include "common/Path.h"
@@ -40,6 +41,212 @@ static constexpr std::array<PresentShader, 8> s_tv_shader_indices = {
 
 static std::deque<std::thread> s_screenshot_threads;
 static std::mutex s_screenshot_threads_mutex;
+
+// Framebuffer readback (for libretro / headless frontends)
+static GSFramebufferReadbackCallback s_fb_readback_cb = nullptr;
+static std::atomic<u64> s_fb_readback_size{0}; // (width << 32) | height
+static GSTexture* s_fb_readback_rt = nullptr;
+static std::unique_ptr<GSDownloadTexture> s_fb_readback_dl[2];
+static bool s_fb_readback_pending[2] = {};
+static u32 s_fb_readback_slot = 0;
+static std::atomic_bool s_fb_dmabuf_export{false};
+static GSFramebufferDMABUFCallback s_fb_dmabuf_cb = nullptr;
+static GSTexture* s_fb_dmabuf_last_rt = nullptr; // re-export only when the RT changes (resize)
+static std::atomic_bool s_fb_shared_tex_export{false};
+static GSFramebufferSharedTextureCallback s_fb_shared_tex_cb = nullptr;
+// Triple-buffered so the GS can publish frames ahead while the frontend still samples an older
+// one (the libretro core free-runs emulation and presents the latest texture at vsync rate).
+static constexpr u32 FB_SHARED_RT_COUNT = 3;
+static GSTexture* s_fb_shared_rt[FB_SHARED_RT_COUNT] = {};
+static u32 s_fb_shared_slot = 0;
+
+void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height)
+{
+	s_fb_readback_cb = callback;
+	s_fb_readback_size.store((static_cast<u64>(width) << 32) | height, std::memory_order_release);
+}
+
+void GSSetFramebufferDMABUFExport(bool enable)
+{
+	s_fb_dmabuf_export.store(enable, std::memory_order_release);
+}
+
+void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb)
+{
+	s_fb_dmabuf_cb = cb;
+}
+
+void GSForceDMABUFReexport()
+{
+	s_fb_dmabuf_last_rt = nullptr;
+}
+
+void GSSetFramebufferSharedTextureExport(bool enable)
+{
+	s_fb_shared_tex_export.store(enable, std::memory_order_release);
+}
+
+void GSSetFramebufferSharedTextureCallback(GSFramebufferSharedTextureCallback cb)
+{
+	s_fb_shared_tex_cb = cb;
+}
+
+void GSReleaseFramebufferReadbackResources()
+{
+	for (u32 i = 0; i < 2; i++)
+	{
+		s_fb_readback_dl[i].reset();
+		s_fb_readback_pending[i] = false;
+	}
+	if (s_fb_readback_rt)
+	{
+		g_gs_device->Recycle(s_fb_readback_rt);
+		s_fb_readback_rt = nullptr;
+	}
+	for (u32 i = 0; i < FB_SHARED_RT_COUNT; i++)
+	{
+		if (s_fb_shared_rt[i])
+		{
+			g_gs_device->Recycle(s_fb_shared_rt[i]);
+			s_fb_shared_rt[i] = nullptr;
+		}
+	}
+	s_fb_dmabuf_last_rt = nullptr; // force a re-export of the new RT
+}
+
+static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_uv)
+{
+	const u64 packed_size = s_fb_readback_size.load(std::memory_order_acquire);
+	const u32 width = static_cast<u32>(packed_size >> 32);
+	const u32 height = static_cast<u32>(packed_size & 0xFFFFFFFFu);
+	if (width == 0 || height == 0)
+		return;
+
+	// Zero-copy shared-texture present (desktop X11/GLX): render into a double-buffered RT and
+	// hand its GL texture id to the frontend (whose context shares our object namespace). Double
+	// buffering lets the GS render the next frame while the frontend still blits this one, so the
+	// libretro core can pipeline emulation with the vsync present. Handled before the readback RT
+	// so its resources aren't created in this mode.
+	if (s_fb_shared_tex_export.load(std::memory_order_acquire) && s_fb_shared_tex_cb)
+	{
+		GSTexture*& rt = s_fb_shared_rt[s_fb_shared_slot];
+		if (rt && (static_cast<u32>(rt->GetWidth()) != width || static_cast<u32>(rt->GetHeight()) != height))
+			GSReleaseFramebufferReadbackResources();
+		if (!rt)
+		{
+			rt = g_gs_device->CreateRenderTarget(width, height, GSTexture::Format::Color, false);
+			if (!rt)
+				return;
+		}
+
+		const GSVector4 dst_rect(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+		g_gs_device->ClearRenderTarget(rt, 0);
+		g_gs_device->StretchRect(current, src_uv, rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
+			BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
+
+		const u32 gl_id = g_gs_device->GetFrameTextureGLID(rt);
+		if (gl_id != 0)
+		{
+			// GPU fence (not glFinish): the frontend glWaitSyncs on it before sampling, ordering
+			// the read against this render on the GPU without stalling our CPU thread — keeps the
+			// pipeline alive on GPU-bound scenes. The frontend owns/deletes the sync object.
+			void* fence = g_gs_device->CreateFrameFenceShared();
+			s_fb_shared_tex_cb(gl_id, width, height, fence);
+			s_fb_shared_slot = (s_fb_shared_slot + 1) % FB_SHARED_RT_COUNT; // next frame -> next buffer
+			return;
+		}
+		Console.Warning("shared-texture export unsupported on this backend; falling back to readback.");
+		s_fb_shared_tex_export.store(false, std::memory_order_release);
+		return;
+	}
+
+	if (s_fb_readback_rt &&
+		(static_cast<u32>(s_fb_readback_rt->GetWidth()) != width || static_cast<u32>(s_fb_readback_rt->GetHeight()) != height))
+	{
+		GSReleaseFramebufferReadbackResources();
+	}
+	if (!s_fb_readback_rt)
+	{
+		s_fb_readback_rt = g_gs_device->CreateRenderTarget(width, height, GSTexture::Format::Color, false);
+		if (!s_fb_readback_rt)
+			return;
+	}
+
+	// Zero-copy HW render (D2): in dmabuf mode the frontend imports the RT directly, so there
+	// is no GPU->CPU readback at all — skip the staging download textures.
+	const bool dmabuf_mode = s_fb_dmabuf_export.load(std::memory_order_acquire) && s_fb_dmabuf_cb;
+	if (!dmabuf_mode && !s_fb_readback_dl[0])
+	{
+		for (u32 i = 0; i < 2; i++)
+		{
+			s_fb_readback_dl[i] = g_gs_device->CreateDownloadTexture(width, height, GSTexture::Format::Color);
+			if (!s_fb_readback_dl[i])
+			{
+				GSReleaseFramebufferReadbackResources();
+				return;
+			}
+		}
+	}
+
+	// Stretch full source into full render target; RetroArch handles aspect ratio.
+	const GSVector4 dst_rect(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+	g_gs_device->ClearRenderTarget(s_fb_readback_rt, 0);
+	g_gs_device->StretchRect(current, src_uv, s_fb_readback_rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
+		BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
+
+	if (dmabuf_mode)
+	{
+		// Blit the composited RT into a LINEAR dmabuf and hand its fd to the libretro frontend,
+		// which imports + blits it into its HW framebuffer (no readback, swizzle or re-upload).
+		// The blit happens every frame; the fd is re-exported only when the buffer is (re)created
+		// (first frame / resize) or forced after a frontend context reset (last_rt cleared).
+		const bool force = (s_fb_readback_rt != s_fb_dmabuf_last_rt);
+		int fd = -1;
+		u32 stride = 0, offset = 0, fourcc = 0;
+		u64 modifier = 0;
+		if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, force, &fd, &stride, &offset, &fourcc, &modifier))
+		{
+			if (fd >= 0)
+			{
+				Console.WriteLnFmt("dmabuf (linear) export OK: {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
+					width, height, fd, stride, offset, fourcc, modifier);
+				s_fb_dmabuf_cb(fd, width, height, stride, offset, fourcc, modifier);
+			}
+			s_fb_dmabuf_last_rt = s_fb_readback_rt;
+			// Finish this frame's blit so the frontend samples a complete, stable buffer.
+			g_gs_device->FlushRenderingCommands();
+			return;
+		}
+
+		// dmabuf export is unsupported on this backend (e.g. Vulkan, or an OpenGL driver
+		// without EGL dmabuf): disable it for good and fall back to the GPU->CPU readback
+		// present, so the frontend still gets a picture instead of a black screen. This one
+		// frame is skipped; the next call sees dmabuf_mode=false and creates the download
+		// textures + runs the readback path.
+		Console.Warning("dmabuf export unsupported on this backend; falling back to readback present.");
+		s_fb_dmabuf_export.store(false, std::memory_order_release);
+		return;
+	}
+
+	const GSVector4i rc(0, 0, static_cast<s32>(width), static_cast<s32>(height));
+	const u32 idx = s_fb_readback_slot;
+	s_fb_readback_dl[idx]->CopyFromTexture(rc, s_fb_readback_rt, rc, 0);
+	s_fb_readback_pending[idx] = true;
+
+	const u32 prev = idx ^ 1;
+	if (s_fb_readback_pending[prev])
+	{
+		s_fb_readback_dl[prev]->Flush();
+		if (s_fb_readback_dl[prev]->Map(rc))
+		{
+			s_fb_readback_cb(reinterpret_cast<const u32*>(s_fb_readback_dl[prev]->GetMapPointer()),
+				s_fb_readback_dl[prev]->GetMapPitch() / sizeof(u32), width, height);
+			s_fb_readback_dl[prev]->Unmap();
+		}
+		s_fb_readback_pending[prev] = false;
+	}
+	s_fb_readback_slot = prev;
+}
 
 std::unique_ptr<GSRenderer> g_gs_renderer;
 
@@ -708,6 +915,9 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			if (GSConfig.OsdShowGPU || GSDumpReplayer::IsReplayingDump())
 				PerformanceMetrics::OnGPUPresent(g_gs_device->GetAndResetAccumulatedGPUTime());
 		}
+
+		if (s_fb_readback_cb && current && !blank_frame)
+			PerformFramebufferReadback(current, src_uv);
 
 		PerformanceMetrics::Update(registers_written, fb_sprite_frame, false);
 	}

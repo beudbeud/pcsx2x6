@@ -1358,10 +1358,10 @@ GSVector4i GSRendererHW::ComputeBoundingBoxRT(const GSVector2i& rtsize, float rt
 	return GSVector4i(box * GSVector4(rtscale)).rintersect(GSVector4i(0, 0, rtsize.x, rtsize.y));
 }
 
-GSVector4i GSRendererHW::ComputeBoundingBoxTex(const GSVector2i& texsize, const GSVector4i& region, float texscale)
+GSVector4i GSRendererHW::ComputeBoundingBoxTex(const GSVector2i& texsize, const GSVector4i& coverage, const GSVector4i& region, float texscale)
 {
 	const GSVector4 offset = GSVector4(region.xyxy()) + GSVector4(-1.0f, -1.0f, 1.0f, 1.0f); // Region offset + round value
-	const GSVector4 box = m_vt.m_min.t.upld(m_vt.m_max.t) + offset;
+	const GSVector4 box = GSVector4(coverage) + offset;
 	return GSVector4i(box * GSVector4(texscale)).rintersect(GSVector4i(0, 0, texsize.x, texsize.y));
 }
 
@@ -6206,16 +6206,6 @@ void GSRendererHW::DetermineBarriers(GSTextureCache::Target* rt, GSTextureCache:
 		ComputeDrawlistGetSize(rt->m_scale);
 		m_conf.drawlist = &m_drawlist;
 		m_conf.drawlist_bbox = &m_drawlist_bbox;
-
-		if (m_conf.tex_hazard != GSHWDrawConfig::TEX_HAZARD_NONE)
-		{
-			GetPrimitiveOverlapDrawlistTextureBBox(tex->GetScale());
-			m_conf.drawlist_bbox_tex = &m_drawlist_bbox_tex;
-		}
-		else
-		{
-			m_conf.drawlist_bbox_tex = nullptr;
-		}
 	}
 }
 
@@ -7043,12 +7033,22 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		}
 		else if (accumulation_blend)
 		{
-			// A fast algo that requires 2 passes
-			GL_INS("HW: COLCLIP ACCU HW mode ENABLED");
-			m_conf.ps.colclip_hw = 1;
-			sw_blending = true; // Enable sw blending for the colclip algo
-
-			m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			if (features.color_clip)
+			{
+				// A fast algo that requires 2 passes
+				GL_INS("HW: COLCLIP ACCU HW mode ENABLED");
+				m_conf.ps.colclip_hw = 1;
+				sw_blending = true; // Enable sw blending for the colclip algo
+				m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			}
+			else
+			{
+				// ColorClip RT format not supported on this GPU, fall back to shader-only SW colclip.
+				GL_INS("HW: COLCLIP ACCU HW mode (no ColorClip RT, using SW colclip)");
+				m_conf.ps.colclip = 1;
+				sw_blending = true;
+				m_conf.colclip_mode = (has_colclip_texture && !NextDrawColClip()) ? GSHWDrawConfig::ColClipMode::ResolveOnly : GSHWDrawConfig::ColClipMode::NoModify;
+			}
 		}
 		else if (sw_blending)
 		{
@@ -7059,9 +7059,19 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		}
 		else
 		{
-			GL_INS("HW: COLCLIP HW mode ENABLED");
-			m_conf.ps.colclip_hw = 1;
-			m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			if (features.color_clip)
+			{
+				GL_INS("HW: COLCLIP HW mode ENABLED");
+				m_conf.ps.colclip_hw = 1;
+				m_conf.colclip_mode = has_colclip_texture ? (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::NoModify : GSHWDrawConfig::ColClipMode::ResolveOnly) : (NextDrawColClip() ? GSHWDrawConfig::ColClipMode::ConvertOnly : GSHWDrawConfig::ColClipMode::ConvertAndResolve);
+			}
+			else
+			{
+				// ColorClip RT format not supported on this GPU, fall back to shader-only SW colclip.
+				GL_INS("HW: COLCLIP HW mode (no ColorClip RT, using SW colclip)");
+				m_conf.ps.colclip = 1;
+				m_conf.colclip_mode = (has_colclip_texture && !NextDrawColClip()) ? GSHWDrawConfig::ColClipMode::ResolveOnly : GSHWDrawConfig::ColClipMode::NoModify;
+			}
 		}
 
 		m_conf.colclip_frame = m_cached_ctx.FRAME;
@@ -9460,7 +9470,7 @@ __ri void GSRendererHW::DrawPrims(GSTextureCache::Target* rt, GSTextureCache::Ta
 
 	const GSVector4i tex_region = tex ? tex->GetRegionRect() : GSVector4i::zero();
 	m_conf.samplearea = m_channel_shuffle ? scissor :
-		GSVector4i::loadh(texsize).rintersect(ComputeBoundingBoxTex(texsize, tex_region, texscale));
+		GSVector4i::loadh(texsize).rintersect(ComputeBoundingBoxTex(texsize, tmm.coverage, tex_region, texscale));
 
 	m_conf.scissor = (date_options.enabled && !date_options.barrier) ? m_conf.drawarea : scissor;
 
