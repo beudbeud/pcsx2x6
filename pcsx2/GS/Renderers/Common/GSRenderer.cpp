@@ -139,8 +139,8 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 				return;
 		}
 
+		// StretchRect covers the whole RT opaquely (convert shader, no blend), so no clear needed.
 		const GSVector4 dst_rect(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
-		g_gs_device->ClearRenderTarget(rt, 0);
 		g_gs_device->StretchRect(current, src_uv, rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
 			BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
 
@@ -188,9 +188,9 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 		}
 	}
 
-	// Stretch full source into full render target; RetroArch handles aspect ratio.
+	// Stretch full source into full render target; RetroArch handles aspect ratio. StretchRect
+	// covers the whole RT opaquely (convert shader, no blend), so no clear is needed.
 	const GSVector4 dst_rect(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
-	g_gs_device->ClearRenderTarget(s_fb_readback_rt, 0);
 	g_gs_device->StretchRect(current, src_uv, s_fb_readback_rt, dst_rect, ShaderConvert::TRANSPARENCY_FILTER,
 		BilnIf(GSConfig.LinearPresent != GSPostBilinearMode::Off));
 
