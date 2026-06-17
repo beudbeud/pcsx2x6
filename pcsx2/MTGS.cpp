@@ -271,12 +271,11 @@ void MTGS::PostVsyncStart(bool registers_written)
 	// If those are needed back, it's better to increase the VsyncQueueSize via PCSX_vm.ini.
 	// (The Xenosaga engine is known to run into this, due to it throwing bulks of data in one frame followed by 2 empty frames.)
 
-	if ((s_QueuedFrameCount.fetch_add(1) < EmuConfig.GS.VsyncQueueSize) /*|| (!EmuConfig.GS.VsyncEnable && !EmuConfig.GS.FrameLimitEnable)*/)
+	const int qfc_before = s_QueuedFrameCount.fetch_add(1);
+	if ((qfc_before < EmuConfig.GS.VsyncQueueSize) /*|| (!EmuConfig.GS.VsyncEnable && !EmuConfig.GS.FrameLimitEnable)*/)
 		return;
 
 	s_VsyncSignalListener.store(true, std::memory_order_release);
-	//Console.WriteLn( Color_Blue, "(EEcore Sleep) Vsync\t\tringpos=0x%06x, writepos=0x%06x", m_ReadPos.load(), m_WritePos.load() );
-
 	s_sem_Vsync.Wait();
 }
 
@@ -708,6 +707,15 @@ void MTGS::GenericStall(uint size)
 	// to use volatile reads here.  We do cache it though, since we know it never changes,
 	// except for calls to RingbufferRestert() -- handled below.
 	const uint writepos = s_WritePos.load(std::memory_order_relaxed);
+
+	// Stall diagnostic: log if ring buffer is nearly full (may block the EE).
+	{
+		const uint readpos = s_ReadPos.load(std::memory_order_acquire);
+		const uint freeroom = (writepos < readpos) ? (readpos - writepos) : (RingBufferSize - (writepos - readpos));
+		static u32 s_stall_log_count = 0;
+		if (freeroom <= size && (++s_stall_log_count <= 5 || (s_stall_log_count % 20) == 0))
+			Console.WriteLn("MTGS: GenericStall #%u: ring full (write=%u read=%u free=%u need=%u)", s_stall_log_count, writepos, readpos, freeroom, size);
+	}
 
 	// Sanity checks! (within the confines of our ringbuffer please!)
 	pxAssert(size < RingBufferSize);

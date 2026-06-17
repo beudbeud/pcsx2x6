@@ -88,12 +88,18 @@ void ACATA::TH::IO_Write(u32* addr, u32 size) {
 }
 
 int ACATA::TH::IO_OpenImage() {
+	// Initialize sectorsize from declared media type when known, avoiding a spurious mismatch warning.
+	if (ACATA::MediaType == ACMEDIATYPE::ACHDD)
+		sectorsize = ATA_SECTORSIZE;
+	else if (ACATA::MediaType == ACMEDIATYPE::ACDVD || ACATA::MediaType == ACMEDIATYPE::ACCD)
+		sectorsize = ACATAPI::CONSTANTS::DVD_SECTORSIZE;
+
 	isCHD = ChdImage::IsChdFileName(ACATA::imgpath);
 	if (isCHD) {
 		if (CHD.Open(ACATA::imgpath)) {
 			u32 secsize = CHD.GetSectorSize();
-			if (secsize != sectorsize) 
-				Console.ErrorFmt("ACATA: CHD sectorsize mismatches declaration {} vs {}", secsize, sectorsize);
+			if (secsize != sectorsize)
+				Console.WarningFmt("ACATA: CHD sectorsize {} overrides declared {} — check media= in acgame", secsize, sectorsize);
 			sectorsize = secsize;
 			ACATA::TH::IMAGESIZE = (CHD.GetSectorCount() * sectorsize);
 		} else return EIO;
@@ -118,6 +124,32 @@ int ACATA::TH::IO_OpenImage() {
 		Console.WriteLn("%s: image opened ok", __FUNCTION__);
 	}
 	return 0;
+}
+
+bool ACATA::ReadIsoSector(u8* buf, u32 lsn) {
+	// ISO9660 always addresses 2048-byte logical sectors, regardless of the
+	// underlying media's physical sector size. Map the LSN onto the open image.
+	constexpr u32 ISO_SECTOR = 2048;
+	const u64 byte_offset = static_cast<u64>(lsn) * ISO_SECTOR;
+
+	if (ACATA::TH::isCHD) {
+		const u32 css = CHD.GetSectorSize();
+		if (css == 0)
+			return false;
+		if (css == ISO_SECTOR)
+			return CHD.ReadSector(lsn, buf);
+		// Physical sector size differs from ISO's: gather enough contiguous
+		// physical sectors to cover one logical sector (e.g. 4×512 for a HDD).
+		if ((ISO_SECTOR % css) != 0 || (byte_offset % css) != 0)
+			return false;
+		return CHD.ReadSectors(byte_offset / css, ISO_SECTOR / css, buf);
+	}
+
+	if (!ACATA::TH::IMAGE)
+		return false;
+	if (FileSystem::FSeek64(ACATA::TH::IMAGE, byte_offset, SEEK_SET) != 0)
+		return false;
+	return std::fread(buf, 1, ISO_SECTOR, ACATA::TH::IMAGE) == ISO_SECTOR;
 }
 
 int ACATA::TH::IO_CloseImage() {
