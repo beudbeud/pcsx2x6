@@ -2,9 +2,10 @@ function(detect_operating_system)
 	message(STATUS "CMake Version: ${CMAKE_VERSION}")
 	message(STATUS "CMake System Name: ${CMAKE_SYSTEM_NAME}")
 
-	# LINUX wasn't added until CMake 3.25.
-	if (CMAKE_VERSION VERSION_LESS 3.25.0 AND CMAKE_SYSTEM_NAME MATCHES "Linux")
-		# Have to make it visible in this scope as well for below.
+	# LINUX wasn't added until CMake 3.25. Also set it explicitly when
+	# CMAKE_SYSTEM_NAME is "Linux" (covers cross-compilation in Buildroot where
+	# the variable may not propagate from the toolchain file into this scope).
+	if (CMAKE_SYSTEM_NAME MATCHES "Linux" AND NOT LINUX)
 		set(LINUX TRUE PARENT_SCOPE)
 		set(LINUX TRUE)
 	endif()

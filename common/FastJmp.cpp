@@ -8,8 +8,17 @@
 
 #if defined(__APPLE__)
 #define PREFIX "_"
+// Mach-O equivalent of ELF hidden visibility.
+#define HIDDEN ".private_extern "
 #else
 #define PREFIX ""
+// Keep these out of the dynamic symbol table: as default-visibility globals they
+// are preemptible, so every call goes through a writable, lazily-bound .got.plt
+// slot. On the libretro/Recalbox build that slot was observed misdirecting
+// recEventTest's fastjmp_jmp into fastjmp_set, which then fell through into
+// recReserve in an infinite loop (the "boots with logs, stalls without" race).
+// Hidden visibility makes the linker resolve the bl directly at link time.
+#define HIDDEN ".hidden "
 #endif
 
 #if defined(ARCH_X86)
@@ -17,6 +26,8 @@
 asm(
 	"\t.global " PREFIX "fastjmp_set\n"
 	"\t.global " PREFIX "fastjmp_jmp\n"
+	"\t" HIDDEN PREFIX "fastjmp_set\n"
+	"\t" HIDDEN PREFIX "fastjmp_jmp\n"
 	"\t.text\n"
 	"\t" PREFIX "fastjmp_set:" R"(
 	movq 0(%rsp), %rax
@@ -51,8 +62,12 @@ asm(
 asm(
 	"\t.global " PREFIX "fastjmp_set\n"
 	"\t.global " PREFIX "fastjmp_jmp\n"
+	"\t" HIDDEN PREFIX "fastjmp_set\n"
+	"\t" HIDDEN PREFIX "fastjmp_jmp\n"
 	"\t.text\n"
-	"\t.align 16\n"
+	// .balign is in bytes on every target; .align on aarch64 ELF is 2^N, so the
+	// previous ".align 16" forced 64KB alignment on each of these functions.
+	"\t.balign 16\n"
 	"\t" PREFIX "fastjmp_set:" R"(
 	mov x16, sp
 	stp x16, x30, [x0]
@@ -69,7 +84,7 @@ asm(
 	mov w0, wzr
 	br x30
 )"
-".align 16\n"
+".balign 16\n"
 "\t" PREFIX "fastjmp_jmp:" R"(
 	ldp x16, x30, [x0]
 	mov sp, x16

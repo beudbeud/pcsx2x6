@@ -61,6 +61,32 @@ void intUpdateCPUCycles()
 	}
 }
 
+// Execute exactly one EE instruction from the ARM64 JIT context.
+// Called by the recompiler for uncompilable ops (branches, syscalls, COP0, etc.).
+// Handles PC advance, delay slots and cycle accounting internally; the
+// recompiler must NOT charge cycles for this block.
+void intExecuteOneInst()
+{
+	const u32 thispc = cpuRegs.pc;
+	// Pre-increment PC: exception handlers and branch target math expect
+	// cpuRegs.pc to already point at the delay slot (matches execI behaviour).
+	cpuRegs.pc += 4;
+	cpuRegs.code = memRead32(thispc);
+
+	const OPCODE& opcode = GetCurrentInstruction();
+	cpuBlockCycles += opcode.cycles * (2 - ((cpuRegs.CP0.n.Config >> 18) & 0x1));
+
+	opcode.interpret();
+
+	// Unconditional flush: in rec context the interpreter's branch helpers skip
+	// their own flush (intDoBranch is gated on Cpu == &intCpu), so this is the only
+	// place the accrued cycles reach cpuRegs.cycle. Flushing for branches too
+	// guarantees forward progress for a branch-only guest wait loop (e.g. Burnout's
+	// `BC0F .; nop` CPCOND0 poll), which otherwise freezes cpuRegs.cycle so the
+	// pending event (DMAC completion) never comes due.
+	intUpdateCPUCycles();
+}
+
 // These macros are used to assemble the repassembler functions
 
 void intBreakpoint(bool memcheck)

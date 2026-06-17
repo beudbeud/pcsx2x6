@@ -70,6 +70,12 @@ else()
 	add_subdirectory(pcsx2-gsrunner EXCLUDE_FROM_ALL)
 endif()
 
+# libretro core
+option(BUILD_LIBRETRO_CORE "Build the libretro core (pcsx2x6_libretro.so)" OFF)
+if(BUILD_LIBRETRO_CORE)
+	add_subdirectory(pcsx2-libretro)
+endif()
+
 #-------------------------------------------------------------------------------
 if(NOT IS_SUPPORTED_COMPILER)
 	message(WARNING "
@@ -82,12 +88,9 @@ No support will be provided, continue at your own risk.
 endif()
 
 if(ARCH_ARM64)
-	message(WARNING "
-*************** UNSUPPORTED CONFIGURATION ***************
-Apple Silicon support in PCSX2 is INCOMPLETE. There are
-currently no EE/VU/IOP recompilers, and games will run
-VERY slow. There is no date for completion yet, you
-should set -DCMAKE_OSX_ARCHITECTURES=x86_64 for now,
-unless you want to work on the recompilers.
-*********************************************************")
+	message(STATUS "
+*************** ARM64 JIT SUPPORT ***************
+Native ARM64 JIT recompilers (EE/VU/IOP) are enabled.
+This build includes the ARM64 port from ARMSX2.
+*************************************************")
 endif()
