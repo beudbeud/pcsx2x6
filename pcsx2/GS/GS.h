@@ -110,6 +110,35 @@ bool GSSaveSnapshotToMemory(u32 window_width, u32 window_height, bool apply_aspe
 	u32* width, u32* height, std::vector<u32>* pixels);
 void GSJoinSnapshotThreads();
 
+/// Framebuffer readback: callback fires on the GS thread each vsync with the
+/// completed frame pixels, for libretro / headless frontends.
+using GSFramebufferReadbackCallback = void (*)(const u32* pixels, u32 pitch_px, u32 width, u32 height);
+void GSSetFramebufferReadback(GSFramebufferReadbackCallback callback, u32 width, u32 height);
+void GSReleaseFramebufferReadbackResources();
+
+/// Zero-copy HW render (experimental): when enabled, the composited frame RT is exported as
+/// a dmabuf for the libretro frontend to import instead of the GPU->CPU readback. OpenGL only.
+void GSSetFramebufferDMABUFExport(bool enable);
+
+/// Fires on the GS thread when the exported dmabuf changes (first frame / resize): hands the
+/// fd + layout to the frontend, which imports it once and blits it each frame.
+using GSFramebufferDMABUFCallback = void (*)(int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc, u64 modifier);
+void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb);
+
+/// Force the next frame to re-export + re-fire the dmabuf callback (e.g. after the frontend's
+/// GL context was recreated and the previous import is gone).
+void GSForceDMABUFReexport();
+
+/// Zero-copy HW render via a shared GL context (desktop X11/GLX, where dmabuf export is not
+/// available, e.g. NVIDIA): when enabled, the GS hands the GL texture id of the composited
+/// frame to the frontend each vsync. The frontend's GL context shares the GS context's object
+/// namespace, so it samples the texture directly — no dmabuf, no GPU->CPU readback. OpenGL only.
+/// fence is an opaque GLsync (or nullptr) the frontend must glWaitSync on before sampling the
+/// texture and then glDeleteSync — it orders the read against the GS render without a glFinish.
+using GSFramebufferSharedTextureCallback = void (*)(u32 gl_texture_id, u32 width, u32 height, void* fence);
+void GSSetFramebufferSharedTextureExport(bool enable);
+void GSSetFramebufferSharedTextureCallback(GSFramebufferSharedTextureCallback cb);
+
 namespace Host
 {
 	/// Called when the GS is creating a render device.

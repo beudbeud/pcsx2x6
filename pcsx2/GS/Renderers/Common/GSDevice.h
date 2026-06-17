@@ -1226,18 +1226,17 @@ struct alignas(16) GSHWDrawConfig
 		EarlyResolve = 4
 	};
 
-	GSTexture* rt;        ///< Render target
-	GSTexture* ds;        ///< Depth stencil
-	GSTexture* tex;       ///< Source texture
-	GSTexture* pal;       ///< Palette texture
-	const GSVertex* verts;///< Vertices to draw
-	const u16* indices;   ///< Indices to draw
-	u32 nverts;           ///< Number of vertices
-	u32 nindices;         ///< Number of indices
-	u32 indices_per_prim; ///< Number of indices that make up one primitive
-	const std::vector<size_t>* drawlist;              ///< For reducing barriers on sprites
-	const std::vector<GSVector4i>* drawlist_bbox;     ///< For RT copy when barriers not available.
-	const std::vector<GSVector4i>* drawlist_bbox_tex; ///< Additionally if we need to sample not from the same pixel of the RT.
+	GSTexture* rt;         ///< Render target
+	GSTexture* ds;         ///< Depth stencil
+	GSTexture* tex;        ///< Source texture
+	GSTexture* pal;        ///< Palette texture
+	const GSVertex* verts; ///< Vertices to draw
+	const u16* indices;    ///< Indices to draw
+	u32 nverts;            ///< Number of vertices
+	u32 nindices;          ///< Number of indices
+	u32 indices_per_prim;  ///< Number of indices that make up one primitive
+	const std::vector<size_t>* drawlist;          ///< For reducing barriers on sprites
+	const std::vector<GSVector4i>* drawlist_bbox; ///< For RT copy when barriers not available.
 	GSVector4i scissor; ///< Scissor rect
 	GSVector4i drawarea; ///< Area in the framebuffer which will be modified.
 	GSVector4i samplearea; ///< Area in the texture which will be sampled.
@@ -1391,9 +1390,11 @@ public:
 		bool depth_feedback       : 1; ///< Depth feedback loops can be done with DS directly (otherwise need to copy to separate RT).  Implies `feedback_loops`.
 		bool aa1                  : 1; ///< Supports the GS AA1 feature.
 		bool rov                  : 1; ///< Supports rasterizer ordered views for both depth and color.
+		bool color_clip           : 1; ///< ColorClip (R16G16B16A16_UNORM) format is renderable. Required for HW colclip emulation.
 		FeatureSupport()
 		{
 			memset(this, 0, sizeof(*this));
+			color_clip = true; // Default true; Vulkan clears this if the format is not a supported RT.
 		}
 		/// Supports feedback loops through either texture barriers or rt copies.
 		bool feedback_loops() const { return texture_barrier || multidraw_fb_copy; }
@@ -1635,6 +1636,28 @@ public:
 	GSTexture* CreateCompatible(GSTexture* tex, int w, int h, bool clear = true, bool prefer_reuse = true);
 
 	virtual std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) = 0;
+
+	// Zero-copy HW render (OpenGL only): blit `tex` into an internally-managed LINEAR dmabuf
+	// (no GPU tiling, so a consumer on another EGLDisplay samples it without UIF-tile artifacts)
+	// every frame, and — when `force_export` or the buffer was just (re)allocated — return a fresh
+	// fd + layout for the frontend to (re)import (*fd = -1 otherwise). Out-params avoid coupling
+	// this common header to the GL backend. Returns false if unsupported (all non-OGL backends).
+	virtual bool ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) { return false; }
+
+	// Zero-copy shared-context HW render: return the native GL texture id of a GSTexture, so a
+	// frontend GL context sharing this device's context can sample it directly. 0 if unsupported.
+	virtual u32 GetFrameTextureGLID(GSTexture* tex) { return 0; }
+
+	// Zero-copy shared-context HW render: insert a GPU fence after the frame's render and flush it
+	// so a frontend context sharing this device's namespace can glWaitSync on it before sampling —
+	// ordering the read against our write WITHOUT a CPU-blocking glFinish. Returns an opaque GLsync
+	// (the caller owns it / must glDeleteSync), or nullptr if unsupported. OpenGL only.
+	virtual void* CreateFrameFenceShared() { return nullptr; }
+
+	// Finish pending GL commands so a dmabuf consumer on another context/display sees a fully
+	// rendered frame (implicit fencing isn't reliable across displays -> tearing). No-op on
+	// non-OGL backends.
+	virtual void FlushRenderingCommands() {}
 
 	virtual void CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, u32 destX, u32 destY) = 0;
 

@@ -18,6 +18,7 @@
 #include "MTGS.h"
 #include "pcsx2/GS.h"
 #include "GS/Renderers/Null/GSRendererNull.h"
+#include "GS/Renderers/Null/GSDeviceNull.h"
 #include "GS/Renderers/HW/GSRendererHW.h"
 #include "GS/Renderers/HW/GSTextureReplacements.h"
 #include "VMManager.h"
@@ -98,6 +99,13 @@ static RenderAPI GetAPIForRenderer(GSRendererType renderer)
 			return RenderAPI::Metal;
 #endif
 
+#ifdef BUILD_LIBRETRO_CORE
+		// In the libretro build, the software renderer uses the CPU-only device (no GPU context needed).
+		case GSRendererType::SW:
+		case GSRendererType::Null:
+			return RenderAPI::None;
+#endif
+
 			// We could end up here if we ever removed a renderer.
 		default:
 			return GetAPIForRenderer(GSUtil::GetPreferredRenderer());
@@ -110,6 +118,10 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
 	const RenderAPI new_api = GetAPIForRenderer(renderer);
 	switch (new_api)
 	{
+		case RenderAPI::None:
+			g_gs_device = std::make_unique<GSDeviceNull>();
+			break;
+
 #ifdef _WIN32
 		case RenderAPI::D3D11:
 			g_gs_device = std::make_unique<GSDevice11>();
@@ -370,6 +382,7 @@ void GSclose()
 	if (GSCapture::IsCapturing())
 		GSCapture::EndCapture();
 
+	GSReleaseFramebufferReadbackResources();
 	CloseGSRenderer();
 	CloseGSDevice(true);
 	Host::ReleaseRenderWindow();

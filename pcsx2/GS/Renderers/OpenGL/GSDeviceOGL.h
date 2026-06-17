@@ -130,8 +130,17 @@ public:
 		VSSelector vs;
 		u8 pad[3];
 
-		__fi bool operator==(const ProgramSelector& p) const { return BitEqual(*this, p); }
-		__fi bool operator!=(const ProgramSelector& p) const { return !BitEqual(*this, p); }
+		// Compare only the meaningful selector keys, matching ProgramSelectorHash.
+		// A raw BitEqual over the whole struct also compares uninitialized padding
+		// (this struct is alignas(16)/32 bytes with smaller fields), so two equal
+		// selectors with different stack-garbage padding hash the same but compare
+		// unequal — the program cache then never hits, recompiling forever and
+		// leaking GL programs until OOM (seen on ARM64, where the padding varies).
+		__fi bool operator==(const ProgramSelector& p) const
+		{
+			return vs.key == p.vs.key && ps.key_hi == p.ps.key_hi && ps.key_lo == p.ps.key_lo;
+		}
+		__fi bool operator!=(const ProgramSelector& p) const { return !(*this == p); }
 	};
 	static_assert(sizeof(ProgramSelector) == 32, "Program selector is 32 bytes");
 
@@ -149,6 +158,13 @@ private:
 	static constexpr u8 NUM_TIMESTAMP_QUERIES = 5;
 
 	std::unique_ptr<GLContext> m_gl_context;
+	bool m_is_gles = false;
+
+	// glDrawElementsBaseVertex is core in GL 3.2 / GLES 3.2 but NOT in GLES 3.1
+	// (where the core pointer is null and calling it crashes — e.g. V3D on RPi5).
+	// Resolved at device creation to the core entry, or the OES/EXT extension
+	// variant on GLES 3.1, so indexed draws don't dispatch through a null pointer.
+	PFNGLDRAWELEMENTSBASEVERTEXPROC m_draw_elements_base_vertex = nullptr;
 
 	struct
 	{
@@ -161,6 +177,18 @@ private:
 	GLuint m_fbo = 0; // frame buffer container
 	GLuint m_fbo_read = 0; // frame buffer container only for reading
 	GLuint m_fbo_write = 0;	// frame buffer container only for writing
+
+	// Zero-copy HW render: linear dmabuf the composited RT is blitted into each frame (the texture
+	// itself + bo/fd live in the GLContext). Tracked here to detect a resize -> recreate and to
+	// re-emit the layout to the frontend. (Fields kept flat to avoid pulling GLContext.h here.)
+	GLuint m_dmabuf_lin_tex = 0;
+	u32 m_dmabuf_lin_w = 0;
+	u32 m_dmabuf_lin_h = 0;
+	int m_dmabuf_fd = -1;
+	u32 m_dmabuf_stride = 0;
+	u32 m_dmabuf_offset = 0;
+	u32 m_dmabuf_fourcc = 0;
+	u64 m_dmabuf_modifier = 0;
 
 	std::unique_ptr<GLStreamBuffer> m_texture_upload_buffer;
 
@@ -348,6 +376,11 @@ public:
 	void Draw(const GSHWDrawConfig& config, int offset, int count);
 
 	std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) override;
+
+	bool ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) override;
+	u32 GetFrameTextureGLID(GSTexture* tex) override;
+	void* CreateFrameFenceShared() override;
+	void FlushRenderingCommands() override;
 
 	GSTexture* InitPrimDateTexture(GSTexture* rt, const GSVector4i& area, SetDATM datm);
 

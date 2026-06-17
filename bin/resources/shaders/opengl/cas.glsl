@@ -21,7 +21,7 @@ uniform uvec4 const1;
 uniform ivec2 srcOffset;
 
 layout(binding=0) uniform sampler2D imgSrc;
-layout(binding=0, rgba8) uniform writeonly image2D imgDst;
+layout(binding=0, rgba8) uniform highp writeonly image2D imgDst;
 
 #define A_GPU 1
 #define A_GLSL 1

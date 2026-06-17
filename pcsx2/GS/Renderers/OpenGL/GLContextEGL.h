@@ -28,16 +28,24 @@ public:
 	bool SetSwapInterval(s32 interval) override;
 	virtual std::unique_ptr<GLContext> CreateSharedContext(const WindowInfo& wi, Error* error) override;
 
+	bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) override;
+	bool CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture) override;
+	void DestroyLinearDmaBufTexture() override;
+
 protected:
 	virtual EGLDisplay GetPlatformDisplay(Error* error);
 	virtual EGLSurface CreatePlatformSurface(EGLConfig config, void* win, Error* error);
 
 	EGLDisplay TryGetPlatformDisplay(EGLenum platform, const char* platform_ext);
+	EGLDisplay TryGBMPlatformDisplay(Error* error);
+	bool TryDevicePlatformDisplays(std::span<const Version> versions_to_try, Error* error);
 	EGLSurface TryCreatePlatformSurface(EGLConfig config, void* window, Error* error);
 	EGLDisplay GetFallbackDisplay(Error* error);
 	EGLSurface CreateFallbackSurface(EGLConfig config, void* window, Error* error);
 
 	bool Initialize(std::span<const Version> versions_to_try, Error* error);
+	bool TryDisplay(EGLDisplay dpy, std::span<const Version> versions_to_try, Error* error);
+	void ReleaseGBMDisplay();
 	bool CreateContext(const Version& version, EGLContext share_context);
 	bool CreateContextAndSurface(const Version& version, EGLContext share_context, bool make_current);
 	bool CreateSurface();
@@ -54,4 +62,23 @@ protected:
 
 	bool m_use_ext_platform_base = false;
 	bool m_supports_negative_swap_interval = false;
+	bool m_is_gles = false;
+
+	bool IsGLES() const override { return m_is_gles; }
+
+	// GBM resources used when EGL_MESA_platform_surfaceless doesn't support desktop GL
+	int m_gbm_fd = -1;
+	void* m_gbm_lib = nullptr;
+	void* m_gbm_device = nullptr;
+
+	// True once we are initialising on EGL_MESA_platform_surfaceless, so config
+	// selection avoids the EGL_WINDOW_BIT default (no window configs exist there).
+	bool m_surfaceless_platform = false;
+
+	// Linear dmabuf render target (zero-copy HW render): a GBM bo + EGLImage + GL texture the GS
+	// blits each frame into, exported to the libretro frontend. Owned here; freed on destroy/resize.
+	void* m_lin_bo = nullptr;
+	void* m_lin_image = nullptr; // EGLImageKHR
+	u32 m_lin_tex = 0;
+	int m_lin_fd = -1;
 };

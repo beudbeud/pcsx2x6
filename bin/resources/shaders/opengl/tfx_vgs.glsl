@@ -38,6 +38,9 @@ out SHADER
 	#endif
 	float inv_cov; // We use the inverse to make it simpler to interpolate.
 	flat uint interior; // 1 for triangle interior; 0 for edge.
+#ifdef GLES_NO_CLIP_CONTROL
+	highp float precise_z; // full-precision window depth; clip-space float32 quantizes Z16/Z24 near the -1 clip bound
+#endif
 } VSout;
 
 const float exp_min32 = exp2(-32.0f);
@@ -85,6 +88,16 @@ void vs_main()
 	gl_Position.xy = gl_Position.xy * VertexScale - VertexOffset;
 	gl_Position.z = float(z) * exp_min32;
 	gl_Position.w = 1.0f;
+#ifdef GLES_NO_CLIP_CONTROL
+	// V3D/RPi5 (Mesa) has no EXT_clip_control: the GL clip range is [-1,1], but z
+	// above is in [0,1] (the clip_control ZERO_TO_ONE convention this VS assumes).
+	// Carry the true window depth to the FS at full precision FIRST — the clip-space
+	// remap below maps small z near the -1 bound where float32 only resolves ~256
+	// levels (Z16/Z24 would Z-fight); the FS writes gl_FragDepth from precise_z.
+	VSout.precise_z = gl_Position.z;
+	// Map [0,1] -> [-1,1] so clipping/fixed-function depth still use the full range.
+	gl_Position.z = gl_Position.z * 2.0f - gl_Position.w;
+#endif
 
 	texture_coord();
 
@@ -221,7 +234,7 @@ vec2 get_aa1_triangle_expand_dir(ProcessedVertex v0, ProcessedVertex v1, Process
 
 mat2 get_inverse(mat2 mat, float det)
 {
-	return mat2(mat[1][1], -mat[0][1], -mat[1][0], mat[0][0]) * (1 / det);
+	return mat2(mat[1][1], -mat[0][1], -mat[1][0], mat[0][0]) * (1.0f / det);
 }
 
 // Extrapolate triangle attributes from the first vertex along the given direction.
@@ -259,7 +272,7 @@ void extrapolate_aa1_triangle_edge(inout ProcessedVertex v0, ProcessedVertex v1,
 	// Get the position -> barycentric weight matrix
 	mat2 inv_dp_mat = get_inverse(dp_mat, dp_det);
 
-	vec2 weights = min_perp_length < 2 ? vec2(0) : inv_dp_mat * dp;
+	vec2 weights = min_perp_length < 2.0f ? vec2(0) : inv_dp_mat * dp;
 
 	v0.p.xy += dp * PointSize; // Extrapolate position
 
@@ -317,7 +330,7 @@ void main()
 	// Expand in y direction for shallow lines and x direction for steep lines.
 	vec2 line_expand = abs(line_vector.x) >= abs(line_vector.y) ? vec2(0.0f, 2.0f) : vec2(2.0f, 0.0f);
 #endif
-	vec2 line_width = (line_expand * PointSize) / 2;
+	vec2 line_width = (line_expand * PointSize) / 2.0f;
 	vec2 offset = is_right ? line_width : -line_width;
 	vtx.p.xy += offset;
 
@@ -431,7 +444,7 @@ void main()
 		bool corner_filled = all(equal(edge_expand_dir_0, edge_expand_dir_1));
 
 		// Nothing if corner is filled, otherwise opposite to the bisector of the corner angle.
-		vec2 far_corner_dir = corner_filled ? vec2(0) : -normalize((pos_deltas[0] + pos_deltas[1]) / 2);
+		vec2 far_corner_dir = corner_filled ? vec2(0) : -normalize((pos_deltas[0] + pos_deltas[1]) / 2.0f);
 
 		// Determine the expand direction.
 		vec2 expand_dir = is_near_corner ? vec2(0) :       // No extrapolation
@@ -454,6 +467,11 @@ void main()
 #endif
 
 	gl_Position = vtx.p;
+#ifdef GLES_NO_CLIP_CONTROL
+	// See vs_main: carry precise window depth, then remap z [0,1] -> [-1,1].
+	VSout.precise_z = gl_Position.z;
+	gl_Position.z = gl_Position.z * 2.0f - gl_Position.w;
+#endif
 	VSout.t_float = vtx.t_float;
 	VSout.t_int = vtx.t_int;
 	VSout.c = vtx.c;

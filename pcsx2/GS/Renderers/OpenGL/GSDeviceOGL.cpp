@@ -22,6 +22,10 @@
 #include <fstream>
 #include <sstream>
 
+#ifndef _WIN32
+#include <unistd.h> // dup() for handing the dmabuf fd to the frontend
+#endif
+
 static constexpr u32 g_vs_pc_index        = 4;
 static constexpr u32 g_vs_ib_index        = 3;
 static constexpr u32 g_vs_vb_index        = 2;
@@ -263,6 +267,8 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		return false;
 	}
 
+	m_is_gles = m_gl_context->IsGLES();
+
 	if (!CheckFeatures())
 		return false;
 
@@ -291,7 +297,7 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// ****************************************************************
 	// Debug helper
 	// ****************************************************************
-	if (GSConfig.UseDebugDevice)
+	if (GSConfig.UseDebugDevice && !m_is_gles)
 	{
 		glDebugMessageCallback(DebugMessageCallback, nullptr);
 
@@ -576,8 +582,24 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	if (!CompileShadeBoostProgram() || !CompileFXAAProgram())
 		return false;
 
+	// Resolve glDrawElementsBaseVertex: core on desktop GL and GLES 3.2, but on
+	// GLES 3.1 the core pointer is null (calling it crashes — V3D/Mesa on RPi5),
+	// so fall back to the OES/EXT extension variant.
+	if (glad_glDrawElementsBaseVertex)
+		m_draw_elements_base_vertex = glad_glDrawElementsBaseVertex;
+	else if (GLAD_GL_OES_draw_elements_base_vertex && glad_glDrawElementsBaseVertexOES)
+		m_draw_elements_base_vertex = glad_glDrawElementsBaseVertexOES;
+	else if (GLAD_GL_EXT_draw_elements_base_vertex && glad_glDrawElementsBaseVertexEXT)
+		m_draw_elements_base_vertex = glad_glDrawElementsBaseVertexEXT;
+	if (!m_draw_elements_base_vertex)
+	{
+		Console.Error("GS: This GL/GLES driver lacks glDrawElementsBaseVertex (need GL 3.2, GLES 3.2, or OES/EXT_draw_elements_base_vertex).");
+		return false;
+	}
+
 	// Image load store and GLSL 420pack is core in GL4.2, no need to check.
-	m_features.cas_sharpening = ((GLAD_GL_VERSION_4_2 && GLAD_GL_ARB_compute_shader) || GLAD_GL_ES_VERSION_3_2) && CreateCASPrograms();
+	// GLES 3.1+ has compute shaders as core.
+	m_features.cas_sharpening = ((GLAD_GL_VERSION_4_2 && GLAD_GL_ARB_compute_shader) || GLAD_GL_ES_VERSION_3_1) && CreateCASPrograms();
 
 	// ****************************************************************
 	// rasterization configuration
@@ -585,10 +607,13 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	{
 		GL_PUSH("GSDeviceOGL::Rasterization");
 
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		if (!m_is_gles)
+		{
+			glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+			glDisable(GL_MULTISAMPLE);
+		}
 		glDisable(GL_CULL_FACE);
 		glEnable(GL_SCISSOR_TEST);
-		glDisable(GL_MULTISAMPLE);
 
 		glDisable(GL_DITHER); // Honestly I don't know!
 
@@ -620,13 +645,13 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// Use DX coordinate convention
 	// ****************************************************************
 
-	// VS gl_position.z => [-1,-1]
-	// FS depth => [0, 1]
-	// because of -1 we loose lot of precision for small GS value
-	// This extension allow FS depth to range from -1 to 1. So
-	// gl_position.z could range from [0, 1]
-	// Change depth convention
-	glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	// Map clip space depth from [-1,1] to [0,1] for better depth precision.
+	// Desktop GL: core since 4.5 / ARB_clip_control.
+	// GLES: GL_EXT_clip_control provides glClipControlEXT() (e.g. Mesa v3d on RPi5).
+	if (!m_is_gles)
+		glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	else if (GLAD_GL_EXT_clip_control)
+		glClipControlEXT(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
 
 	// ****************************************************************
 	// HW renderer shader
@@ -742,10 +767,16 @@ bool GSDeviceOGL::CheckFeatures()
 	GLint minor_gl = 0;
 	glGetIntegerv(GL_MAJOR_VERSION, &major_gl);
 	glGetIntegerv(GL_MINOR_VERSION, &minor_gl);
-	if (!GLAD_GL_VERSION_3_3)
+	if (!m_is_gles && !GLAD_GL_VERSION_3_3)
 	{
 		Host::ReportErrorAsync(
 			"GS", fmt::format(TRANSLATE_FS("GSDeviceOGL", "OpenGL renderer is not supported. Only OpenGL {}.{}\n was found"), major_gl, minor_gl));
+		return false;
+	}
+	if (m_is_gles && !GLAD_GL_ES_VERSION_3_1)
+	{
+		Host::ReportErrorAsync(
+			"GS", fmt::format(TRANSLATE_FS("GSDeviceOGL", "OpenGL renderer is not supported. Only OpenGL ES {}.{}\n was found"), major_gl, minor_gl));
 		return false;
 	}
 
@@ -769,24 +800,27 @@ bool GSDeviceOGL::CheckFeatures()
 	}
 	DevCon.WriteLn(std::move(extensions));
 
-	if (!GLAD_GL_ARB_shading_language_420pack)
+	if (!m_is_gles)
 	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_shading_language_420pack is not supported, this is required for the OpenGL renderer.");
-		return false;
-	}
+		if (!GLAD_GL_ARB_shading_language_420pack)
+		{
+			Host::ReportFormattedErrorAsync(
+				"GS", "GL_ARB_shading_language_420pack is not supported, this is required for the OpenGL renderer.");
+			return false;
+		}
 
-	if (!GLAD_GL_VERSION_4_3 && !GLAD_GL_ARB_copy_image && !GLAD_GL_EXT_copy_image && !GLAD_GL_NV_copy_image)
-	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_copy_image is not supported, copies will be slower.");
-	}
+		if (!GLAD_GL_VERSION_4_3 && !GLAD_GL_ARB_copy_image && !GLAD_GL_EXT_copy_image && !GLAD_GL_NV_copy_image)
+		{
+			Host::ReportFormattedErrorAsync(
+				"GS", "GL_ARB_copy_image is not supported, copies will be slower.");
+		}
 
-	if (!GLAD_GL_VERSION_4_5 && !GLAD_GL_ARB_clip_control)
-	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_clip_control is not supported, this is required for the OpenGL renderer.");
-		return false;
+		if (!GLAD_GL_VERSION_4_5 && !GLAD_GL_ARB_clip_control)
+		{
+			Host::ReportFormattedErrorAsync(
+				"GS", "GL_ARB_clip_control is not supported, this is required for the OpenGL renderer.");
+			return false;
+		}
 	}
 
 	if (!GLAD_GL_ARB_viewport_array)
@@ -819,6 +853,7 @@ bool GSDeviceOGL::CheckFeatures()
 
 	// Don't use PBOs when we don't have ARB_buffer_storage, orphaning buffers probably ends up worse than just
 	// using the normal texture update routines and letting the driver take care of it.
+	// On GLES, EXT_buffer_storage is optional; treat its absence as buggy_pbo.
 	m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
 	if (m_bugs.buggy_pbo)
 		Console.Warning("GL: Not using PBOs for texture uploads because buffer_storage is unavailable.");
@@ -833,7 +868,8 @@ bool GSDeviceOGL::CheckFeatures()
 	m_features.broken_point_sampler = false;
 	m_features.primitive_id = true;
 
-	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch;
+	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch ||
+		(m_is_gles && GLAD_GL_ARM_shader_framebuffer_fetch);
 	if (m_features.framebuffer_fetch && GSConfig.DisableFramebufferFetch)
 	{
 		Host::AddOSDMessage(
@@ -876,13 +912,17 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.depth_feedback |= GSConfig.DepthFeedbackMode == GSDepthFeedbackMode::Auto;
 	}
 
-	if (GLAD_GL_ARB_shader_storage_buffer_object)
+	// SSBOs are in GLES 3.1 core; ARB_shader_storage_buffer_object is the desktop GL equivalent.
+	// Bitfield ops (ARB_gpu_shader5 on desktop) are also in GLES 3.1 core.
+	if (GLAD_GL_ARB_shader_storage_buffer_object || (m_is_gles && GLAD_GL_ES_VERSION_3_1))
 	{
 		GLint max_vertex_ssbos = 0;
 		glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &max_vertex_ssbos);
-		DevCon.WriteLn("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: %d", max_vertex_ssbos);
-		m_features.vs_expand = (!GSConfig.DisableVertexShaderExpand && max_vertex_ssbos > 0 && GLAD_GL_ARB_gpu_shader5);
+		Console.WriteLn("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: %d", max_vertex_ssbos);
+		m_features.vs_expand = (!GSConfig.DisableVertexShaderExpand && max_vertex_ssbos > 0 &&
+			(GLAD_GL_ARB_gpu_shader5 || (m_is_gles && GLAD_GL_ES_VERSION_3_1)));
 	}
+	Console.WriteLn("GL: vs_expand=%s", m_features.vs_expand ? "enabled" : "disabled");
 	if (!m_features.vs_expand)
 		Console.Warning("GL: Vertex expansion is not supported. This will reduce performance.");
 
@@ -901,11 +941,43 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.line_expand ? "hardware" : (m_features.vs_expand ? "vertex expanding" : "UNSUPPORTED"),
 		m_features.vs_expand ? "vertex expanding" : "CPU");
 
-	if (!GLAD_GL_ARB_conservative_depth)
+	if (!m_is_gles && !GLAD_GL_ARB_conservative_depth)
+		Console.Warning("GL_ARB_conservative_depth is not supported. This will reduce performance.");
+
+	if (m_is_gles)
 	{
-		Console.Warning("GLAD_GL_ARB_conservative_depth is not supported. This will reduce performance.");
+		if (GLAD_GL_EXT_clip_control)
+			Console.WriteLn("GLES: GL_EXT_clip_control available — depth precision OK.");
+		else
+			Console.Warning("GLES: GL_EXT_clip_control not available — depth precision reduced.");
+
+		// HW colclip needs the ColorClip render target (GL_RGBA16) to be COLOR-renderable.
+		// On v3d, 16-bit normalised formats only became color-renderable in Mesa 25.3; on
+		// older drivers the FBO is incomplete and the colclip draw is aborted. m_features
+		// defaults color_clip to true (desktop GL always supports it), so probe it on GLES
+		// with a throwaway FBO — the portable check, since GL_FRAMEBUFFER_RENDERABLE is not
+		// in GLES core — and fall back to shader-only SW colclip if unsupported, mirroring
+		// the Vulkan backend's VkFormatProperties check. Runs before GLState::Clear() and
+		// before the device FBOs exist, so the temporary binding is safe.
+		GLuint cc_tex = 0, cc_fbo = 0;
+		glGenTextures(1, &cc_tex);
+		glBindTexture(GL_TEXTURE_2D, cc_tex);
+		glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16, 1, 1);
+		glGenFramebuffers(1, &cc_fbo);
+		glBindFramebuffer(GL_FRAMEBUFFER, cc_fbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, cc_tex, 0);
+		m_features.color_clip = (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glDeleteFramebuffers(1, &cc_fbo);
+		glDeleteTextures(1, &cc_tex);
+		while (glGetError() != GL_NO_ERROR) {} // drain probe errors (unsupported format on old drivers)
+		if (m_features.color_clip)
+			Console.WriteLn("GLES: ColorClip RT (GL_RGBA16) is renderable — HW colclip enabled.");
+		else
+			Console.Warning("GLES: ColorClip RT (GL_RGBA16) not color-renderable (needs Mesa >= 25.3 on v3d) — HW colclip disabled, using SW colclip.");
 	}
-	
+
 	m_features.aa1 = GSConfig.HWAA1 && m_features.vs_expand && m_features.feedback_loops();
 
 	if (GSConfig.HWROV)
@@ -1209,7 +1281,7 @@ void GSDeviceOGL::DrawIndexedPrimitive()
 void GSDeviceOGL::DrawIndexedPrimitive(int offset, int count)
 {
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
-	glDrawElementsBaseVertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+	m_draw_elements_base_vertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
 		reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)),
 		static_cast<GLint>(m_vertex.start));
 }
@@ -1225,7 +1297,7 @@ void GSDeviceOGL::DrawIndexedPrimitiveVSExpand(int offset, int count, bool vs_in
 	else
 	{
 		VSSetPushConstants(m_vertex.start);
-		glDrawElementsBaseVertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+		m_draw_elements_base_vertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
 			reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)), 0);
 	}
 }
@@ -1357,6 +1429,91 @@ std::unique_ptr<GSDownloadTexture> GSDeviceOGL::CreateDownloadTexture(u32 width,
 	return GSDownloadTextureOGL::Create(width, height, format);
 }
 
+bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier)
+{
+	*fd = -1;
+	if (!tex || !m_gl_context)
+		return false;
+
+	const u32 w = static_cast<u32>(tex->GetWidth());
+	const u32 h = static_cast<u32>(tex->GetHeight());
+
+	// (Re)allocate the linear dmabuf target on first use / resize. We render (composite) into the
+	// GS's own tiled RT, then blit it into this LINEAR buffer so the frontend — which imports the
+	// dmabuf on a separate EGLDisplay — samples it without UIF tile-format ambiguity (the artifact
+	// that showed as a static garbage band over the lower quarter of the frame).
+	bool recreated = false;
+	if (m_dmabuf_lin_tex == 0 || m_dmabuf_lin_w != w || m_dmabuf_lin_h != h)
+	{
+		m_gl_context->DestroyLinearDmaBufTexture();
+		m_dmabuf_lin_tex = 0;
+		GLContext::DmaBufFrame frame;
+		if (!m_gl_context->CreateLinearDmaBufTexture(w, h, &frame, &m_dmabuf_lin_tex))
+			return false;
+		m_dmabuf_lin_w = w;
+		m_dmabuf_lin_h = h;
+		m_dmabuf_fd = frame.fd;
+		m_dmabuf_stride = frame.stride;
+		m_dmabuf_offset = frame.offset;
+		m_dmabuf_fourcc = frame.fourcc;
+		m_dmabuf_modifier = frame.modifier;
+		recreated = true;
+	}
+
+	// GPU-side blit tiled RT -> linear dmabuf texture. Mirror RenderBlankFrame's scissor/FBO
+	// dance so GLState stays consistent (scissor test is normally on; the scratch FBOs' draw/read
+	// buffers default to COLOR_ATTACHMENT0 so no glDrawBuffer — absent in GLES — is needed).
+	const GLuint src_id = static_cast<GSTextureOGL*>(tex)->GetID();
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_read);
+	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src_id, 0);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_fbo_write);
+	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_dmabuf_lin_tex, 0);
+	glDisable(GL_SCISSOR_TEST);
+	glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	glEnable(GL_SCISSOR_TEST);
+	// Restore both read+draw to the tracked FBO (GS always binds GL_FRAMEBUFFER, so keep them equal).
+	glBindFramebuffer(GL_FRAMEBUFFER, GLState::fbo);
+
+	if (recreated || force_export)
+	{
+		// Hand the frontend its own fd (it imports + closes it); the context keeps its own for the bo.
+#ifndef _WIN32
+		*fd = dup(m_dmabuf_fd);
+#endif
+		*stride = m_dmabuf_stride;
+		*offset = m_dmabuf_offset;
+		*fourcc = m_dmabuf_fourcc;
+		*modifier = m_dmabuf_modifier;
+	}
+	return true;
+}
+
+u32 GSDeviceOGL::GetFrameTextureGLID(GSTexture* tex)
+{
+	return tex ? static_cast<GSTextureOGL*>(tex)->GetID() : 0;
+}
+
+void* GSDeviceOGL::CreateFrameFenceShared()
+{
+	// Shared-context present (desktop): order the frontend's sample against our render with a GPU
+	// fence instead of glFinish. glFlush pushes both the render and the fence so the frontend's
+	// context (which shares our namespace) can see the sync object and glWaitSync on it — a
+	// GPU-side wait that does NOT block our CPU thread. Critical on a GPU-bound scene, where
+	// glFinish would stall the CPU for the GPU's whole frame and break the pipeline -> dips.
+	GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	glFlush();
+	return static_cast<void*>(sync);
+}
+
+void GSDeviceOGL::FlushRenderingCommands()
+{
+	// glFinish (not glFlush): the dmabuf consumer is on a separate EGLDisplay where implicit
+	// fencing doesn't reliably order against our render, causing tearing. Wait for the GPU to
+	// finish the frame before the frontend samples it. Cheap here — the V3D GPU sits near 0%.
+	glFinish();
+}
+
 GLuint GSDeviceOGL::CreateSampler(PSSamplerSelector sel)
 {
 	GL_PUSH("Create Sampler");
@@ -1452,7 +1609,80 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 {
 	std::string header;
 
-	if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
+	if (m_is_gles)
+	{
+		if (GLAD_GL_ES_VERSION_3_2)
+			header = "#version 320 es\n";
+		else
+		{
+			header = "#version 310 es\n";
+			// GLSL ES 3.10 doesn't allow user-defined interface blocks or geometry
+			// shaders in core (both are core in 3.20). The HW renderer uses interface
+			// blocks (VS<->FS) and geometry shaders (HW primitive expansion), so enable
+			// the OES/EXT variants — present on V3D/Mesa (RPi5 GLES 3.1).
+			header += "#extension GL_EXT_shader_io_blocks : enable\n";
+			header += "#extension GL_OES_shader_io_blocks : enable\n";
+			header += "#extension GL_EXT_geometry_shader : enable\n";
+			header += "#extension GL_OES_geometry_shader : enable\n";
+		}
+
+		if (GLAD_GL_EXT_blend_func_extended)
+			header += "#extension GL_EXT_blend_func_extended : require\n";
+
+		if (m_features.framebuffer_fetch)
+		{
+			if (GLAD_GL_ARM_shader_framebuffer_fetch)
+				header += "#extension GL_ARM_shader_framebuffer_fetch : require\n";
+			else if (GLAD_GL_EXT_shader_framebuffer_fetch)
+				header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
+		}
+
+		// V3D (RPi5) runs mediump float ALU much faster than highp. The "Reduce Shader
+		// Precision" option (GSConfig.GLESReducedPrecision) drops the *fragment* shader
+		// to mediump float for speed on GPU-bound scenes. Trade-off: PS2 texcoords need
+		// highp, and the interpolated coords inherit the FS default, so mediump causes
+		// minor texture shimmer — hence it's opt-in, default off. The vertex shader and
+		// int/sampler precision always stay highp (positions / exact PS2 integer math).
+		if (GSConfig.GLESReducedPrecision && type == GL_FRAGMENT_SHADER)
+			header += "precision mediump float;\n";
+		else
+			header += "precision highp float;\n";
+		header += "precision highp int;\n";
+		header += "precision highp sampler2D;\n";
+
+		// One-shot confirmation (re-logged whenever the setting toggles) so testers can
+		// verify the "Reduce Shader Precision" option actually reached shader compile —
+		// useful when the mediump texcoord shimmer is imperceptible (e.g. on a 480i CRT).
+		if (type == GL_FRAGMENT_SHADER)
+		{
+			static int s_logged_prec = -1;
+			const int prec = GSConfig.GLESReducedPrecision ? 1 : 0;
+			if (prec != s_logged_prec)
+			{
+				s_logged_prec = prec;
+				Console.WriteLnFmt("GS: GLES fragment shader float precision = {}",
+					prec ? "mediump (reduced)" : "highp (default)");
+			}
+		}
+		if (GLAD_GL_ES_VERSION_3_1)
+			header += "precision highp sampler2DMS;\n";
+		if (GLAD_GL_ES_VERSION_3_2)
+			header += "precision highp usamplerBuffer;\n";
+
+		if (!GLAD_GL_EXT_blend_func_extended)
+			header += "#define DISABLE_DUAL_SOURCE\n";
+
+		// Signal shaders that they are compiled for GLES (e.g. to skip built-in redeclarations).
+		header += "#define GLES 1\n";
+
+		// No EXT_clip_control (e.g. V3D/RPi5 Mesa): clip-space depth stays [-1,1]
+		// instead of [0,1], so the TFX vertex shader must remap its [0,1] z to the
+		// full [-1,1] range — otherwise depth compresses into [0.5,1] and coplanar
+		// surfaces Z-fight (eyes / shirt layers / alpha foliage drop out).
+		if (!GLAD_GL_EXT_clip_control)
+			header += "#define GLES_NO_CLIP_CONTROL 1\n";
+	}
+	else if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
 	{
 		// Intel's GL driver doesn't like the readonly qualifier with 3.3 GLSL.
 		header = "#version 430 core\n";
@@ -1467,7 +1697,10 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 			header += "#extension GL_ARB_shader_storage_buffer_object: require\n";
 	}
 
-	if (m_features.framebuffer_fetch && GLAD_GL_EXT_shader_framebuffer_fetch)
+	// For GLES, framebuffer_fetch extensions are already emitted inside the GLES block
+	// (before precision qualifiers). In GLSL ES, #extension must precede precision
+	// declarations, so we must not repeat them here.
+	if (!m_is_gles && m_features.framebuffer_fetch && GLAD_GL_EXT_shader_framebuffer_fetch)
 		header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
 
 	if (m_features.framebuffer_fetch)
@@ -1475,7 +1708,8 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 	else
 		header += "#define HAS_FRAMEBUFFER_FETCH 0\n";
 
-	if (GLAD_GL_ARB_conservative_depth)
+	// GL_ARB_conservative_depth is a desktop GL extension; GLAD flag is 0 on GLES.
+	if (!m_is_gles && GLAD_GL_ARB_conservative_depth)
 	{
 		header += "#extension GL_ARB_conservative_depth : enable\n";
 		header += "#define PS_HAS_CONSERVATIVE_DEPTH 1\n";
@@ -1530,9 +1764,8 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 
 std::string GSDeviceOGL::GetVSSource(VSSelector sel)
 {
-	DevCon.WriteLn("GL: Compiling new vertex shader with selector 0x%" PRIX64, sel.key);
-
 	std::string macro = fmt::format("#define VS_FST {}\n", static_cast<u32>(sel.fst))
+		+ fmt::format("#define VS_TME {}\n", static_cast<u32>(sel.tme))
 		+ fmt::format("#define VS_IIP {}\n", static_cast<u32>(sel.iip))
 		+ fmt::format("#define VS_POINT_SIZE {}\n", static_cast<u32>(sel.point_size))
 		+ fmt::format("#define VS_EXPAND {}\n", static_cast<int>(sel.expand));
@@ -1544,8 +1777,6 @@ std::string GSDeviceOGL::GetVSSource(VSSelector sel)
 
 std::string GSDeviceOGL::GetPSSource(const PSSelector& sel)
 {
-	DevCon.WriteLn("GL: Compiling new pixel shader with selector 0x%016" PRIX64 "_%016" PRIX64, sel.key_hi, sel.key_lo);
-
 	std::string macro = fmt::format("#define PS_FST {}\n", sel.fst)
 		+ fmt::format("#define PS_WMS {}\n", sel.wms)
 		+ fmt::format("#define PS_WMT {}\n", sel.wmt)
@@ -2312,9 +2543,20 @@ bool GSDeviceOGL::CreateCASPrograms()
 		return false;
 	}
 
-	const char* header =
-		"#version 420\n"
-		"#extension GL_ARB_compute_shader : require\n";
+	std::string header_str;
+	if (m_is_gles)
+	{
+		if (GLAD_GL_ES_VERSION_3_2)
+			header_str = "#version 320 es\n";
+		else
+			header_str = "#version 310 es\n";
+		header_str += "precision highp float;\nprecision highp int;\n";
+	}
+	else
+	{
+		header_str = "#version 420\n#extension GL_ARB_compute_shader : require\n";
+	}
+	const char* header = header_str.c_str();
 	const char* sharpen_params[2] = {
 		"#define CAS_SHARPEN_ONLY false\n",
 		"#define CAS_SHARPEN_ONLY true\n"};
@@ -2473,7 +2715,7 @@ void GSDeviceOGL::RenderImGui()
 				glBindTextureUnit(0, texture_id);
 			}
 
-			glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)pcmd->ElemCount, GL_UNSIGNED_SHORT,
+			m_draw_elements_base_vertex(GL_TRIANGLES, (GLsizei)pcmd->ElemCount, GL_UNSIGNED_SHORT,
 				(void*)(intptr_t)((pcmd->IdxOffset + m_index.start) * sizeof(ImDrawIdx)), pcmd->VtxOffset + vertex_start);
 		}
 
@@ -2547,7 +2789,11 @@ void GSDeviceOGL::OMSetColorMaskState(OMColorMaskSelector sel)
 	{
 		GLState::wrgba = sel.wrgba;
 
-		glColorMaski(0, sel.wr, sel.wg, sel.wb, sel.wa);
+		// Only render target 0 is ever bound for these passes, so the non-indexed
+		// glColorMask (core in all GL/GLES) is equivalent to glColorMaski(0, ...).
+		// glColorMaski is core only in GL 3.0 / GLES 3.2 — its pointer is null on
+		// GLES 3.1 (V3D/RPi5) and calling it crashes.
+		glColorMask(sel.wr, sel.wg, sel.wb, sel.wa);
 	}
 }
 
@@ -2732,6 +2978,36 @@ static constexpr std::array<GLenum, 3> s_gl_blend_ops = { {
 
 void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 {
+	// GLES 3.1 without EXT_blend_func_extended (V3D/RPi5) has no dual-source
+	// blending: the second fragment output (layout index=1) fails to compile and
+	// SRC1 blend factors are invalid enums. Drop the second output and
+	// approximate SRC1 factors with the post-shader alpha — in PCSX2's tfx the
+	// dual-source output carries the blend coefficient (As/Af) replicated, so
+	// SRC_ALPHA is close, and strictly better than the broken program a failed
+	// compile produces.
+	if (m_is_gles && !GLAD_GL_EXT_blend_func_extended) [[unlikely]]
+	{
+		config.ps.no_color1 = true;
+		const auto remap = [](u8 f) -> u8 {
+			if (f == SRC1_COLOR || f == SRC1_ALPHA)
+				return SRC_ALPHA;
+			if (f == INV_SRC1_COLOR || f == INV_SRC1_ALPHA)
+				return INV_SRC_ALPHA;
+			return f;
+		};
+		config.blend.src_factor = remap(config.blend.src_factor);
+		config.blend.dst_factor = remap(config.blend.dst_factor);
+		config.blend.src_factor_alpha = remap(config.blend.src_factor_alpha);
+		config.blend.dst_factor_alpha = remap(config.blend.dst_factor_alpha);
+		config.blend_multi_pass.blend.src_factor = remap(config.blend_multi_pass.blend.src_factor);
+		config.blend_multi_pass.blend.dst_factor = remap(config.blend_multi_pass.blend.dst_factor);
+		config.blend_multi_pass.blend.src_factor_alpha = remap(config.blend_multi_pass.blend.src_factor_alpha);
+		config.blend_multi_pass.blend.dst_factor_alpha = remap(config.blend_multi_pass.blend.dst_factor_alpha);
+		config.blend_multi_pass.no_color1 = true;
+		if (config.alpha_second_pass.enable)
+			config.alpha_second_pass.ps.no_color1 = true;
+	}
+
 	if (!GLState::scissor.eq(config.scissor))
 	{
 		glScissor(config.scissor.x, config.scissor.y, config.scissor.width(), config.scissor.height());
@@ -2969,17 +3245,15 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 
 	// Avoid changing framebuffer just to switch from rt+depth to rt and vice versa.
 	bool fb_optimization_needs_barrier = false;
-	if (!draw_rt && GLState::rt && GLState::ds == draw_ds && config.tex != GLState::rt &&
-		draw_ds && GLState::rt->GetSize() == draw_ds->GetSize() && !draw_ds_as_rt)
+	if (!(draw_rt || draw_ds_as_rt) && draw_ds && GLState::rt && GLState::rt->GetSize() == draw_ds->GetSize())
 	{
 		draw_rt = GLState::rt;
-		fb_optimization_needs_barrier = !GLState::rt_written;
+		fb_optimization_needs_barrier = !GLState::rt_written && GLState::ds == draw_ds;
 	}
-	else if (!draw_ds && GLState::ds && GLState::rt == draw_rt && config.tex != GLState::ds &&
-		draw_rt && GLState::ds->GetSize() == draw_rt->GetSize() && !draw_ds_as_rt)
+	else if (!(draw_ds || draw_ds_as_rt) && draw_rt && GLState::ds && GLState::ds->GetSize() == draw_rt->GetSize())
 	{
 		draw_ds = GLState::ds;
-		fb_optimization_needs_barrier = !GLState::ds_written;
+		fb_optimization_needs_barrier = !GLState::ds_written && GLState::rt == draw_rt;
 	}
 
 	// Be careful of the rt already being bound and the blend using the RT without a barrier.
@@ -3173,6 +3447,9 @@ void GSDeviceOGL::SendHWDraw(const GSHWDrawConfig& config,
 		else
 			pxAssert(config.drawlist_bbox && static_cast<u32>(config.drawlist_bbox->size()) == draw_list_size);
 
+		if (!m_features.texture_barrier && config.tex_hazard != config.TEX_HAZARD_NONE)
+			FeedbackCopyAndBind(config, draw_rt, draw_rt_clone, draw_ds, draw_ds_clone, config.samplearea);
+
 		for (u32 n = 0, p = 0; n < draw_list_size; n++)
 		{
 			const u32 count = config.drawlist->at(n) * indices_per_prim;
@@ -3184,9 +3461,7 @@ void GSDeviceOGL::SendHWDraw(const GSHWDrawConfig& config,
 			else
 			{
 				const GSVector4i bbox = config.drawlist_bbox->at(n).rintersect(config.drawarea);
-				const GSVector4i bbox_tex = config.drawlist_bbox_tex ?
-					config.drawlist_bbox_tex->at(n).rintersect(config.samplearea) : GSVector4i::zero();
-				FeedbackCopyAndBind(config, draw_rt, draw_rt_clone, draw_ds, draw_ds_clone, bbox, bbox_tex);
+				FeedbackCopyAndBind(config, draw_rt, draw_rt_clone, draw_ds, draw_ds_clone, bbox);
 			}
 
 			Draw(config, p, count);
@@ -3255,11 +3530,8 @@ void GSDeviceOGL::DebugMessageCallback(GLenum gl_source, GLenum gl_type, GLuint 
 		default                                  : source = "???"; break;
 	}
 
-	// Don't spam noisy information on the terminal
-	if (gl_severity != GL_DEBUG_SEVERITY_NOTIFICATION && gl_source != GL_DEBUG_SOURCE_APPLICATION)
-	{
+	if (gl_severity != GL_DEBUG_SEVERITY_NOTIFICATION)
 		Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), GSState::s_n, severity.c_str(), message.c_str());
-	}
 }
 
 #ifdef ENABLE_OGL_DEBUG
