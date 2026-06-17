@@ -24,7 +24,16 @@ find_package(plutosvg 0.0.7 REQUIRED)
 find_package(ryml REQUIRED)
 
 if(USE_VULKAN)
-	find_package(Shaderc REQUIRED)
+	# shaderc is loaded at runtime via dlopen — only the header is needed at build time.
+	# Try the system package first; fall back to the bundled header for cross-compilation.
+	find_package(Shaderc)
+	if(NOT Shaderc_FOUND)
+		message(STATUS "System shaderc not found — using bundled header (dlopen at runtime)")
+		set(SHADERC_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/3rdparty/shaderc/include")
+		add_library(Shaderc::shaderc_shared INTERFACE IMPORTED)
+		set_target_properties(Shaderc::shaderc_shared PROPERTIES
+			INTERFACE_INCLUDE_DIRECTORIES "${SHADERC_INCLUDE_DIR}")
+	endif()
 endif()
 
 # Platform-specific dependencies.

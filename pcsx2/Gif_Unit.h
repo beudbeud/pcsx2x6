@@ -313,6 +313,14 @@ struct Gif_Path
 
 	void CopyGSPacketData(u8* pMem, u32 size, bool aligned = false)
 	{
+		if (size > buffSize) [[unlikely]]
+		{
+			// A size larger than the whole path buffer is always a caller bug
+			// (e.g. an unmasked bit-31 EOP flag from GetGSPacketSize turning into
+			// a ~2GB transfer). Drop it instead of memcpy'ing past the buffer.
+			Console.Error("GIF: dropping insane path%d packet (size=%u > buffSize=%u)", idx + 1, size, buffSize);
+			return;
+		}
 		if (curSize + size > buffSize)
 		{ // Move gsPack to front of buffer
 			GUNIT_LOG("CopyGSPacketData: Realigning packet!");
@@ -327,6 +335,15 @@ struct Gif_Path
 			if ((s32)buffLimit + readPos > (s32)curSize + (s32)size)
 				break;      // Enough free front space
 			mtgsReadWait(); // Let MTGS run to free up buffer space
+		}
+		if (curSize + size > buffSize) [[unlikely]]
+		{
+			// Last resort: fully drain the GS thread so RealignPacket can reclaim
+			// consumed space. Avoids overflowing the buffer when MTGS was behind.
+			Console.Error("GIF: path%d buffer full (curSize=%u size=%u), draining GS", idx + 1, curSize, size);
+			Gif_MTGS_Wait(isMTVU());
+			if (curSize + size > buffSize)
+				RealignPacket();
 		}
 		pxAssertMsg(curSize + size <= buffSize, "Gif Path Buffer Overflow!");
 		memcpy(&buffer[curSize], pMem, size);
