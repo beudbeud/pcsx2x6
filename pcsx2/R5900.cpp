@@ -15,6 +15,7 @@
 
 #include "Hardware.h"
 #include "IPU/IPUdma.h"
+#include "IopHw.h"
 
 #include "Elfheader.h"
 #include "CDVD/CDVD.h"

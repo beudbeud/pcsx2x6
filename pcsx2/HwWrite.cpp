@@ -181,6 +181,10 @@ void _hwWrite32( u32 mem, u32 value )
 						psxReset();
 						// No PS1 mode on arcade — skip ICFG and PS1 CD speed
 						psxHu32(HW_ICTRL) = 1;
+						// Re-enable DMA interrupt so sifman's WaitEventFlag fires after IOP reboot.
+						// psxHwReset() zeroes IMASK; the IOPRP kernel restores it without bit 3,
+						// leaving DMA completions masked and sifman permanently blocked.
+						psxHu32(HW_IMASK) |= (1 << 3);
 						psxRegs.cycle = cycle;
 					}
 					if(!(value & 0x100))

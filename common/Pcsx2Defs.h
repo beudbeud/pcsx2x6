@@ -37,7 +37,7 @@ static constexpr bool IsDebugBuild = false;
 	static constexpr unsigned int __pagemask = __pagesize - 1;
 	static constexpr unsigned int __pageshift = std::bit_width(__pagemask);
 #elif defined(ARCH_ARM64)
-	// Apple Silicon uses 16KB pages and 128 byte cache lines.
+	// ARM64 uses 16KB pages (Apple Silicon, and Recalbox RPi5 kernel with BR2_ARM64_PAGE_SIZE_16K).
 	static constexpr unsigned int __pagesize = 0x4000;
 	static constexpr unsigned int __pageshift = 14;
 	static constexpr unsigned int __pagemask = __pagesize - 1;

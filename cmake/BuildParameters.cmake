@@ -77,9 +77,19 @@ mark_as_advanced(CMAKE_C_FLAGS_DEVEL CMAKE_CXX_FLAGS_DEVEL CMAKE_LINKER_FLAGS_DE
 
 #-------------------------------------------------------------------------------
 # Select the architecture
+# Use CMAKE_SYSTEM_PROCESSOR (target) not CMAKE_HOST_SYSTEM_PROCESSOR (build
+# host) so that Buildroot cross-compilation picks the correct code path.
 #-------------------------------------------------------------------------------
-if("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "amd64" OR
-   "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "AMD64" OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
+# Resolve the target processor: prefer CMAKE_SYSTEM_PROCESSOR (set by the
+# toolchain file in cross-compilation) over CMAKE_HOST_SYSTEM_PROCESSOR.
+if(CMAKE_SYSTEM_PROCESSOR)
+	set(_PCSX2_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+else()
+	set(_PCSX2_TARGET_PROCESSOR "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+endif()
+
+if("${_PCSX2_TARGET_PROCESSOR}" STREQUAL "x86_64" OR "${_PCSX2_TARGET_PROCESSOR}" STREQUAL "amd64" OR
+   "${_PCSX2_TARGET_PROCESSOR}" STREQUAL "AMD64" OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
 	# Multi-ISA only exists on x86.
 	option(DISABLE_ADVANCE_SIMD "Disable advance use of SIMD (SSE2+ & AVX)" OFF)
 
@@ -104,41 +114,47 @@ if("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_HOST_SYSTEM_PR
 		if (DISABLE_ADVANCE_SIMD)
 			add_compile_options("-msse" "-msse2" "-msse4.1" "-mfxsr")
 		else()
-			# Can't use march=native on Apple Silicon.
-			if(NOT APPLE OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+			# Don't use march=native when cross-compiling or on Apple Silicon.
+			if(NOT CMAKE_CROSSCOMPILING AND (NOT APPLE OR "${_PCSX2_TARGET_PROCESSOR}" STREQUAL "x86_64"))
 				add_compile_options("-march=native")
 			endif()
 		endif()
 	endif()
-elseif("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "aarch64" OR
+elseif("${_PCSX2_TARGET_PROCESSOR}" STREQUAL "arm64" OR "${_PCSX2_TARGET_PROCESSOR}" STREQUAL "aarch64" OR
        "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "arm64")
-	message(STATUS "Building for Apple Silicon (ARM64).")
+	message(STATUS "Building for ARM64.")
 	set(ARCH_ARM64 TRUE)
 	if(APPLE)
 		# Min spec is an M1
 		add_compile_options("-march=armv8.4-a" "-mcpu=apple-m1")
 	else()
-		# Require atomic rmw instructions
+		# Require atomic rmw instructions (ARMv8.1-A)
 		add_compile_options("-march=armv8.1-a")
 	endif()
 
-	# If we're running on Linux, we need to detect the page/cache line size.
-	# It could be a virtual machine with 4K pages, or 16K with Asahi.
+	# Detect page/cache line size for Linux targets (native or cross-compiled).
+	# When cross-compiling, use fixed RPi4/5-compatible defaults to avoid
+	# running target binaries on the build host.
 	if(LINUX)
-		detect_page_size()
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=${HOST_PAGE_SIZE})
-		detect_cache_line_size()
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=${HOST_CACHE_LINE_SIZE})
+		if(CMAKE_CROSSCOMPILING)
+			# Recalbox RPi5 kernel uses 16KB pages (BR2_ARM64_PAGE_SIZE_16K=y).
+			list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=0x4000)
+			list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=64)
+		else()
+			detect_page_size()
+			list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=${HOST_PAGE_SIZE})
+			detect_cache_line_size()
+			list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=${HOST_CACHE_LINE_SIZE})
+		endif()
 	endif()
-	
-	# Windows page/cache line size seems to match x68-64 
+
+	# Windows page/cache line size seems to match x86-64
 	if(WIN32)
 		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=0x1000)
-		# Value of std::hardware_destructive_interference_size for ARM64 on MSVC toolset 14.40.33807
 		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=64)
 	endif()
 else()
-	message(FATAL_ERROR "Unsupported architecture: ${CMAKE_HOST_SYSTEM_PROCESSOR}")
+	message(FATAL_ERROR "Unsupported architecture: ${_PCSX2_TARGET_PROCESSOR}")
 endif()
 
 # Require C++20.

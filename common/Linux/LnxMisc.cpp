@@ -19,8 +19,10 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef X11_API
 #include <X11/Xlib.h>
 #include <X11/extensions/XInput2.h>
+#endif
 
 #include <cstdlib>
 #include <cstring>
@@ -226,6 +228,7 @@ bool Common::InhibitScreensaver(bool inhibit)
 
 void Common::SetMousePosition(int x, int y)
 {
+#ifdef X11_API
 	Display* display = XOpenDisplay(nullptr);
 	if (!display)
 		return;
@@ -235,8 +238,10 @@ void Common::SetMousePosition(int x, int y)
 	XFlush(display);
 
 	XCloseDisplay(display);
+#endif
 }
 
+#ifdef X11_API
 static std::function<void(int, int)> fnMouseMoveCb;
 static std::atomic<bool> trackingMouse = false;
 static std::thread mouseThread;
@@ -272,10 +277,6 @@ void mouseEventLoop()
 	XEvent event;
 	while (trackingMouse)
 	{
-		// XNextEvent is blocking, this is a zombie process risk if no events arrive
-		// while we are trying to shutdown.
-		// https://nrk.neocities.org/articles/x11-timeout-with-xsyncalarm might be
-		// a better solution than using XPending.
 		if (!XPending(display))
 		{
 			Threading::Sleep(1);
@@ -305,9 +306,11 @@ void mouseEventLoop()
 
 	XCloseDisplay(display);
 }
+#endif // X11_API
 
 bool Common::AttachMousePositionCb(std::function<void(int, int)> cb)
 {
+#ifdef X11_API
 	fnMouseMoveCb = cb;
 
 	if (trackingMouse)
@@ -317,16 +320,21 @@ bool Common::AttachMousePositionCb(std::function<void(int, int)> cb)
 	mouseThread = std::thread(mouseEventLoop);
 	mouseThread.detach();
 	return true;
+#else
+	return false;
+#endif
 }
 
 void Common::DetachMousePositionCb()
 {
+#ifdef X11_API
 	trackingMouse = false;
 	fnMouseMoveCb = nullptr;
 	if (mouseThread.joinable())
 	{
 		mouseThread.join();
 	}
+#endif
 }
 
 bool Common::PlaySoundAsync(const char* path)

@@ -261,6 +261,11 @@ static void doBranch(s32 tar) {
 	iopEventTest();
 }
 
+void iopExecuteOneInst()
+{
+	execI();
+}
+
 static void intReserve() {
 }
 
