@@ -11,6 +11,7 @@
 struct Pcsx2Config;
 
 class AudioStream;
+struct AudioStreamParameters;
 
 namespace SPU2
 {
@@ -63,6 +64,10 @@ u32 GetConsoleSampleRate();
 /// Tells SPU2 to forward audio packets to GSCapture.
 void SetAudioCaptureActive(bool active);
 bool IsAudioCaptureActive();
+
+/// Optional factory for a custom output stream (e.g. libretro frontend).
+/// When set, overrides the OutputModule setting. Set before Open().
+extern std::unique_ptr<AudioStream> (*CustomOutputStreamFactory)(u32 sample_rate, const AudioStreamParameters& parameters);
 } // namespace SPU2
 
 void SPU2write(u32 mem, u16 value);
