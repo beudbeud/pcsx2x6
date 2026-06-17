@@ -22,9 +22,36 @@ public:
 	{
 		int major_version;
 		int minor_version;
+		bool is_gles = false;
 	};
 
+	// Zero-copy HW render: a single-plane dmabuf exported from a GL texture, for the
+	// libretro frontend context to import. fd is owned by the caller (close it).
+	struct DmaBufFrame
+	{
+		int fd = -1;
+		u32 width = 0;
+		u32 height = 0;
+		u32 stride = 0;
+		u32 offset = 0;
+		u32 fourcc = 0;
+		u64 modifier = 0;
+	};
+
+	// Export a GL 2D texture as a dmabuf via EGL_MESA_image_dma_buf_export. Returns false
+	// if unsupported. Implemented by the EGL context; called on the GS thread (context current).
+	virtual bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) { return false; }
+
+	// Allocate a LINEAR dmabuf (via GBM) and import it as a GL 2D texture in this context, to
+	// render into. Linear so a consumer on another EGLDisplay can sample it without GPU-tiling
+	// (UIF) ambiguity. Fills `out` (out->fd owned by this context) + the GL texture id. Returns
+	// false if unsupported. Called on the GS thread (its context current).
+	virtual bool CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture) { return false; }
+	virtual void DestroyLinearDmaBufTexture() {}
+
 	__fi const WindowInfo& GetWindowInfo() const { return m_wi; }
+
+	virtual bool IsGLES() const { return false; }
 	__fi u32 GetSurfaceWidth() const { return m_wi.surface_width; }
 	__fi u32 GetSurfaceHeight() const { return m_wi.surface_height; }
 

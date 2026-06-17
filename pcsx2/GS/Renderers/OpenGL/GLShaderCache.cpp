@@ -272,18 +272,7 @@ std::optional<GLProgram> GLShaderCache::GetProgram(
 	const std::string_view vertex_shader, const std::string_view fragment_shader, const PreLinkCallback& callback)
 {
 	if (!m_program_binary_supported || !m_blob_file)
-	{
-#ifdef PCSX2_DEVBUILD
-		Common::Timer timer;
-#endif
-
-		std::optional<GLProgram> res = CompileProgram(vertex_shader, fragment_shader, callback, false);
-
-#ifdef PCSX2_DEVBUILD
-		Console.WriteLn("Time to compile shader without caching: %.2fms", timer.GetTimeMilliseconds());
-#endif
-		return res;
-	}
+		return CompileProgram(vertex_shader, fragment_shader, callback, false);
 
 	const auto key = GetCacheKey(vertex_shader, fragment_shader);
 	auto iter = m_index.find(key);

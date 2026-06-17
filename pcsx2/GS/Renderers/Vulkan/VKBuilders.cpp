@@ -732,6 +732,21 @@ void Vulkan::DescriptorSetUpdateBuilder::PushUpdate(
 		Clear();
 }
 
+void Vulkan::DescriptorSetUpdateBuilder::UpdateAndBind(VkDevice device, VkDescriptorSet set, VkCommandBuffer cmdbuf,
+	VkPipelineBindPoint bind_point, VkPipelineLayout layout, u32 set_index, bool clear /*= true*/)
+{
+	pxAssert(m_num_writes > 0 && set != VK_NULL_HANDLE);
+
+	for (u32 i = 0; i < m_num_writes; i++)
+		m_writes[i].dstSet = set;
+
+	vkUpdateDescriptorSets(device, m_num_writes, m_writes.data(), 0, nullptr);
+	vkCmdBindDescriptorSets(cmdbuf, bind_point, layout, set_index, 1, &set, 0, nullptr);
+
+	if (clear)
+		Clear();
+}
+
 void Vulkan::DescriptorSetUpdateBuilder::AddImageDescriptorWrite(VkDescriptorSet set, u32 binding, VkImageView view,
 	VkImageLayout layout /*= VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL*/, bool storage_image /*= false*/)
 {

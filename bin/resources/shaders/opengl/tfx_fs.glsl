@@ -108,6 +108,9 @@ in SHADER
 
 	float inv_cov; // We use the inverse to make it simpler to interpolate.
 	flat uint interior; // 1 for triangle interior; 0 for edge;
+#ifdef GLES_NO_CLIP_CONTROL
+	highp float precise_z; // full-precision window depth; clip-space float32 quantizes Z16/Z24 near the -1 clip bound
+#endif
 } PSin;
 
 #define TARGET_0_QUALIFIER out
@@ -165,7 +168,7 @@ layout(binding = 3) uniform sampler2D img_prim_min;
 layout(binding = 4) uniform sampler2D DepthSampler;
 #endif
 
-#if ZWRITE && PS_HAS_CONSERVATIVE_DEPTH && !SW_DEPTH
+#if ZWRITE && PS_HAS_CONSERVATIVE_DEPTH && !SW_DEPTH && !defined(GLES_NO_CLIP_CONTROL)
 layout(depth_less) out float gl_FragDepth;
 #endif
 
@@ -326,7 +329,7 @@ vec4 sample_c_af(vec2 uv, float uv_w)
 		colour = textureLod(TextureSampler, uv, lod);
 	else
 	{
-		vec4 num = vec4(0, 0, 0, 0);
+		vec4 num = vec4(0.0f, 0.0f, 0.0f, 0.0f);
 		for (int i = 0; i < aniso_ratio; i++)
 		{		
 			vec2 d = -aniso_line + (0.5f + i) * (2.0f * aniso_line) / aniso_ratio;	
@@ -1185,7 +1188,14 @@ float As = As_rgba.a;
 
 void ps_main()
 {
+#ifdef GLES_NO_CLIP_CONTROL
+	// No EXT_clip_control: gl_FragCoord.z is quantized (clip-space z was remapped near
+	// the -1 bound). Use the full-precision window depth carried from the VS so the
+	// depth test and the gl_FragDepth write below keep all Z16/Z24 levels.
+	float input_z = PSin.precise_z;
+#else
 	float input_z = gl_FragCoord.z;
+#endif
 
 	// Must floor before depth testing.
 #if PS_ZFLOOR
@@ -1293,12 +1303,12 @@ void ps_main()
 #if PS_DATE == 1
 	// DATM == 0
 	// Pixel with alpha equal to 1 will failed (128-255)
-	o_col0 = (C.a > 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
+	o_col0 = (C.a > 127.5f) ? vec4(float(gl_PrimitiveID)) : vec4(float(0x7FFFFFFF));
 	return;
 #elif PS_DATE == 2
 	// DATM == 1
 	// Pixel with alpha equal to 0 will failed (0-127)
-	o_col0 = (C.a < 127.5f) ? vec4(gl_PrimitiveID) : vec4(0x7FFFFFFF);
+	o_col0 = (C.a < 127.5f) ? vec4(float(gl_PrimitiveID)) : vec4(float(0x7FFFFFFF));
 	return;
 #endif
 
@@ -1414,6 +1424,11 @@ void ps_main()
 		o_col1 = input_z;
 	#endif
 	// Standard depth write.
+	gl_FragDepth = input_z;
+#elif defined(GLES_NO_CLIP_CONTROL)
+	// No clip_control: always output the precise depth so the buffer stores full
+	// Z16/Z24 resolution instead of the quantized fixed-function gl_FragCoord.z.
+	// (Disables early-Z on V3D — the cost of bypassing the clip-space quantization.)
 	gl_FragDepth = input_z;
 #endif
 }

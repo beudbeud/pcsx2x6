@@ -65,10 +65,10 @@ vec4 sample_c(vec2 uv)
 vec4 ps_crt(uint i)
 {
 	vec4 mask[4] = vec4[4](
-		vec4(1, 0, 0, 0),
-		vec4(0, 1, 0, 0),
-		vec4(0, 0, 1, 0),
-		vec4(1, 1, 1, 0));
+		vec4(1.0f, 0.0f, 0.0f, 0.0f),
+		vec4(0.0f, 1.0f, 0.0f, 0.0f),
+		vec4(0.0f, 0.0f, 1.0f, 0.0f),
+		vec4(1.0f, 1.0f, 1.0f, 0.0f));
 	return sample_c() * clamp((mask[i] + 0.5f), 0.0f, 1.0f);
 }
 
@@ -84,8 +84,8 @@ vec4 ps_scanlines(uint i)
 {
 	vec4 mask[2] = vec4[2]
 	(
-		vec4(1, 1, 1, 0),
-		vec4(0, 0, 0, 0)
+		vec4(1.0f, 1.0f, 1.0f, 0.0f),
+		vec4(0.0f, 0.0f, 0.0f, 0.0f)
 	);
 
 	return sample_c() * clamp((mask[i] + 0.5f), 0.0f, 1.0f);
@@ -185,7 +185,7 @@ vec3 Fetch(vec2 pos, vec2 off)
 
 vec2 Dist(vec2 pos)
 {
-	pos = pos * vec2(640, 480);
+	pos = pos * vec2(640.0f, 480.0f);
 
 	return -((pos - floor(pos)) - vec2(0.5, 0.5));
 }
@@ -447,7 +447,7 @@ void ps_4x_rgss()
 	color += sample_c(PSin_t + vec2(-s,-l) * dxy).rgb;
 	color += sample_c(PSin_t + vec2(-l, s) * dxy).rgb;
 
-	SV_Target0 = vec4(color * 0.25,1);
+	SV_Target0 = vec4(color * 0.25f, 1.0f);
 }
 #endif
 
@@ -457,11 +457,11 @@ void ps_automagical_supersampling()
 	vec2 ratio = (u_source_size / u_target_size) * 0.5;
 	vec2 steps = floor(ratio);
 	vec3 col = sample_c(PSin_t).rgb;
-	float div = 1;
+	float div = 1.0f;
 
-	for (float y = 0; y < steps.y; y++)
+	for (float y = 0.0f; y < steps.y; y++)
 	{
-		for (float x = 0; x < steps.x; x++)
+		for (float x = 0.0f; x < steps.x; x++)
 		{
 			vec2 offset = vec2(x,y) - ratio * 0.5;
 			col += sample_c(PSin_t + offset * u_rcp_source_resolution * 2.0).rgb;
@@ -469,7 +469,7 @@ void ps_automagical_supersampling()
 		}
 	}
 
-	SV_Target0 = vec4(col / div, 1);
+	SV_Target0 = vec4(col / div, 1.0f);
 }
 #endif
 
