@@ -31,6 +31,8 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h> // NEON-accelerated RGBA->XRGB readback swizzle
+#elif defined(__x86_64__) || defined(_M_X64)
+#include <tmmintrin.h> // SSSE3 pshufb for the RGBA->XRGB readback swizzle
 #endif
 
 // Zero-copy HW render (experimental): import the GS dmabuf into the frontend GL context and
@@ -250,6 +252,14 @@ namespace LibretroHost
 			{
 				const uint8x16_t v = vld1q_u8(reinterpret_cast<const uint8_t*>(src + x));
 				vst1q_u8(reinterpret_cast<uint8_t*>(dst + x), vqtbl1q_u8(v, idx));
+			}
+#elif defined(__x86_64__) || defined(_M_X64)
+			// SSSE3 pshufb: same byte swap, 4 pixels per iteration (desktop, the default path).
+			const __m128i idx = _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+			for (; x + 4 <= width; x += 4)
+			{
+				const __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + x));
+				_mm_storeu_si128(reinterpret_cast<__m128i*>(dst + x), _mm_shuffle_epi8(v, idx));
 			}
 #endif
 			for (; x < width; x++)
@@ -1280,6 +1290,13 @@ static bool HWBlitInitGL()
 		s_gl_blit_prog = 0;
 		return false;
 	}
+	// Bind the sampler to texture unit 0 once — it's program state, no need to re-set each frame.
+	glUseProgram(s_gl_blit_prog);
+	const GLint loc = glGetUniformLocation(s_gl_blit_prog, "u_tex");
+	if (loc >= 0)
+		glUniform1i(loc, 0);
+	glUseProgram(0);
+
 	glGenVertexArrays(1, &s_gl_blit_vao);
 	return true;
 }
@@ -1322,9 +1339,6 @@ static bool HWPresentSharedTexture(u32 tex, u32 w, u32 h, void* fence)
 	glBindTexture(GL_TEXTURE_2D, tex);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	const GLint loc = glGetUniformLocation(s_gl_blit_prog, "u_tex");
-	if (loc >= 0)
-		glUniform1i(loc, 0);
 	glBindVertexArray(s_gl_blit_vao);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 	glBindVertexArray(0);
