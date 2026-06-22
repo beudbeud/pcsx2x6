@@ -141,6 +141,25 @@ void ACATAPI::handle_cmd(atapi_packet_t P) {
         atapi_complete_nodata();
         break;
 
+    case ATAPICMD::INQUIRY: {
+        // The disc driver sends INQUIRY to check the drive is a CD/DVD-ROM before it
+        // mounts "cdrom:". Answer as a DVD-ROM drive or the mount never happens.
+        u8 alloc_len = P.raw8[4];
+        memset(atapi_pio_buf, 0, 36);
+        atapi_pio_buf[0] = 0x05; // peripheral device type: CD/DVD-ROM
+        atapi_pio_buf[1] = 0x80; // removable medium
+        atapi_pio_buf[3] = 0x21; // response data format
+        atapi_pio_buf[4] = 0x1F; // additional length: 31 more bytes -> 36 total
+        memcpy(&atapi_pio_buf[8],  "LECTORA ", 8);
+        memcpy(&atapi_pio_buf[16], "DE MIERDA       ", 16);
+        memcpy(&atapi_pio_buf[32], "1.00", 4);
+        u32 resp_len = 36;
+        if (alloc_len > 0 && alloc_len < resp_len)
+            resp_len = alloc_len;
+        atapi_pio_setup(resp_len);
+        break;
+    }
+
     case ATAPICMD::READ_CAPACITY: {
         if ((ACATA::TH::IMAGE || ACATA::TH::isCHD) && ACATA::TH::IMAGESIZE > 0) {
             u32 last_lba = (u32)(ACATA::TH::IMAGESIZE / ACATAPI::CONSTANTS::DVD_SECTORSIZE) - 1;

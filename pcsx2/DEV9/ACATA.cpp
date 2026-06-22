@@ -156,6 +156,9 @@ u16 ACATA::handle_dataR(u32 addr) { // PIO read at R_DATA
                 ACATA::cmd_handled = -1;
                 CLRB(R_STATUS, ATA_STAT_DRQ);
                 R_STATUS |= ATA_STAT_READY;
+                // Tell the guest the read finished, or it waits here forever and never
+                // sends its first ATAPI command.
+                ACCORE::intr(ACCORE::INTRN_ATA);
             }
             return word;
         }
