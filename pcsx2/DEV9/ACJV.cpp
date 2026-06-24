@@ -120,6 +120,25 @@ static constexpr const std::array<InputBindingInfo, 4> s_jvs_wheel_bindings = {{
 	{"Brake",      TRANSLATE_NOOP("JVS", "Brake"),          nullptr, InputBindingInfo::Type::HalfAxis, 3, GenericInputBinding::L2},
 }};
 
+// Zoids twin-stick (NM00016/25): custom JVS switch-word wiring, mapped live via the I/O-TEST SWITCH TEST.
+// Left lever -> left stick, right lever -> right stick; Start/Service on the standard JVS bits.
+static constexpr const std::array<InputBindingInfo, 14> s_twinstick_p1_button_bindings = {{
+	{"P1_LLeverUp",    TRANSLATE_NOOP("JVS", "P1 Left Lever Up"),     nullptr, InputBindingInfo::Type::HalfAxis, 0x0001, GenericInputBinding::LeftStickUp},
+	{"P1_LLeverDown",  TRANSLATE_NOOP("JVS", "P1 Left Lever Down"),   nullptr, InputBindingInfo::Type::HalfAxis, 0x8000, GenericInputBinding::LeftStickDown},
+	{"P1_LLeverLeft",  TRANSLATE_NOOP("JVS", "P1 Left Lever Left"),   nullptr, InputBindingInfo::Type::HalfAxis, 0x4000, GenericInputBinding::LeftStickLeft},
+	{"P1_LLeverRight", TRANSLATE_NOOP("JVS", "P1 Left Lever Right"),  nullptr, InputBindingInfo::Type::HalfAxis, 0x2000, GenericInputBinding::LeftStickRight},
+	{"P1_RLeverUp",    TRANSLATE_NOOP("JVS", "P1 Right Lever Up"),    nullptr, InputBindingInfo::Type::HalfAxis, 0x0010, GenericInputBinding::RightStickUp},
+	{"P1_RLeverDown",  TRANSLATE_NOOP("JVS", "P1 Right Lever Down"),  nullptr, InputBindingInfo::Type::HalfAxis, 0x0008, GenericInputBinding::RightStickDown},
+	{"P1_RLeverLeft",  TRANSLATE_NOOP("JVS", "P1 Right Lever Left"),  nullptr, InputBindingInfo::Type::HalfAxis, 0x0004, GenericInputBinding::RightStickLeft},
+	{"P1_RLeverRight", TRANSLATE_NOOP("JVS", "P1 Right Lever Right"), nullptr, InputBindingInfo::Type::HalfAxis, 0x0002, GenericInputBinding::RightStickRight},
+	{"P1_LTrigger",    TRANSLATE_NOOP("JVS", "P1 Left Trigger"),      nullptr, InputBindingInfo::Type::HalfAxis, 0x0400, GenericInputBinding::L2},
+	{"P1_RTrigger",    TRANSLATE_NOOP("JVS", "P1 Right Trigger"),     nullptr, InputBindingInfo::Type::HalfAxis, 0x1000, GenericInputBinding::R2},
+	{"P1_LButton",     TRANSLATE_NOOP("JVS", "P1 Left Button"),       nullptr, InputBindingInfo::Type::Button,   0x0200, GenericInputBinding::L1},
+	{"P1_RButton",     TRANSLATE_NOOP("JVS", "P1 Right Button"),      nullptr, InputBindingInfo::Type::Button,   0x0800, GenericInputBinding::R1},
+	{"P1_Start",       TRANSLATE_NOOP("JVS", "P1 Start"),            nullptr, InputBindingInfo::Type::Button,   JVS_BTN_START,   GenericInputBinding::Start},
+	{"P1_Service",     TRANSLATE_NOOP("JVS", "P1 Service"),          nullptr, InputBindingInfo::Type::Button,   JVS_BTN_SERVICE, GenericInputBinding::Select},
+}};
+
 // Per-layout face button default inputs (BTN1-6), mirroring each game's
 // official PS2 port pad. Some games share the same layout. Rows follow FightingLayout order.
 static constexpr GenericInputBinding s_fighting_face_buttons[][6] = {
@@ -144,6 +163,25 @@ static void UpdateFightingBindings(FightingLayout layout)
 	s_active_p1_bindings = s_jvs_p1_button_bindings;
 	s_active_p2_bindings = s_jvs_p2_button_bindings;
 	const auto& face = s_fighting_face_buttons[static_cast<int>(layout)];
+	constexpr int BTN1_INDEX = 4;
+	for (int i = 0; i < 6; i++)
+	{
+		s_active_p1_bindings[BTN1_INDEX + i].generic_mapping = face[i];
+		s_active_p2_bindings[BTN1_INDEX + i].generic_mapping = face[i];
+	}
+}
+
+static constexpr GenericInputBinding s_standard_face_buttons[][6] = { // one row per game, BTN1-6 -> pad button
+	{GenericInputBinding::Square, GenericInputBinding::Triangle, GenericInputBinding::L1,      GenericInputBinding::Cross,   GenericInputBinding::Circle,  GenericInputBinding::R1},      // BASEBALL
+	{GenericInputBinding::Cross,  GenericInputBinding::Square,   GenericInputBinding::Unknown, GenericInputBinding::Unknown, GenericInputBinding::Unknown, GenericInputBinding::Unknown}, // SMASHCOURT
+	{GenericInputBinding::Cross,  GenericInputBinding::Square,   GenericInputBinding::Triangle, GenericInputBinding::Unknown, GenericInputBinding::Unknown, GenericInputBinding::Unknown}, // TECHNICBEAT
+};
+
+static void UpdateStandardBindings(StandardLayout layout)
+{
+	s_active_p1_bindings = s_jvs_p1_button_bindings;
+	s_active_p2_bindings = s_jvs_p2_button_bindings;
+	const auto& face = s_standard_face_buttons[static_cast<int>(layout)];
 	constexpr int BTN1_INDEX = 4;
 	for (int i = 0; i < 6; i++)
 	{
@@ -311,14 +349,17 @@ static JVS_MODE m_jvsMode = JVS_MODE::DEFAULT;
 
 std::span<const InputBindingInfo> ACJV::GetButtonBindings()
 {
-	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE)
+	if (m_jvsMode == JVS_MODE::TWINSTICK)
+		return s_twinstick_p1_button_bindings;
+	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE || m_jvsMode == JVS_MODE::STANDARD)
 		return s_active_p1_bindings;
 	return s_jvs_p1_button_bindings;
 }
 
 std::span<const InputBindingInfo> ACJV::GetP2ButtonBindings()
 {
-	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE)
+	// Twin-stick (Zoids) is 1 player per cabinet (versus is networked), so no P2 layout.
+	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE || m_jvsMode == JVS_MODE::STANDARD)
 		return s_active_p2_bindings;
 	return s_jvs_p2_button_bindings;
 }
@@ -478,6 +519,7 @@ static const std::map<std::string, FightingLayout> s_fighting_layouts = {
 	{"NM00027", FightingLayout::TEKKEN},     // Super Dragon Ball Z
 	{"NM00029", FightingLayout::SOULCAL},    // Kinnikuman MGP
 	{"NM00035", FightingLayout::GUNDAM},     // YuYu Hakusho
+	{"NM00030", FightingLayout::GUNDAM},     // Mobile Suit Gundam Quiz Warrior (quiz, same 4-button layout)
 	{"NM00040", FightingLayout::SOULCAL},    // Kinnikuman MGP 2
 	{"NM00011", FightingLayout::TEKKEN},     // Pride GP 2003
 	{"NM00018", FightingLayout::SIX_BUTTON}, // Capcom Fighting Jam
@@ -497,6 +539,12 @@ static const std::map<std::string, RacingLayout> s_racing_layouts = {
 	{"NM00008", RacingLayout::WANGAN},       // Wangan Midnight
 	{"NM00005", RacingLayout::WANGAN},       // Wangan Midnight R
 	{"NM00001", RacingLayout::RRV},          // Ridge Racer V (discovery sweep)
+};
+
+static const std::map<std::string, StandardLayout> s_standard_layouts = {
+	{"NM00009", StandardLayout::BASEBALL},    // Netchu Pro Baseball 2002
+	{"NM00006", StandardLayout::SMASHCOURT},  // Smash Court Pro Tournament
+	{"NM00003", StandardLayout::TECHNICBEAT}, // Technic Beat (shares gameid with VPN)
 };
 
 // Gamepad input -> JVS button state: set or clear a button bit for a player
@@ -604,6 +652,7 @@ void ACJV::SetGameId(const std::string& gameid)
 
 	auto fit = s_fighting_layouts.find(gameid);
 	auto rit = s_racing_layouts.find(gameid);
+	auto sit = s_standard_layouts.find(gameid);
 	if (fit != s_fighting_layouts.end())
 	{
 		constexpr const char* layout_names[] = {"tekken", "gundam", "6-button", "soulcalibur", "bloodyroar"};
@@ -615,6 +664,12 @@ void ACJV::SetGameId(const std::string& gameid)
 		constexpr const char* racing_names[] = {"acedriver3", "bg3", "wangan", "rrv"};
 		Console.WriteLn("ACJV: racing layout for %s: %s", gameid.c_str(), racing_names[static_cast<int>(rit->second)]);
 		UpdateRacingBindings(rit->second);
+	}
+	else if (sit != s_standard_layouts.end())
+	{
+		constexpr const char* standard_names[] = {"baseball", "smashcourt", "technicbeat"};
+		Console.WriteLn("ACJV: standard layout for %s: %s", gameid.c_str(), standard_names[static_cast<int>(sit->second)]);
+		UpdateStandardBindings(sit->second);
 	}
 	else
 	{

@@ -43,6 +43,8 @@ enum class JVS_MODE {
 	DRIVE,
 	DRUM,
 	TOUCH,
+	STANDARD, // generic full 6-button group for games that fit no specific category
+	TWINSTICK, // dual-lever cabinets (Zoids): custom JVS bit wiring, 2 sticks + 2 triggers + 2 buttons
 };
 
 // Sw -> pad order per layout, mirroring each game's official PS2 port.
@@ -59,6 +61,12 @@ enum class RacingLayout {
 	BG3,        // NM00010/15: SHIFT UP=R1, SHIFT DOWN=L1, VIEW=Triangle, SIDEBRAKE=Square, HAZARD=Circle
 	WANGAN,     // NM00008/05: SHIFT UP=R1, SHIFT DOWN=L1, SELECT=D-pad, SERVICE=Select
 	RRV,        // NM00001: SHIFT UP=R1, SHIFT DOWN=L1, VIEW=Triangle, ENTER=Square, SELECT=D-pad, SERVICE=Select
+};
+
+enum class StandardLayout {
+	BASEBALL,    // NM00009: Netchu Pro Baseball (Sw1-6 superset)
+	SMASHCOURT,  // NM00006: Smash Court Pro (2 buttons)
+	TECHNICBEAT, // NM00003: Technic Beat (3 buttons)
 };
 
 #define JVS_WHEEL_CHANNEL_MAX 3
