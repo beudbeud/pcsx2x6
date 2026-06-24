@@ -13,6 +13,8 @@
 static u8 atapi_pio_buf[65536];
 static u32 atapi_pio_len = 0;
 static u32 atapi_pio_pos = 0;
+static u32 atapi_pio_chunk = 0;      // max bytes sent per chunk (the byte-count register is only 16-bit)
+static int atapi_pio_chunk_busy = 0; // >0 while we set up the next chunk
 
 static u8 atapi_pio_write_buf[65536];
 static u32 atapi_pio_write_len = 0;
@@ -44,8 +46,13 @@ static void atapi_pio_write_setup(u32 len) {
 static void atapi_pio_setup(u32 len) {
     atapi_pio_len = len;
     atapi_pio_pos = 0;
-    ACATA::R_LCYL = len & 0xFF;
-    ACATA::R_HCYL = (len >> 8) & 0xFF;
+    u32 limit = (ACATA::R_LCYL | (ACATA::R_HCYL << 8)) & 0xFFFE; // chunk size the driver asked for
+    if (limit == 0)
+        limit = 0xFFFE;
+    atapi_pio_chunk = limit;
+    u32 chunk = std::min(len, atapi_pio_chunk);
+    ACATA::R_LCYL = chunk & 0xFF;
+    ACATA::R_HCYL = (chunk >> 8) & 0xFF;
     ACATA::R_NSECTOR = 0x02;
     ACATA::R_STATUS |= ATA_STAT_DRQ;
     CLRB(ACATA::R_STATUS, ATA_STAT_BUSY);
@@ -87,10 +94,16 @@ u16 ACATAPI::pio_read_word() {
         if (offset + 1 < atapi_pio_len)
             val |= (u16)atapi_pio_buf[offset + 1] << 8;
         atapi_pio_pos++;
-        if (atapi_pio_pos * 2 >= atapi_pio_len) {
+        u32 bytepos = atapi_pio_pos * 2;
+        if (bytepos >= atapi_pio_len) {
             ACATA::R_NSECTOR = 0x03;
             CLRB(ACATA::R_STATUS, ATA_STAT_DRQ);
             ACATA::R_STATUS |= ATA_STAT_READY;
+            ACCORE::intr(ACCORE::INTRN_ATA);
+        } else if (atapi_pio_chunk && (bytepos % atapi_pio_chunk) == 0) { // end of a chunk: set up the next one
+            CLRB(ACATA::R_STATUS, ATA_STAT_DRQ);
+            ACATA::R_STATUS |= ATA_STAT_BUSY;
+            atapi_pio_chunk_busy = 1;
             ACCORE::intr(ACCORE::INTRN_ATA);
         }
         return val;
@@ -99,7 +112,23 @@ u16 ACATAPI::pio_read_word() {
 }
 
 bool ACATAPI::has_pio_data() {
-    return atapi_pio_len > 0 && atapi_pio_pos * 2 < atapi_pio_len;
+    return atapi_pio_chunk_busy == 0 && atapi_pio_len > 0 && atapi_pio_pos * 2 < atapi_pio_len;
+}
+
+// Between chunks: stay busy for a few status polls, then offer the next chunk.
+void ACATAPI::chunk_poll() {
+    if (atapi_pio_chunk_busy == 0)
+        return;
+    if (atapi_pio_chunk_busy++ < 3) // wait a few polls before offering the next chunk
+        return;
+    atapi_pio_chunk_busy = 0;
+    u32 next = std::min(atapi_pio_len - atapi_pio_pos * 2, atapi_pio_chunk);
+    ACATA::R_LCYL = next & 0xFF;
+    ACATA::R_HCYL = (next >> 8) & 0xFF;
+    ACATA::R_NSECTOR = 0x02;
+    CLRB(ACATA::R_STATUS, ATA_STAT_BUSY);
+    ACATA::R_STATUS |= ATA_STAT_DRQ;
+    ACCORE::intr(ACCORE::INTRN_ATA);
 }
 
 void ACATAPI::pio_write_word(u16 val) {
