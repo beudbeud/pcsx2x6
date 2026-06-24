@@ -519,6 +519,7 @@ static const std::map<std::string, FightingLayout> s_fighting_layouts = {
 	{"NM00027", FightingLayout::TEKKEN},     // Super Dragon Ball Z
 	{"NM00029", FightingLayout::SOULCAL},    // Kinnikuman MGP
 	{"NM00035", FightingLayout::GUNDAM},     // YuYu Hakusho
+	{"NM00030", FightingLayout::GUNDAM},     // Mobile Suit Gundam Quiz Warrior (quiz, same 4-button layout)
 	{"NM00040", FightingLayout::SOULCAL},    // Kinnikuman MGP 2
 	{"NM00011", FightingLayout::TEKKEN},     // Pride GP 2003
 	{"NM00018", FightingLayout::SIX_BUTTON}, // Capcom Fighting Jam
