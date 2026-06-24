@@ -120,6 +120,25 @@ static constexpr const std::array<InputBindingInfo, 4> s_jvs_wheel_bindings = {{
 	{"Brake",      TRANSLATE_NOOP("JVS", "Brake"),          nullptr, InputBindingInfo::Type::HalfAxis, 3, GenericInputBinding::L2},
 }};
 
+// Zoids twin-stick (NM00016/25): custom JVS switch-word wiring, mapped live via the I/O-TEST SWITCH TEST.
+// Left lever -> left stick, right lever -> right stick; Start/Service on the standard JVS bits.
+static constexpr const std::array<InputBindingInfo, 14> s_twinstick_p1_button_bindings = {{
+	{"P1_LLeverUp",    TRANSLATE_NOOP("JVS", "P1 Left Lever Up"),     nullptr, InputBindingInfo::Type::HalfAxis, 0x0001, GenericInputBinding::LeftStickUp},
+	{"P1_LLeverDown",  TRANSLATE_NOOP("JVS", "P1 Left Lever Down"),   nullptr, InputBindingInfo::Type::HalfAxis, 0x8000, GenericInputBinding::LeftStickDown},
+	{"P1_LLeverLeft",  TRANSLATE_NOOP("JVS", "P1 Left Lever Left"),   nullptr, InputBindingInfo::Type::HalfAxis, 0x4000, GenericInputBinding::LeftStickLeft},
+	{"P1_LLeverRight", TRANSLATE_NOOP("JVS", "P1 Left Lever Right"),  nullptr, InputBindingInfo::Type::HalfAxis, 0x2000, GenericInputBinding::LeftStickRight},
+	{"P1_RLeverUp",    TRANSLATE_NOOP("JVS", "P1 Right Lever Up"),    nullptr, InputBindingInfo::Type::HalfAxis, 0x0010, GenericInputBinding::RightStickUp},
+	{"P1_RLeverDown",  TRANSLATE_NOOP("JVS", "P1 Right Lever Down"),  nullptr, InputBindingInfo::Type::HalfAxis, 0x0008, GenericInputBinding::RightStickDown},
+	{"P1_RLeverLeft",  TRANSLATE_NOOP("JVS", "P1 Right Lever Left"),  nullptr, InputBindingInfo::Type::HalfAxis, 0x0004, GenericInputBinding::RightStickLeft},
+	{"P1_RLeverRight", TRANSLATE_NOOP("JVS", "P1 Right Lever Right"), nullptr, InputBindingInfo::Type::HalfAxis, 0x0002, GenericInputBinding::RightStickRight},
+	{"P1_LTrigger",    TRANSLATE_NOOP("JVS", "P1 Left Trigger"),      nullptr, InputBindingInfo::Type::HalfAxis, 0x0400, GenericInputBinding::L2},
+	{"P1_RTrigger",    TRANSLATE_NOOP("JVS", "P1 Right Trigger"),     nullptr, InputBindingInfo::Type::HalfAxis, 0x1000, GenericInputBinding::R2},
+	{"P1_LButton",     TRANSLATE_NOOP("JVS", "P1 Left Button"),       nullptr, InputBindingInfo::Type::Button,   0x0200, GenericInputBinding::L1},
+	{"P1_RButton",     TRANSLATE_NOOP("JVS", "P1 Right Button"),      nullptr, InputBindingInfo::Type::Button,   0x0800, GenericInputBinding::R1},
+	{"P1_Start",       TRANSLATE_NOOP("JVS", "P1 Start"),            nullptr, InputBindingInfo::Type::Button,   JVS_BTN_START,   GenericInputBinding::Start},
+	{"P1_Service",     TRANSLATE_NOOP("JVS", "P1 Service"),          nullptr, InputBindingInfo::Type::Button,   JVS_BTN_SERVICE, GenericInputBinding::Select},
+}};
+
 // Per-layout face button default inputs (BTN1-6), mirroring each game's
 // official PS2 port pad. Some games share the same layout. Rows follow FightingLayout order.
 static constexpr GenericInputBinding s_fighting_face_buttons[][6] = {
@@ -330,6 +349,8 @@ static JVS_MODE m_jvsMode = JVS_MODE::DEFAULT;
 
 std::span<const InputBindingInfo> ACJV::GetButtonBindings()
 {
+	if (m_jvsMode == JVS_MODE::TWINSTICK)
+		return s_twinstick_p1_button_bindings;
 	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE || m_jvsMode == JVS_MODE::STANDARD)
 		return s_active_p1_bindings;
 	return s_jvs_p1_button_bindings;
@@ -337,6 +358,7 @@ std::span<const InputBindingInfo> ACJV::GetButtonBindings()
 
 std::span<const InputBindingInfo> ACJV::GetP2ButtonBindings()
 {
+	// Twin-stick (Zoids) is 1 player per cabinet (versus is networked), so no P2 layout.
 	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE || m_jvsMode == JVS_MODE::STANDARD)
 		return s_active_p2_bindings;
 	return s_jvs_p2_button_bindings;

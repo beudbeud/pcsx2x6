@@ -44,6 +44,7 @@ enum class JVS_MODE {
 	DRUM,
 	TOUCH,
 	STANDARD, // generic full 6-button group for games that fit no specific category
+	TWINSTICK, // dual-lever cabinets (Zoids): custom JVS bit wiring, 2 sticks + 2 triggers + 2 buttons
 };
 
 // Sw -> pad order per layout, mirroring each game's official PS2 port.

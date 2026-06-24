@@ -1405,6 +1405,11 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 						ACJV::SetMode(JVS_MODE::STANDARD);
 						Console.WriteLn(Color_Green, "ACGAME: jvsmode=standard");
 					}
+					else if (jvsmode == "twinstick")
+					{
+						ACJV::SetMode(JVS_MODE::TWINSTICK);
+						Console.WriteLn(Color_Green, "ACGAME: jvsmode=twinstick");
+					}
 					else
 						ACJV::SetMode(JVS_MODE::DEFAULT);
 				}
