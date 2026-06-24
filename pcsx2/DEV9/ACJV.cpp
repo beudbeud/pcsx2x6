@@ -152,6 +152,25 @@ static void UpdateFightingBindings(FightingLayout layout)
 	}
 }
 
+static constexpr GenericInputBinding s_standard_face_buttons[][6] = { // one row per game, BTN1-6 -> pad button
+	{GenericInputBinding::Square, GenericInputBinding::Triangle, GenericInputBinding::L1,      GenericInputBinding::Cross,   GenericInputBinding::Circle,  GenericInputBinding::R1},      // BASEBALL
+	{GenericInputBinding::Cross,  GenericInputBinding::Square,   GenericInputBinding::Unknown, GenericInputBinding::Unknown, GenericInputBinding::Unknown, GenericInputBinding::Unknown}, // SMASHCOURT
+	{GenericInputBinding::Cross,  GenericInputBinding::Square,   GenericInputBinding::Triangle, GenericInputBinding::Unknown, GenericInputBinding::Unknown, GenericInputBinding::Unknown}, // TECHNICBEAT
+};
+
+static void UpdateStandardBindings(StandardLayout layout)
+{
+	s_active_p1_bindings = s_jvs_p1_button_bindings;
+	s_active_p2_bindings = s_jvs_p2_button_bindings;
+	const auto& face = s_standard_face_buttons[static_cast<int>(layout)];
+	constexpr int BTN1_INDEX = 4;
+	for (int i = 0; i < 6; i++)
+	{
+		s_active_p1_bindings[BTN1_INDEX + i].generic_mapping = face[i];
+		s_active_p2_bindings[BTN1_INDEX + i].generic_mapping = face[i];
+	}
+}
+
 // Generic racing layout (BTN1-6): each entry sets its own JVS bit, so a game can wire switches beyond Sw1-6 (e.g. AD3's Push9).
 struct RacingButton { u16 bind_index; GenericInputBinding host; };
 static constexpr RacingButton s_racing_buttons[][6] = {
@@ -311,14 +330,14 @@ static JVS_MODE m_jvsMode = JVS_MODE::DEFAULT;
 
 std::span<const InputBindingInfo> ACJV::GetButtonBindings()
 {
-	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE)
+	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE || m_jvsMode == JVS_MODE::STANDARD)
 		return s_active_p1_bindings;
 	return s_jvs_p1_button_bindings;
 }
 
 std::span<const InputBindingInfo> ACJV::GetP2ButtonBindings()
 {
-	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE)
+	if (m_jvsMode == JVS_MODE::FIGHTING || m_jvsMode == JVS_MODE::DRIVE || m_jvsMode == JVS_MODE::STANDARD)
 		return s_active_p2_bindings;
 	return s_jvs_p2_button_bindings;
 }
@@ -499,6 +518,12 @@ static const std::map<std::string, RacingLayout> s_racing_layouts = {
 	{"NM00001", RacingLayout::RRV},          // Ridge Racer V (discovery sweep)
 };
 
+static const std::map<std::string, StandardLayout> s_standard_layouts = {
+	{"NM00009", StandardLayout::BASEBALL},    // Netchu Pro Baseball 2002
+	{"NM00006", StandardLayout::SMASHCOURT},  // Smash Court Pro Tournament
+	{"NM00003", StandardLayout::TECHNICBEAT}, // Technic Beat (shares gameid with VPN)
+};
+
 // Gamepad input -> JVS button state: set or clear a button bit for a player
 void ACJV::SetButtonState(u32 player, u16 mask, bool pressed)
 {
@@ -604,6 +629,7 @@ void ACJV::SetGameId(const std::string& gameid)
 
 	auto fit = s_fighting_layouts.find(gameid);
 	auto rit = s_racing_layouts.find(gameid);
+	auto sit = s_standard_layouts.find(gameid);
 	if (fit != s_fighting_layouts.end())
 	{
 		constexpr const char* layout_names[] = {"tekken", "gundam", "6-button", "soulcalibur", "bloodyroar"};
@@ -615,6 +641,12 @@ void ACJV::SetGameId(const std::string& gameid)
 		constexpr const char* racing_names[] = {"acedriver3", "bg3", "wangan", "rrv"};
 		Console.WriteLn("ACJV: racing layout for %s: %s", gameid.c_str(), racing_names[static_cast<int>(rit->second)]);
 		UpdateRacingBindings(rit->second);
+	}
+	else if (sit != s_standard_layouts.end())
+	{
+		constexpr const char* standard_names[] = {"baseball", "smashcourt", "technicbeat"};
+		Console.WriteLn("ACJV: standard layout for %s: %s", gameid.c_str(), standard_names[static_cast<int>(sit->second)]);
+		UpdateStandardBindings(sit->second);
 	}
 	else
 	{

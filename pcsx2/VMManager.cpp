@@ -1400,6 +1400,11 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 						ACJV::SetMode(JVS_MODE::DRIVE);
 						Console.WriteLn(Color_Green, "ACGAME: jvsmode=racing");
 					}
+					else if (jvsmode == "standard")
+					{
+						ACJV::SetMode(JVS_MODE::STANDARD);
+						Console.WriteLn(Color_Green, "ACGAME: jvsmode=standard");
+					}
 					else
 						ACJV::SetMode(JVS_MODE::DEFAULT);
 				}
