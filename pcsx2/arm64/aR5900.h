@@ -204,17 +204,6 @@ void armEmitCVT_S(u32 fd, u32 fs);
 // whole 128-bit GPR is loaded/stored via the Quad vtlb helpers (NEON q access).
 void armEmitLoadQuad(u32 rt, u32 rs, s32 imm);
 void armEmitStoreQuad(u32 rt, u32 rs, s32 imm);
-// COP2 quad load/store: VU0.VF[ft] <-> memory (LQC2/SQC2).
-void armEmitLoadQuadCop2(u32 ft, u32 rs, s32 imm);
-void armEmitStoreQuadCop2(u32 ft, u32 rs, s32 imm);
-// COP2 quad register transfers: VU0.VF[rd] <-> EE GPR[rt] (QMFC2/QMTC2).
-void armEmitQMFC2(u32 rt, u32 rd);
-void armEmitQMTC2(u32 rt, u32 rd);
-// COP2 control register transfers: VU0.VI[rd] <-> EE GPR[rt] (CFC2/CTC2).
-// CTC2 must only be emitted for a JIT-able VI target (see recCTC2FsIsJittable).
-void armEmitCFC2(u32 rt, u32 rd);
-void armEmitCTC2(u32 rt, u32 rd);
-bool recCTC2FsIsJittable(u32 rd);
 
 // --------------------------------------------------------------------------------------
 //  EE immediate arithmetic opcode generators (Phase 3.1)
@@ -397,6 +386,12 @@ void armEmitBGEZAL(u32 rs, u32 target, u32 fallthrough, u32 linkpc);
 // BC1T when C!=0.
 void armEmitBC1F(u32 target, u32 fallthrough);
 void armEmitBC1T(u32 target, u32 fallthrough);
+// COP2 VU0-macro condition branches (test VU0.VI[REG_VPU_STAT].UL & 0x100, the VBS0
+// bit). BC2F branches when the bit is CLEAR, BC2T when SET. No VU sync/cycle commit
+// (faithful to x86 microVU_Macro.inl recBC2F/T — a plain bit-test branch).
+void armEmitBC2F(u32 target, u32 fallthrough);
+void armEmitBC2T(u32 target, u32 fallthrough);
+
 // Branch-likely forms (BEQL/BNEL/BLEZL/BGTZL/BLTZL/BGEZL/BC1FL/BC1TL): emit the
 // condition test + PC select, return the "taken" condition with flags still live
 // so the block compiler can skip the nullified delay slot when not taken.

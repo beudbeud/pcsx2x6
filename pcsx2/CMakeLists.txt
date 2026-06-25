@@ -1080,6 +1080,7 @@ set(pcsx2arm64Sources
 	arm64/RecStubs.cpp
 	arm64/aR3000A.cpp
 	arm64/aR5900.cpp
+	arm64/aR5900Analysis.cpp
 	arm64/aR5900LoadStore.cpp
 	arm64/aR5900Arith.cpp
 	arm64/aR5900MultDiv.cpp
@@ -1093,6 +1094,7 @@ set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
 	arm64/aR3000A.h
 	arm64/aR5900.h
+	arm64/aR5900Analysis.h
 	arm64/aVU.h
 	arm64/aVU_IR.h
 	arm64/aVU_Misc.h
@@ -1106,6 +1108,7 @@ set(pcsx2arm64Headers
 	arm64/aVU_Flags.inl
 	arm64/aVU_Branch.inl
 	arm64/aVU_Compile.inl
+	arm64/aVU_Macro.inl
 )
 
 # These ones benefit a lot from LTO
