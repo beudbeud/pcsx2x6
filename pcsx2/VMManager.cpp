@@ -1395,6 +1395,11 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 						ACJV::SetMode(JVS_MODE::FIGHTING);
 						Console.WriteLn(Color_Green, "ACGAME: jvsmode=fighting");
 					}
+					else if (jvsmode == "drum")
+					{
+						ACJV::SetMode(JVS_MODE::DRUM);
+						Console.WriteLn(Color_Green, "ACGAME: jvsmode=drum");
+					}
 					else if (jvsmode == "racing")
 					{
 						ACJV::SetMode(JVS_MODE::DRIVE);

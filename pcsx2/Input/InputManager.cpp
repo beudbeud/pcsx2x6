@@ -909,6 +909,8 @@ void InputManager::AddJVSBindings(SettingsInterface& si, bool is_profile)
 			continue;
 
 		const std::string pad_section = Pad::GetConfigSection(player);
+		// Taiko (drum) uses only the drum sensors + coin; don't mirror the gamepad to JVS player buttons.
+		if (ACJV::GetMode() != JVS_MODE::DRUM)
 		for (const InputBindingInfo& jvs_bi : player_bindings[player])
 		{
 			if (jvs_bi.generic_mapping == GenericInputBinding::Unknown ||
@@ -970,6 +972,18 @@ void InputManager::AddJVSBindings(SettingsInterface& si, bool is_profile)
 
 		AddBindings(bindings, InputAxisEventHandler{[axis = static_cast<u32>(bi.bind_index)](InputBindingKey key, float value) {
 			ACJV::SetWheelAxis(axis, value);
+		}}, bi.bind_type, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
+	}
+
+	// Taiko drum sensors (button press -> above-threshold hit on a JVS analog channel)
+	for (const InputBindingInfo& bi : ACJV::GetDrumBindings())
+	{
+		const std::vector<std::string> bindings(si.GetStringList(ACJV::CONFIG_SECTION, bi.name));
+		if (bindings.empty())
+			continue;
+
+		AddBindings(bindings, InputAxisEventHandler{[channel = static_cast<u32>(bi.bind_index)](InputBindingKey key, float value) {
+			ACJV::SetDrumHit(channel, value > 0.5f);
 		}}, bi.bind_type, si, ACJV::CONFIG_SECTION, bi.name, is_profile);
 	}
 

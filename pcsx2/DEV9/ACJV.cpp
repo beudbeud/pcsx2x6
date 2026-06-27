@@ -120,6 +120,19 @@ static constexpr const std::array<InputBindingInfo, 4> s_jvs_wheel_bindings = {{
 	{"Brake",      TRANSLATE_NOOP("JVS", "Brake"),          nullptr, InputBindingInfo::Type::HalfAxis, 3, GenericInputBinding::L2},
 }};
 
+// Taiko drum: 8 piezo sensors on JVS analog channels. bind_index = MEASURED channel (in-game TAIKO TEST,
+// scrambled vs the on-screen order): 1P DL=0 DR=3 KL=5 KR=4 | 2P DL=2 DR=7 KL=1 KR=6
+static constexpr const std::array<InputBindingInfo, JVS_DRUM_CHANNEL_MAX> s_jvs_drum_bindings = {{
+	{"P1_DonLeft",  TRANSLATE_NOOP("JVS", "P1 Don Left (inner, red)"),   nullptr, InputBindingInfo::Type::Button, 0, GenericInputBinding::Unknown},
+	{"P1_DonRight", TRANSLATE_NOOP("JVS", "P1 Don Right (inner, red)"),  nullptr, InputBindingInfo::Type::Button, 3, GenericInputBinding::Unknown},
+	{"P1_KaLeft",   TRANSLATE_NOOP("JVS", "P1 Ka Left (outer, blue)"),   nullptr, InputBindingInfo::Type::Button, 5, GenericInputBinding::Unknown},
+	{"P1_KaRight",  TRANSLATE_NOOP("JVS", "P1 Ka Right (outer, blue)"),  nullptr, InputBindingInfo::Type::Button, 4, GenericInputBinding::Unknown},
+	{"P2_DonLeft",  TRANSLATE_NOOP("JVS", "P2 Don Left (inner, red)"),   nullptr, InputBindingInfo::Type::Button, 2, GenericInputBinding::Unknown},
+	{"P2_DonRight", TRANSLATE_NOOP("JVS", "P2 Don Right (inner, red)"),  nullptr, InputBindingInfo::Type::Button, 7, GenericInputBinding::Unknown},
+	{"P2_KaLeft",   TRANSLATE_NOOP("JVS", "P2 Ka Left (outer, blue)"),   nullptr, InputBindingInfo::Type::Button, 1, GenericInputBinding::Unknown},
+	{"P2_KaRight",  TRANSLATE_NOOP("JVS", "P2 Ka Right (outer, blue)"),  nullptr, InputBindingInfo::Type::Button, 6, GenericInputBinding::Unknown},
+}};
+
 // Zoids twin-stick (NM00016/25): custom JVS switch-word wiring, mapped live via the I/O-TEST SWITCH TEST.
 // Left lever -> left stick, right lever -> right stick; Start/Service on the standard JVS bits.
 static constexpr const std::array<InputBindingInfo, 14> s_twinstick_p1_button_bindings = {{
@@ -374,6 +387,11 @@ std::span<const InputBindingInfo> ACJV::GetWheelBindings()
 	return s_jvs_wheel_bindings;
 }
 
+std::span<const InputBindingInfo> ACJV::GetDrumBindings()
+{
+	return s_jvs_drum_bindings;
+}
+
 bool ACJV::GetDIPSwitchState(u32 index)
 {
 	return (index < s_dip_switch_masks.size()) && ((s_dip_switch_state & s_dip_switch_masks[index]) != 0);
@@ -582,6 +600,12 @@ void ACJV::SetWheelAxis(u32 axis, float value)
 		case 3: m_wheelBrake  = value; break;
 		default: break;
 	}
+}
+
+void ACJV::SetDrumHit(u32 channel, bool pressed)
+{
+	if (channel < JVS_DRUM_CHANNEL_MAX)
+		m_jvsDrumChannels[channel] = pressed ? 0xFFFF : 0; // max -> above IN/DAI; big notes (大) emerge from hitting both sides
 }
 
 JVS_MODE ACJV::GetMode()
@@ -849,8 +873,7 @@ void do_jvs_packet(const u8* input, u8* output) {
 
 				(*dstSize) += 12;
 			}
-			// TODO: drum games (e.g. Taiko no Tatsujin)
-#if 0
+			// Taiko drum: 8 analog channels (piezo sensors), 10-bit (measured: game polls READ_INP_ANALOG 8)
 			else if(m_jvsMode == JVS_MODE::DRUM)
 			{
 				(*output++) = 0x03;                 //Analog Input
@@ -860,7 +883,6 @@ void do_jvs_packet(const u8* input, u8* output) {
 
 				(*dstSize) += 4;
 			}
-#endif
 			// TODO: touch panel games
 #if 0
 			else if(m_jvsMode == JVS_MODE::TOUCH)
