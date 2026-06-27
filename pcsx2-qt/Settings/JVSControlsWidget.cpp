@@ -11,6 +11,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtWidgets/QGridLayout>
+#include <QtWidgets/QGroupBox>
 #include <QtWidgets/QLabel>
 
 JVSControlsWidget::JVSControlsWidget(QWidget* parent, ControllerSettingsWindow* dialog)
@@ -25,6 +26,7 @@ JVSControlsWidget::JVSControlsWidget(QWidget* parent, ControllerSettingsWindow* 
 
 	bindDIPSwitchWidgets();
 	bindSystemButtonWidgets();
+	bindDrumWidgets();
 
 	ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(m_dialog->getProfileSettingsInterface(), m_ui.suppressDaemon,
 		ACJV::CONFIG_SECTION, "SuppressDaemon", true);
@@ -90,6 +92,43 @@ void JVSControlsWidget::bindSystemButtonWidgets()
 		bind->setMaximumWidth(225);
 		layout->addWidget(bind, i, 1);
 	}
+}
+
+void JVSControlsWidget::bindDrumWidgets()
+{
+	SettingsInterface* sif = m_dialog->getProfileSettingsInterface();
+
+	QGroupBox* group = new QGroupBox(tr("Taiko Drum"), this);
+	QGridLayout* layout = new QGridLayout(group);
+
+	struct DrumEntry {
+		const char* label;
+		const char* config_key;
+	};
+	// config_key must match the s_jvs_drum_bindings names in ACJV.cpp (which carry the real analog channels).
+	static constexpr DrumEntry entries[] = {
+		{"P1 Don Left (inner, red)", "P1_DonLeft"},
+		{"P1 Don Right (inner, red)", "P1_DonRight"},
+		{"P1 Ka Left (outer, blue)", "P1_KaLeft"},
+		{"P1 Ka Right (outer, blue)", "P1_KaRight"},
+		{"P2 Don Left (inner, red)", "P2_DonLeft"},
+		{"P2 Don Right (inner, red)", "P2_DonRight"},
+		{"P2 Ka Left (outer, blue)", "P2_KaLeft"},
+		{"P2 Ka Right (outer, blue)", "P2_KaRight"},
+	};
+
+	for (int i = 0; i < static_cast<int>(std::size(entries)); i++)
+	{
+		layout->addWidget(new QLabel(tr(entries[i].label), group), i, 0);
+
+		InputBindingWidget* bind = new InputBindingWidget(
+			group, sif, InputBindingInfo::Type::Button, ACJV::CONFIG_SECTION, entries[i].config_key);
+		bind->setMinimumWidth(225);
+		bind->setMaximumWidth(225);
+		layout->addWidget(bind, i, 1);
+	}
+
+	m_ui.scrollLayout->addWidget(group);
 }
 
 #include "moc_JVSControlsWidget.cpp"

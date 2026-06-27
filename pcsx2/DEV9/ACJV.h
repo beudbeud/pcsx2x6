@@ -117,8 +117,10 @@ namespace ACJV {
     std::span<const InputBindingInfo> GetP2ButtonBindings();
     std::span<const InputBindingInfo> GetCoinBindings();
     std::span<const InputBindingInfo> GetWheelBindings();
+    std::span<const InputBindingInfo> GetDrumBindings();
     void SetButtonState(u32 player, u16 mask, bool pressed);
     void SetWheelAxis(u32 axis, float value);
+    void SetDrumHit(u32 channel, bool pressed); // Taiko drum sensor -> JVS analog channel (0=off, else above DAI threshold)
     float GetSteer(); // host steering, -1 (full left)...+1 (full right); used by the BG3 drive-board responder (acuart)
     float GetGas();   // host accelerator, 0...1
     float GetBrake(); // host brake, 0...1
