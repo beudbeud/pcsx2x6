@@ -8,6 +8,7 @@
 #include "common/Console.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 // ---------------------------------------------------------------------------
@@ -192,8 +193,8 @@ void GSDeviceNull::CPUBlit(GSTextureCPU* src, const GSVector4& sRect,
 
 	const int dx0 = std::max(0, (int)dRect.x);
 	const int dy0 = std::max(0, (int)dRect.y);
-	const int dx1 = std::min(dw, (int)std::ceilf(dRect.z));
-	const int dy1 = std::min(dh, (int)std::ceilf(dRect.w));
+	const int dx1 = std::min(dw, (int)std::ceil(dRect.z));
+	const int dy1 = std::min(dh, (int)std::ceil(dRect.w));
 	if (dx0 >= dx1 || dy0 >= dy1)
 		return;
 
@@ -248,8 +249,8 @@ void GSDeviceNull::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSText
 		const u32 color = sTex->GetClearColor();
 		const int dx0 = std::max(0, (int)dRect.x);
 		const int dy0 = std::max(0, (int)dRect.y);
-		const int dx1 = std::min(dst->GetWidth(), (int)std::ceilf(dRect.z));
-		const int dy1 = std::min(dst->GetHeight(), (int)std::ceilf(dRect.w));
+		const int dx1 = std::min(dst->GetWidth(), (int)std::ceil(dRect.z));
+		const int dy1 = std::min(dst->GetHeight(), (int)std::ceil(dRect.w));
 		for (int y = dy0; y < dy1; y++)
 		{
 			u32* row = reinterpret_cast<u32*>(dst->GetBuffer() + static_cast<ptrdiff_t>(y) * dst->GetPitch()) + dx0;

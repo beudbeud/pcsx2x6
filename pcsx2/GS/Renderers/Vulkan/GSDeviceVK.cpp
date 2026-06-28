@@ -78,8 +78,9 @@ static constexpr VkClearValue s_present_clear_color = {{{0.0f, 0.0f, 0.0f, 1.0f}
 // We need to synchronize instance creation because of adapter enumeration from the UI thread.
 static std::mutex s_instance_mutex;
 
-// Device extensions that are required for PCSX2.
-static constexpr const char* s_required_device_extensions[] = {};
+// Device extensions that are required for PCSX2. (Empty: std::array<,0> rather than a
+// zero-length C array, which MSVC rejects — error C2466 — and can't range-for over.)
+static constexpr std::array<const char*, 0> s_required_device_extensions = {};
 
 GSDeviceVK::GSDeviceVK()
 {
