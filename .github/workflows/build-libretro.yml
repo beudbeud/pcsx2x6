@@ -44,14 +44,17 @@ jobs:
             libpng-dev libjpeg-dev zlib1g-dev libzstd-dev libwebp-dev \
             libfreetype-dev libfontconfig-dev libcurl4-openssl-dev libpcap-dev \
             libdbus-1-dev libudev-dev libasound2-dev libpulse-dev \
-            libgl-dev libegl-dev libgles-dev
+            libgl-dev libegl-dev libgles-dev libdrm-dev libgbm-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxkbcommon-dev libwayland-dev wayland-protocols
 
       - name: Cache out-of-apt dependencies
         id: deps-cache
         uses: actions/cache@v4
         with:
           path: deps-prefix
-          key: libretro-deps-${{ matrix.arch }}-${{ hashFiles('.github/scripts/build-deps.sh') }}
+          # Hash the workflow too: the deps build depends on the apt packages it declares.
+          key: libretro-deps-${{ matrix.arch }}-${{ hashFiles('.github/scripts/build-deps.sh', '.github/workflows/build-libretro.yml') }}
 
       - name: Build out-of-apt dependencies (lz4, SDL3, ryml, plutovg, plutosvg)
         if: steps.deps-cache.outputs.cache-hit != 'true'
