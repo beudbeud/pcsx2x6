@@ -1,0 +1,117 @@
+name: Build libretro core (Linux)
+
+on:
+  push:
+    branches: [master, "feat/**"]
+    paths-ignore: ["**.md", "docs/**", "bin/resources/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "bin/resources/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-libretro-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            arch: amd64
+            runner: ubuntu-24.04
+            # Portable x86-64 build (SSE4.1 baseline) instead of -march=native,
+            # matching the recalbox recipe — the artifact must run on any x86-64.
+            simd: -DDISABLE_ADVANCE_SIMD=ON
+          - name: linux-arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm # native arm64 runner (no cross-compile)
+            simd: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools and system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git pkg-config ca-certificates curl \
+            ccache patchelf \
+            libpng-dev libjpeg-dev zlib1g-dev libzstd-dev libwebp-dev \
+            libfreetype-dev libfontconfig-dev libcurl4-openssl-dev libpcap-dev \
+            libdbus-1-dev libudev-dev libasound2-dev libpulse-dev \
+            libgl-dev libegl-dev libgles-dev
+
+      - name: Cache out-of-apt dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: deps-prefix
+          key: libretro-deps-${{ matrix.arch }}-${{ hashFiles('.github/scripts/build-deps.sh') }}
+
+      - name: Build out-of-apt dependencies (lz4, SDL3, ryml, plutovg, plutosvg)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x .github/scripts/build-deps.sh
+          ./.github/scripts/build-deps.sh "$PWD/deps-prefix"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.arch }}-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/deps-prefix" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_LIBRETRO_CORE=ON \
+            -DENABLE_QT_UI=OFF \
+            -DUSE_VULKAN=ON \
+            -DX11_API=OFF \
+            -DWAYLAND_API=OFF \
+            -DUSE_BACKTRACE=OFF \
+            ${{ matrix.simd }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Package core + bundled runtime dependencies
+        run: |
+          mkdir -p dist
+          core="$(find build -name 'pcsx2x6_libretro.so' | head -n1)"
+          test -n "$core" || { echo "core .so not found"; exit 1; }
+          cp "$core" dist/
+          # Bundle the out-of-apt shared libs next to the core (apt libs are assumed
+          # present on the target). Copy symlinks as-is to keep the SONAME chain.
+          for lib in libSDL3 libryml libc4core liblz4 libplutovg libplutosvg; do
+            cp -aP deps-prefix/lib/${lib}.so* dist/ 2>/dev/null || true
+          done
+          # Self-contained: every bundled object loads its siblings from its own dir.
+          find dist -type f -name '*.so*' -exec patchelf --set-rpath '$ORIGIN' {} \;
+          echo "--- artifact contents ---"
+          ls -la dist
+          echo "--- core runtime deps ---"
+          ldd dist/pcsx2x6_libretro.so || true
+          # Sanity: the .so must export the libretro entry points (a real core, not just a build).
+          for sym in retro_init retro_run retro_load_game retro_get_system_info; do
+            nm -D --defined-only dist/pcsx2x6_libretro.so | grep -qw "$sym" \
+              || { echo "missing libretro export: $sym"; exit 1; }
+          done
+          echo "libretro API exports OK"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcsx2x6_libretro-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
