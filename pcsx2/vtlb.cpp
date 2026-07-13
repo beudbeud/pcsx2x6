@@ -990,6 +990,12 @@ static void vtlb_RemoveFastmemMapping(u32 vaddr)
 
 static void vtlb_RemoveFastmemMappings(u32 vaddr, u32 size)
 {
+	// If the 4 GB fastmem area reservation failed, s_fastmem_virtual_mapping is
+	// never resized and stays empty. Indexing it would deref NULL; there is
+	// nothing to remove anyway.
+	if (s_fastmem_virtual_mapping.empty())
+		return;
+
 	pxAssert((vaddr & VTLB_PAGE_MASK) == 0);
 	pxAssert(size > 0 && (size & VTLB_PAGE_MASK) == 0);
 
