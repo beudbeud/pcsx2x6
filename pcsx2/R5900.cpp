@@ -57,6 +57,16 @@ u32 g_eeIntLastPC = 0;
 // holds the interesting block-to-block trail, not millions of loop iterations.
 u32 g_eeDispatchRing[32] = {};
 u32 g_eeDispatchRingIdx = 0;
+// Armed at every interrupt delivery; recEventTest snapshots the ring once 16
+// more dispatches have flowed, so the snapshot holds the 16 guest blocks that
+// ran right AFTER the last delivery (the live ring only shows steady state).
+u32 g_eeRingCaptureArmed = 0;
+u32 g_eeIntLastRingIdx = 0;
+u32 g_eeRingSnapshot[32] = {};
+u32 g_eeRingSnapshotIdx = 0;
+// Incremented by the interpreter's ERET (COP0.cpp) — pairs with
+// g_eeIntDeliveryCount to tell whether the handler chain completed.
+u32 g_eeEretCount = 0;
 EE_intProcessStatus eeRunInterruptScan = INT_NOT_RUNNING;
 
 u32 g_eeloadMain = 0, g_eeloadExec = 0, g_osdsys_str = 0;
@@ -429,6 +439,8 @@ __fi void _cpuEventTest_Shared()
 		g_eeIntLastMask = mask;
 		g_eeIntLastEPC = cpuRegs.CP0.n.EPC;
 		g_eeIntLastPC = cpuRegs.pc;
+		g_eeIntLastRingIdx = g_eeDispatchRingIdx;
+		g_eeRingCaptureArmed = 1;
 	}
 
 	// ---- IOP -------------

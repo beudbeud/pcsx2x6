@@ -317,6 +317,9 @@ extern bool eeEventTestIsActive;
 extern u32 g_eeIntDeliveryCount, g_eeIntLastMask, g_eeIntLastEPC, g_eeIntLastPC;
 extern u32 g_eeDispatchRing[32];
 extern u32 g_eeDispatchRingIdx;
+extern u32 g_eeRingCaptureArmed, g_eeIntLastRingIdx, g_eeRingSnapshotIdx;
+extern u32 g_eeRingSnapshot[32];
+extern u32 g_eeEretCount;
 
 void intUpdateCPUCycles();
 void intEventTest();
