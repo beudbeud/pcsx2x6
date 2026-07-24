@@ -6214,10 +6214,13 @@ void GSDeviceVK::RenderHW(GSHWDrawConfig& config)
 			m_pipeline_selector.ds = true;
 		}
 
-		// Prefer keeping feedback loop enabled, that way we're not constantly restarting render passes
-		if (draw_rt)
+		// Prefer keeping feedback loop enabled, that way we're not constantly restarting render passes.
+		// Gated PER TARGET, not on the enclosing condition — that only requires ONE of rt/ds to
+		// match, so a draw keeping the RT but swapping the depth target would otherwise inherit a
+		// stale depth feedback layout, which shows up as Vulkan-only flicker.
+		if (draw_rt && m_current_render_target == draw_rt)
 			pipe.feedback_loop_flags |= m_current_framebuffer_feedback_loop & FeedbackLoopFlag_ReadAndWriteRT;
-		if (draw_ds)
+		if (draw_ds && m_current_depth_target == draw_ds)
 			pipe.feedback_loop_flags |= (m_current_framebuffer_feedback_loop &
 				(FeedbackLoopFlag_ReadAndWriteDepth | FeedbackLoopFlag_ReadDepth));
 	}
