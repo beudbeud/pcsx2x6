@@ -38,6 +38,10 @@ BIOS
 #include "common/AlignedMalloc.h"
 #include "common/Error.h"
 
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
+
 #ifdef ENABLECACHE
 #include "Cache.h"
 #endif
@@ -115,6 +119,22 @@ bool SysMemory::AllocateMemoryMap()
 		ReleaseMemoryMap();
 		return false;
 	}
+
+#ifdef __linux__
+	// Back the hot JIT code caches with transparent hugepages to cut iTLB
+	// pressure (design credit FEX-Emu, via ARMSX2 FX-15). madvise is what the
+	// common THP "madvise" mode honors, and the code half is a private
+	// anonymous mapping, which is what THP backs. Scoped to the EE+IOP and
+	// mVU0+mVU1 rec caches — each pair contiguous in the map — leaving the
+	// VIF/SW-renderer tail alone. To A/B it, launch under
+	// prctl(PR_SET_THP_DISABLE); it survives execve, so no in-tree gate.
+	static_assert(HostMemoryMap::IOPrecOffset == HostMemoryMap::EErecOffset + HostMemoryMap::EErecSize);
+	static_assert(HostMemoryMap::mVU1recOffset == HostMemoryMap::mVU0recOffset + HostMemoryMap::mVU0recSize);
+	madvise(s_code_memory + HostMemoryMap::EErecOffset,
+		HostMemoryMap::EErecSize + HostMemoryMap::IOPrecSize, MADV_HUGEPAGE);
+	madvise(s_code_memory + HostMemoryMap::mVU0recOffset,
+		HostMemoryMap::mVU0recSize + HostMemoryMap::mVU1recSize, MADV_HUGEPAGE);
+#endif
 
 	HostMemoryMap::EEmem = (uptr)(s_data_memory + HostMemoryMap::EEmemOffset);
 	HostMemoryMap::IOPmem = (uptr)(s_data_memory + HostMemoryMap::IOPmemOffset);
