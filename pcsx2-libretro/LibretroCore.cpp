@@ -2127,11 +2127,12 @@ void Host::OnPerformanceMetricsUpdated()
 		const u64 ee_cycle = cpuRegs.cycle;
 		const u64 iop_cycle = psxRegs.cycle;
 		INFO_LOG("hb: EE pc={:08x} dcyc={} | IOP pc={:08x} dcyc={} cycleEE={} | "
-				 "istat={:04x} imask={:04x} eeSt={:08x} psxInt={:08x}",
+				 "istat={:04x} imask={:04x} eeSt={:08x} epc={:08x} cause={:08x} psxInt={:08x}",
 			cpuRegs.pc, ee_cycle - s_last_ee_cycle,
 			psxRegs.pc, iop_cycle - s_last_iop_cycle, psxRegs.iopCycleEE,
 			psHu32(INTC_STAT), psHu32(INTC_MASK),
-			cpuRegs.CP0.n.Status.val, psxRegs.interrupt);
+			cpuRegs.CP0.n.Status.val, cpuRegs.CP0.n.EPC, cpuRegs.CP0.n.Cause,
+			psxRegs.interrupt);
 		s_last_ee_cycle = ee_cycle;
 		s_last_iop_cycle = iop_cycle;
 
