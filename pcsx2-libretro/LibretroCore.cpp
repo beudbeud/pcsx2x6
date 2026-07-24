@@ -2140,25 +2140,27 @@ void Host::OnPerformanceMetricsUpdated()
 		// hardware state that never comes true. Snapshot the DMA/GIF/VIF/GS
 		// registers that such a handler could poll, plus the loop's own code so
 		// the polled address is readable straight off the MIPS disassembly.
-		// The 16 dispatches that followed the LAST interrupt delivery (armed
-		// capture, frozen — see recEventTest). Oldest first. If 0x80000200 is
-		// absent here, the vector never dispatched after that delivery.
+		// Unified trail around the LAST interrupt delivery: 16 entries of
+		// pre-context, then the delivery sentinel pair (ffff0001 <epc>), then the
+		// post-delivery interleave of dispatches (guest pcs) and C++ sentinels
+		// (ffff0002 <pc> = ERET, ffff0003 <tar> = interp branch pc write).
 		{
 			const u32 base = g_eeRingSnapshotIdx;
-			INFO_LOG("hb5: post-int {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
-					 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
-				g_eeRingSnapshot[(base + 0) & 31], g_eeRingSnapshot[(base + 1) & 31],
-				g_eeRingSnapshot[(base + 2) & 31], g_eeRingSnapshot[(base + 3) & 31],
-				g_eeRingSnapshot[(base + 4) & 31], g_eeRingSnapshot[(base + 5) & 31],
-				g_eeRingSnapshot[(base + 6) & 31], g_eeRingSnapshot[(base + 7) & 31],
-				g_eeRingSnapshot[(base + 8) & 31], g_eeRingSnapshot[(base + 9) & 31],
-				g_eeRingSnapshot[(base + 10) & 31], g_eeRingSnapshot[(base + 11) & 31],
-				g_eeRingSnapshot[(base + 12) & 31], g_eeRingSnapshot[(base + 13) & 31],
-				g_eeRingSnapshot[(base + 14) & 31], g_eeRingSnapshot[(base + 15) & 31]);
+			for (int line = 0; line < 4; line++)
+			{
+				INFO_LOG("hb5.{}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
+						 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+					line,
+					g_eeRingSnapshot[(base + line * 16 + 0) & 63], g_eeRingSnapshot[(base + line * 16 + 1) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 2) & 63], g_eeRingSnapshot[(base + line * 16 + 3) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 4) & 63], g_eeRingSnapshot[(base + line * 16 + 5) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 6) & 63], g_eeRingSnapshot[(base + line * 16 + 7) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 8) & 63], g_eeRingSnapshot[(base + line * 16 + 9) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 10) & 63], g_eeRingSnapshot[(base + line * 16 + 11) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 12) & 63], g_eeRingSnapshot[(base + line * 16 + 13) & 63],
+					g_eeRingSnapshot[(base + line * 16 + 14) & 63], g_eeRingSnapshot[(base + line * 16 + 15) & 63]);
+			}
 		}
-		// pc trajectory through the event-test sections for the LAST delivery:
-		// afterIOP / afterCounters / afterIntScan / afterVU / atExit. The first
-		// value differing from lastvec names the section that overwrote pc.
 		INFO_LOG("hb6: evtpc {:08x} {:08x} {:08x} {:08x} {:08x} | vecdisp={}",
 			g_eeEvtPc[0], g_eeEvtPc[1], g_eeEvtPc[2], g_eeEvtPc[3], g_eeEvtPc[4],
 			g_eeVecDispatchCount);
