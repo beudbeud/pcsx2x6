@@ -313,21 +313,6 @@ static fpuRegisters& fpuRegs = _cpuRegistersPack.fpuRegs;
 
 extern bool eeEventTestIsActive;
 
-// yaps2 bring-up diagnostics (rolling EE interrupt-delivery stats).
-extern u32 g_eeIntDeliveryCount, g_eeIntLastMask, g_eeIntLastEPC, g_eeIntLastPC;
-extern u32 g_eeDispatchRing[64];
-extern u32 g_eeDispatchRingIdx;
-void eeRingPush(u32 v);
-extern u32 g_eeRingCaptureArmed, g_eeIntLastRingIdx, g_eeRingSnapshotIdx;
-extern u32 g_eeRingSnapshot[64];
-extern u32 g_eeRingPreSnapshot[64];
-extern u32 g_eeRingPreIdx;
-extern u32 g_eeEretCount;
-extern u32 g_eeEvtPc[5];
-extern u32 g_eePcWriteRing[8][3];
-extern u32 g_eePcWriteIdx;
-extern u32 g_eeVecDispatchCount;
-void eePcWriteTrace(u32 id, u32 val);
 
 void intUpdateCPUCycles();
 void intEventTest();

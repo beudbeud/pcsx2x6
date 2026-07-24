@@ -72,13 +72,7 @@
 #include "pcsx2/Input/InputManager.h"
 #include "pcsx2/DEV9/ACJV.h"
 #include "pcsx2/MTGS.h"
-#include "pcsx2/Memory.h" // psHu32/PSM for the stall-hunt heartbeat
 #include "pcsx2/MemoryTypes.h"
-#include "pcsx2/R5900.h" // cpuRegs for the stall-hunt heartbeat
-#include "pcsx2/R3000A.h" // psxRegs for the stall-hunt heartbeat
-#include "pcsx2/Hw.h" // INTC_STAT/INTC_MASK for the stall-hunt heartbeat
-#include "pcsx2/GS.h" // GSCSRr for the stall-hunt heartbeat
-#include "pcsx2/Counters.h" // EE timer state for the stall-hunt heartbeat
 #include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SaveState.h"
@@ -2113,141 +2107,7 @@ void Host::OnPerformanceMetricsUpdated()
 		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetVUThreadUsage(),
 		PerformanceMetrics::GetGPUUsage());
-
-	// Stall-hunt heartbeat (yaps2 bring-up): sample EE/IOP PCs and cycle
-	// progress so a wedged run tells us WHERE the guest spins instead of just
-	// that it spins. Cross-thread racy reads of live emu state — fine for a
-	// diagnostic snapshot, do not act on individual values.
-	//   EE pc stuck in a narrow range          -> guest poll loop at that PC
-	//   IOP dcyc == 0 while EE dcyc advances   -> IOP starved of its slice
-	//   istat & imask != 0 across many beats   -> interrupt raised, never
-	//                                             delivered (rec event-test)
-	{
-		static u64 s_last_ee_cycle = 0;
-		static u64 s_last_iop_cycle = 0;
-		const u64 ee_cycle = cpuRegs.cycle;
-		const u64 iop_cycle = psxRegs.cycle;
-		INFO_LOG("hb: EE pc={:08x} dcyc={} | IOP pc={:08x} dcyc={} cycleEE={} | "
-				 "istat={:04x} imask={:04x} eeSt={:08x} epc={:08x} cause={:08x} psxInt={:08x}",
-			cpuRegs.pc, ee_cycle - s_last_ee_cycle,
-			psxRegs.pc, iop_cycle - s_last_iop_cycle, psxRegs.iopCycleEE,
-			psHu32(INTC_STAT), psHu32(INTC_MASK),
-			cpuRegs.CP0.n.Status.val, cpuRegs.CP0.n.EPC, cpuRegs.CP0.n.Cause,
-			psxRegs.interrupt);
-		s_last_ee_cycle = ee_cycle;
-		s_last_iop_cycle = iop_cycle;
-
-		// The 2026-07-24 wedge sits in a guest INTC handler (EXL=1) polling
-		// hardware state that never comes true. Snapshot the DMA/GIF/VIF/GS
-		// registers that such a handler could poll, plus the loop's own code so
-		// the polled address is readable straight off the MIPS disassembly.
-		// Unified trail around the LAST interrupt delivery: 16 entries of
-		// pre-context, then the delivery sentinel pair (ffff0001 <epc>), then the
-		// post-delivery interleave of dispatches (guest pcs) and C++ sentinels
-		// (ffff0002 <pc> = ERET, ffff0003 <tar> = interp branch pc write).
-		// Synchronous pre-delivery trail: the last 64 unified-ring entries as of
-		// the LAST delivery, oldest first — the final two are always the delivery
-		// pair (ffff0001 <epc>). Cannot be outrun by ring wrap.
-		{
-			const u32 pbase = g_eeRingPreIdx; // entries pbase-64..pbase-1 == (pbase+k)&63
-			for (int line = 0; line < 4; line++)
-			{
-				INFO_LOG("hb8.{}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
-						 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
-					line,
-					g_eeRingPreSnapshot[(pbase + line * 16 + 0) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 1) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 2) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 3) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 4) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 5) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 6) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 7) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 8) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 9) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 10) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 11) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 12) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 13) & 63],
-					g_eeRingPreSnapshot[(pbase + line * 16 + 14) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 15) & 63]);
-			}
-		}
-		{
-			const u32 base = g_eeRingSnapshotIdx;
-			for (int line = 0; line < 4; line++)
-			{
-				INFO_LOG("hb5.{}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
-						 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
-					line,
-					g_eeRingSnapshot[(base + line * 16 + 0) & 63], g_eeRingSnapshot[(base + line * 16 + 1) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 2) & 63], g_eeRingSnapshot[(base + line * 16 + 3) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 4) & 63], g_eeRingSnapshot[(base + line * 16 + 5) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 6) & 63], g_eeRingSnapshot[(base + line * 16 + 7) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 8) & 63], g_eeRingSnapshot[(base + line * 16 + 9) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 10) & 63], g_eeRingSnapshot[(base + line * 16 + 11) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 12) & 63], g_eeRingSnapshot[(base + line * 16 + 13) & 63],
-					g_eeRingSnapshot[(base + line * 16 + 14) & 63], g_eeRingSnapshot[(base + line * 16 + 15) & 63]);
-			}
-		}
-		INFO_LOG("hb6: evtpc {:08x} {:08x} {:08x} {:08x} {:08x} | vecdisp={}",
-			g_eeEvtPc[0], g_eeEvtPc[1], g_eeEvtPc[2], g_eeEvtPc[3], g_eeEvtPc[4],
-			g_eeVecDispatchCount);
-		// Last 8 C++ writes to cpuRegs.pc: writer(1=exc 2=eret 3=branch), value,
-		// delivery count at write. Oldest first.
-		{
-			const u32 wi = g_eePcWriteIdx;
-			INFO_LOG("hb7: pcw {}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{} "
-					 "{}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{}",
-				g_eePcWriteRing[(wi + 0) & 7][0], g_eePcWriteRing[(wi + 0) & 7][1], g_eePcWriteRing[(wi + 0) & 7][2],
-				g_eePcWriteRing[(wi + 1) & 7][0], g_eePcWriteRing[(wi + 1) & 7][1], g_eePcWriteRing[(wi + 1) & 7][2],
-				g_eePcWriteRing[(wi + 2) & 7][0], g_eePcWriteRing[(wi + 2) & 7][1], g_eePcWriteRing[(wi + 2) & 7][2],
-				g_eePcWriteRing[(wi + 3) & 7][0], g_eePcWriteRing[(wi + 3) & 7][1], g_eePcWriteRing[(wi + 3) & 7][2],
-				g_eePcWriteRing[(wi + 4) & 7][0], g_eePcWriteRing[(wi + 4) & 7][1], g_eePcWriteRing[(wi + 4) & 7][2],
-				g_eePcWriteRing[(wi + 5) & 7][0], g_eePcWriteRing[(wi + 5) & 7][1], g_eePcWriteRing[(wi + 5) & 7][2],
-				g_eePcWriteRing[(wi + 6) & 7][0], g_eePcWriteRing[(wi + 6) & 7][1], g_eePcWriteRing[(wi + 6) & 7][2],
-				g_eePcWriteRing[(wi + 7) & 7][0], g_eePcWriteRing[(wi + 7) & 7][1], g_eePcWriteRing[(wi + 7) & 7][2]);
-		}
-		INFO_LOG("hb2: ints={} erets={} lastmask={:04x} lastepc={:08x} lastvec={:08x} | "
-				 "gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
-				 "dstat={:08x} dctrl={:08x} gscsr={:08x}",
-			g_eeIntDeliveryCount, g_eeEretCount, g_eeIntLastMask, g_eeIntLastEPC, g_eeIntLastPC,
-			psHu32(0x3020) /*GIF_STAT*/, psHu32(0x3C00) /*VIF1_STAT*/,
-			psHu32(0x9000) /*D1_CHCR*/, psHu32(0xA000) /*D2_CHCR*/,
-			psHu32(0xE010) /*DMAC_STAT*/, psHu32(0xE000) /*DMAC_CTRL*/,
-			GSCSRr);
-		// Last 16 guest PCs the EE dispatcher routed (newest last). Self-loops
-		// re-enter via their internal backedge without dispatching, so this is
-		// the block-to-block trail — e.g. the exception vector and the kernel
-		// handler chain right after an interrupt delivery.
-		{
-			const u32 idx = g_eeDispatchRingIdx;
-			INFO_LOG("hb4: ring {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
-					 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
-				g_eeDispatchRing[(idx - 16) & 31], g_eeDispatchRing[(idx - 15) & 31],
-				g_eeDispatchRing[(idx - 14) & 31], g_eeDispatchRing[(idx - 13) & 31],
-				g_eeDispatchRing[(idx - 12) & 31], g_eeDispatchRing[(idx - 11) & 31],
-				g_eeDispatchRing[(idx - 10) & 31], g_eeDispatchRing[(idx - 9) & 31],
-				g_eeDispatchRing[(idx - 8) & 31], g_eeDispatchRing[(idx - 7) & 31],
-				g_eeDispatchRing[(idx - 6) & 31], g_eeDispatchRing[(idx - 5) & 31],
-				g_eeDispatchRing[(idx - 4) & 31], g_eeDispatchRing[(idx - 3) & 31],
-				g_eeDispatchRing[(idx - 2) & 31], g_eeDispatchRing[(idx - 1) & 31]);
-		}
-		// EE timers: the current stall polls T0_COUNT against 0x724 and never
-		// exits. mode/count/target per timer (raw state, racy snapshot).
-		INFO_LOG("hb9: T0 m={:08x} c={:04x} t={:04x} | T1 m={:08x} c={:04x} t={:04x} | "
-				 "T2 m={:08x} c={:04x} t={:04x} | T3 m={:08x} c={:04x} t={:04x}",
-			counters[0].modeval, counters[0].count & 0xffff, counters[0].target & 0xffff,
-			counters[1].modeval, counters[1].count & 0xffff, counters[1].target & 0xffff,
-			counters[2].modeval, counters[2].count & 0xffff, counters[2].target & 0xffff,
-			counters[3].modeval, counters[3].count & 0xffff, counters[3].target & 0xffff);
-		if (cpuRegs.pc < 0x02000000) // main-RAM guest code: dump the poll loop
-		{
-			const u32 base = (cpuRegs.pc - 0x10) & ~0xFu;
-			if (const u8* p = static_cast<const u8*>(PSM(base)))
-			{
-				const u32* w = reinterpret_cast<const u32*>(p);
-				INFO_LOG("hb3: {:08x}: {:08x} {:08x} {:08x} {:08x}  {:08x} {:08x} {:08x} {:08x}",
-					base, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
-				INFO_LOG("hb3: {:08x}: {:08x} {:08x} {:08x} {:08x}  {:08x} {:08x} {:08x} {:08x}",
-					base + 0x20, w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
-			}
-		}
-	}
 }
-
 void Host::OnSaveStateLoading(const std::string_view filename)
 {
 }

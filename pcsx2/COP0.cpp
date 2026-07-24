@@ -658,8 +658,6 @@ cpuRegs.PERF.n.pccr, cpuRegs.PERF.n.pcr0, cpuRegs.PERF.n.pcr1, _Imm_ & 0x3F);*/
 			cpuRegs.pc = cpuRegs.CP0.n.EPC;
 			cpuRegs.CP0.n.Status.b.EXL = 0;
 		}
-		g_eeEretCount++; // yaps2 bring-up diagnostic (see R5900.cpp)
-		eePcWriteTrace(2, cpuRegs.pc);
 		cpuUpdateOperationMode();
 		cpuSetNextEventDelta(4);
 		intSetBranch();
