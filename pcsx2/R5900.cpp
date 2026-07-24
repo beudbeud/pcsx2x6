@@ -44,6 +44,13 @@ R5900cpu *Cpu = NULL;
 static constexpr uint eeWaitCycles = 3072;
 
 bool eeEventTestIsActive = false;
+
+// yaps2 bring-up diagnostics — rolling EE interrupt-delivery stats, printed by
+// the libretro heartbeat. See _cpuEventTest_Shared.
+u32 g_eeIntDeliveryCount = 0;
+u32 g_eeIntLastMask = 0;
+u32 g_eeIntLastEPC = 0;
+u32 g_eeIntLastPC = 0;
 EE_intProcessStatus eeRunInterruptScan = INT_NOT_RUNNING;
 
 u32 g_eeloadMain = 0, g_eeloadExec = 0, g_osdsys_str = 0;
@@ -406,18 +413,16 @@ __fi void _cpuEventTest_Shared()
 	if (cpuIntsEnabled(mask))
 	{
 		cpuException(mask, cpuRegs.branch);
-		// yaps2 bring-up diagnostic: the 2026-07-24 wedge shows Status.EXL=1
-		// with the guest resuming its wait loop instead of the vector, and the
-		// INTC never acked — i.e. delivery happened but the handler never ran.
-		// Trace the first deliveries so the next wedged log shows what pc/EPC
-		// the exception actually produced and how many times it fired.
-		static int s_ee_int_trace = 0;
-		if (s_ee_int_trace < 30)
-		{
-			s_ee_int_trace++;
-			Console.WriteLn("EE-int #%d: mask=%x delivered -> pc=%08x EPC=%08x Status=%08x",
-				s_ee_int_trace, mask, cpuRegs.pc, cpuRegs.CP0.n.EPC, cpuRegs.CP0.n.Status.val);
-		}
+		// yaps2 bring-up diagnostic (rolling, spam-free): DMAC/SIF interrupts
+		// fire in bursts from BIOS boot onward, so a capped trace exhausts
+		// before the interesting delivery. Keep running stats instead; the
+		// libretro heartbeat prints them every ~5s. At the wedge this shows
+		// whether the count is frozen (no more deliveries — EXL stuck, as
+		// expected) and what the LAST delivery was (mask + EPC + vector pc).
+		g_eeIntDeliveryCount++;
+		g_eeIntLastMask = mask;
+		g_eeIntLastEPC = cpuRegs.CP0.n.EPC;
+		g_eeIntLastPC = cpuRegs.pc;
 	}
 
 	// ---- IOP -------------

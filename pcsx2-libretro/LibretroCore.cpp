@@ -2140,8 +2140,10 @@ void Host::OnPerformanceMetricsUpdated()
 		// hardware state that never comes true. Snapshot the DMA/GIF/VIF/GS
 		// registers that such a handler could poll, plus the loop's own code so
 		// the polled address is readable straight off the MIPS disassembly.
-		INFO_LOG("hb2: gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
+		INFO_LOG("hb2: ints={} lastmask={:04x} lastepc={:08x} lastvec={:08x} | "
+				 "gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
 				 "dstat={:08x} dctrl={:08x} gscsr={:08x}",
+			g_eeIntDeliveryCount, g_eeIntLastMask, g_eeIntLastEPC, g_eeIntLastPC,
 			psHu32(0x3020) /*GIF_STAT*/, psHu32(0x3C00) /*VIF1_STAT*/,
 			psHu32(0x9000) /*D1_CHCR*/, psHu32(0xA000) /*D2_CHCR*/,
 			psHu32(0xE010) /*DMAC_STAT*/, psHu32(0xE000) /*DMAC_CTRL*/,
