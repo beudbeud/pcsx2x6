@@ -422,6 +422,19 @@ static const void* _DynGen_DispatcherReg()
 
 	armAsm->Ldr(a64::w0, armCpuRegMem(&cpuRegs.pc));
 
+	// yaps2 bring-up diagnostic: record every dispatched guest pc into
+	// g_eeDispatchRing (see R5900.cpp). Uses only x16/x17 — dead at this
+	// point, and the LUT code below re-materializes x17 anyway.
+	//   idx = g_eeDispatchRingIdx++; ring[idx & 31] = pc;
+	armMoveAddressToReg(RSCRATCHADDR, &g_eeDispatchRingIdx);
+	armAsm->Ldr(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
+	armAsm->Add(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
+	armAsm->Str(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
+	armAsm->Sub(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
+	armAsm->And(RWVIXLSCRATCH, RWVIXLSCRATCH, 31); // zero-extends into x16
+	armMoveAddressToReg(RSCRATCHADDR, g_eeDispatchRing);
+	armAsm->Str(a64::w0, a64::MemOperand(RSCRATCHADDR, RXVIXLSCRATCH, a64::LSL, 2));
+
 	// Two-level LUT lookup:
 	// base = recLUT[pc >> 16]
 	// block = *(BASEBLOCK*)(base + pc * sizeof(BASEBLOCK)/4)
