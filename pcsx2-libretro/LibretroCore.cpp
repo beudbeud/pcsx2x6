@@ -515,10 +515,12 @@ void LibretroHost::RegisterCoreOptions()
 				{"4", "4x Native (2560x1920)"}, {nullptr, nullptr}},
 			"1"},
 		{"pcsx2_blending_accuracy", "Blending Accuracy", nullptr,
-			"Higher levels emulate more PS2 blending effects correctly at a GPU cost.", nullptr, "graphics",
-			{{"minimum", "Minimum"}, {"basic", "Basic (Recommended)"}, {"medium", "Medium"}, {"high", "High"},
+			"Higher levels emulate more PS2 blending effects correctly at a GS-thread/GPU cost. On "
+			"RPi5/V3D (no texture_barrier) every accurate blend is an RT copy on the GS thread: "
+			"Minimum measured ~+30% in heavy Tekken 4 scenes vs Basic.", nullptr, "graphics",
+			{{"minimum", "Minimum (Recommended on RPi5)"}, {"basic", "Basic"}, {"medium", "Medium"}, {"high", "High"},
 				{"full", "Full (Slow)"}, {"maximum", "Maximum (Very Slow)"}, {nullptr, nullptr}},
-			"basic"},
+			"minimum"},
 		{"pcsx2_texture_filtering", "Texture Filtering", nullptr,
 			"Bilinear (PS2) replicates the console.", nullptr, "graphics",
 			{{"nearest", "Nearest"}, {"bilinear_ps2", "Bilinear (PS2)"}, {"bilinear_forced", "Bilinear (Forced)"},
