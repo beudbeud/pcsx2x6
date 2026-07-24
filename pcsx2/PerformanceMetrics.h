@@ -30,6 +30,9 @@ namespace PerformanceMetrics
 	void SetGSSWThreadCount(u32 count);
 	void SetGSSWThread(u32 index, Threading::ThreadHandle thread);
 
+	/// Sets the GV7 GS back thread for usage calculations (empty handle to clear).
+	void SetGSBackThread(Threading::ThreadHandle thread);
+
 	u64 GetFrameNumber();
 
 	InternalFPSMethod GetInternalFPSMethod();
@@ -54,6 +57,9 @@ namespace PerformanceMetrics
 	u32 GetGSSWThreadCount();
 	double GetGSSWThreadUsage(u32 index);
 	double GetGSSWThreadAverageTime(u32 index);
+
+	double GetGSBackThreadUsage();
+	double GetGSBackThreadAverageTime();
 
 	float GetGPUUsage();
 	float GetGPUAverageTime();
