@@ -382,7 +382,7 @@ static void recEventTest()
 	// the dispatch ring after 16 more dispatches — the frozen copy then holds
 	// the 16 guest blocks that ran right after the LAST delivery. Cheap: one
 	// compare per event test, one memcpy per delivery.
-	if (g_eeRingCaptureArmed && (g_eeDispatchRingIdx - g_eeIntLastRingIdx) >= 16)
+	if (g_eeRingCaptureArmed && (g_eeDispatchRingIdx - g_eeIntLastRingIdx) >= 58)
 	{
 		std::memcpy(g_eeRingSnapshot, g_eeDispatchRing, sizeof(g_eeRingSnapshot));
 		g_eeRingSnapshotIdx = g_eeIntLastRingIdx;
@@ -442,7 +442,7 @@ static const void* _DynGen_DispatcherReg()
 	armAsm->Add(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
 	armAsm->Str(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
 	armAsm->Sub(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
-	armAsm->And(RWVIXLSCRATCH, RWVIXLSCRATCH, 31); // zero-extends into x16
+	armAsm->And(RWVIXLSCRATCH, RWVIXLSCRATCH, 63); // zero-extends into x16
 	armMoveAddressToReg(RSCRATCHADDR, g_eeDispatchRing);
 	armAsm->Str(a64::w0, a64::MemOperand(RSCRATCHADDR, RXVIXLSCRATCH, a64::LSL, 2));
 

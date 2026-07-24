@@ -55,14 +55,23 @@ u32 g_eeIntLastPC = 0;
 // by emitted code in _DynGen_DispatcherReg on arm64; idle on x86). Self-loop
 // blocks re-enter via their internal backedge without dispatching, so this
 // holds the interesting block-to-block trail, not millions of loop iterations.
-u32 g_eeDispatchRing[32] = {};
+// 64 entries; written by BOTH the emitted dispatcher (guest pc) and the C++
+// sentinels below (same EE thread, one shared index). Sentinels:
+//   FFFF0001 <epc>   interrupt delivery (cpuException from the event test)
+//   FFFF0002 <pc>    ERET retired (value = resulting pc)
+//   FFFF0003 <tar>   _doBranch_shared wrote pc=tar
+u32 g_eeDispatchRing[64] = {};
 u32 g_eeDispatchRingIdx = 0;
+void eeRingPush(u32 v)
+{
+	g_eeDispatchRing[(g_eeDispatchRingIdx++) & 63] = v;
+}
 // Armed at every interrupt delivery; recEventTest snapshots the ring once 16
 // more dispatches have flowed, so the snapshot holds the 16 guest blocks that
 // ran right AFTER the last delivery (the live ring only shows steady state).
 u32 g_eeRingCaptureArmed = 0;
 u32 g_eeIntLastRingIdx = 0;
-u32 g_eeRingSnapshot[32] = {};
+u32 g_eeRingSnapshot[64] = {};
 u32 g_eeRingSnapshotIdx = 0;
 // Incremented by the interpreter's ERET (COP0.cpp) — pairs with
 // g_eeIntDeliveryCount to tell whether the handler chain completed.
@@ -85,6 +94,8 @@ void eePcWriteTrace(u32 id, u32 val)
 	g_eePcWriteRing[i][0] = id;
 	g_eePcWriteRing[i][1] = val;
 	g_eePcWriteRing[i][2] = g_eeIntDeliveryCount;
+	eeRingPush(0xFFFF0000u + id);
+	eeRingPush(val);
 }
 // Bumped by emitted code in DispatcherReg whenever the dispatched pc is
 // exactly 0x80000200 — did the interrupt vector ever dispatch?
@@ -464,7 +475,9 @@ __fi void _cpuEventTest_Shared()
 		g_eeIntLastMask = mask;
 		g_eeIntLastEPC = cpuRegs.CP0.n.EPC;
 		g_eeIntLastPC = cpuRegs.pc;
-		g_eeIntLastRingIdx = g_eeDispatchRingIdx;
+		eeRingPush(0xFFFF0001);
+		eeRingPush(cpuRegs.CP0.n.EPC);
+		g_eeIntLastRingIdx = g_eeDispatchRingIdx - 18; // 16 pre-context + the pair
 		g_eeRingCaptureArmed = 1;
 	}
 
