@@ -72,11 +72,12 @@
 #include "pcsx2/Input/InputManager.h"
 #include "pcsx2/DEV9/ACJV.h"
 #include "pcsx2/MTGS.h"
-#include "pcsx2/Memory.h" // psHu32 for the stall-hunt heartbeat
+#include "pcsx2/Memory.h" // psHu32/PSM for the stall-hunt heartbeat
 #include "pcsx2/MemoryTypes.h"
 #include "pcsx2/R5900.h" // cpuRegs for the stall-hunt heartbeat
 #include "pcsx2/R3000A.h" // psxRegs for the stall-hunt heartbeat
 #include "pcsx2/Hw.h" // INTC_STAT/INTC_MASK for the stall-hunt heartbeat
+#include "pcsx2/GS.h" // GSCSRr for the stall-hunt heartbeat
 #include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SaveState.h"
@@ -2133,6 +2134,29 @@ void Host::OnPerformanceMetricsUpdated()
 			cpuRegs.CP0.n.Status.val, psxRegs.interrupt);
 		s_last_ee_cycle = ee_cycle;
 		s_last_iop_cycle = iop_cycle;
+
+		// The 2026-07-24 wedge sits in a guest INTC handler (EXL=1) polling
+		// hardware state that never comes true. Snapshot the DMA/GIF/VIF/GS
+		// registers that such a handler could poll, plus the loop's own code so
+		// the polled address is readable straight off the MIPS disassembly.
+		INFO_LOG("hb2: gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
+				 "dstat={:08x} dctrl={:08x} gscsr={:08x}",
+			psHu32(0x3020) /*GIF_STAT*/, psHu32(0x3C00) /*VIF1_STAT*/,
+			psHu32(0x9000) /*D1_CHCR*/, psHu32(0xA000) /*D2_CHCR*/,
+			psHu32(0xE010) /*DMAC_STAT*/, psHu32(0xE000) /*DMAC_CTRL*/,
+			GSCSRr);
+		if (cpuRegs.pc < 0x02000000) // main-RAM guest code: dump the poll loop
+		{
+			const u32 base = (cpuRegs.pc - 0x10) & ~0xFu;
+			if (const u8* p = static_cast<const u8*>(PSM(base)))
+			{
+				const u32* w = reinterpret_cast<const u32*>(p);
+				INFO_LOG("hb3: {:08x}: {:08x} {:08x} {:08x} {:08x}  {:08x} {:08x} {:08x} {:08x}",
+					base, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+				INFO_LOG("hb3: {:08x}: {:08x} {:08x} {:08x} {:08x}  {:08x} {:08x} {:08x} {:08x}",
+					base + 0x20, w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
+			}
+		}
 	}
 }
 
