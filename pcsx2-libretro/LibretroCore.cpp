@@ -2159,8 +2159,24 @@ void Host::OnPerformanceMetricsUpdated()
 		// pc trajectory through the event-test sections for the LAST delivery:
 		// afterIOP / afterCounters / afterIntScan / afterVU / atExit. The first
 		// value differing from lastvec names the section that overwrote pc.
-		INFO_LOG("hb6: evtpc {:08x} {:08x} {:08x} {:08x} {:08x}",
-			g_eeEvtPc[0], g_eeEvtPc[1], g_eeEvtPc[2], g_eeEvtPc[3], g_eeEvtPc[4]);
+		INFO_LOG("hb6: evtpc {:08x} {:08x} {:08x} {:08x} {:08x} | vecdisp={}",
+			g_eeEvtPc[0], g_eeEvtPc[1], g_eeEvtPc[2], g_eeEvtPc[3], g_eeEvtPc[4],
+			g_eeVecDispatchCount);
+		// Last 8 C++ writes to cpuRegs.pc: writer(1=exc 2=eret 3=branch), value,
+		// delivery count at write. Oldest first.
+		{
+			const u32 wi = g_eePcWriteIdx;
+			INFO_LOG("hb7: pcw {}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{} "
+					 "{}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{} {}:{:08x}@{}",
+				g_eePcWriteRing[(wi + 0) & 7][0], g_eePcWriteRing[(wi + 0) & 7][1], g_eePcWriteRing[(wi + 0) & 7][2],
+				g_eePcWriteRing[(wi + 1) & 7][0], g_eePcWriteRing[(wi + 1) & 7][1], g_eePcWriteRing[(wi + 1) & 7][2],
+				g_eePcWriteRing[(wi + 2) & 7][0], g_eePcWriteRing[(wi + 2) & 7][1], g_eePcWriteRing[(wi + 2) & 7][2],
+				g_eePcWriteRing[(wi + 3) & 7][0], g_eePcWriteRing[(wi + 3) & 7][1], g_eePcWriteRing[(wi + 3) & 7][2],
+				g_eePcWriteRing[(wi + 4) & 7][0], g_eePcWriteRing[(wi + 4) & 7][1], g_eePcWriteRing[(wi + 4) & 7][2],
+				g_eePcWriteRing[(wi + 5) & 7][0], g_eePcWriteRing[(wi + 5) & 7][1], g_eePcWriteRing[(wi + 5) & 7][2],
+				g_eePcWriteRing[(wi + 6) & 7][0], g_eePcWriteRing[(wi + 6) & 7][1], g_eePcWriteRing[(wi + 6) & 7][2],
+				g_eePcWriteRing[(wi + 7) & 7][0], g_eePcWriteRing[(wi + 7) & 7][1], g_eePcWriteRing[(wi + 7) & 7][2]);
+		}
 		INFO_LOG("hb2: ints={} erets={} lastmask={:04x} lastepc={:08x} lastvec={:08x} | "
 				 "gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
 				 "dstat={:08x} dctrl={:08x} gscsr={:08x}",
