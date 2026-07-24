@@ -994,7 +994,13 @@ bool GLContextEGL::CreateContext(const Version& version, EGLContext share_contex
 	m_context = context;
 	if (!m_context)
 	{
-		Console.ErrorFmt("eglCreateContext() failed: 0x{:x}", eglGetError());
+		// DevCon, not Error: the main caller is the version probe loop in
+		// Initialize(), which walks versions_to_try until one sticks. On a
+		// GLES-only driver (V3D/RPi) every desktop-GL entry fails with
+		// EGL_BAD_MATCH first, so at Error level a normal startup prints nine
+		// scary lines before succeeding. Both callers report the real failure
+		// through their own Error object if no version works at all.
+		DevCon.WriteLnFmt("eglCreateContext() failed: 0x{:x}", eglGetError());
 		return false;
 	}
 
