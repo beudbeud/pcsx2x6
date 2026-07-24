@@ -78,6 +78,7 @@
 #include "pcsx2/R3000A.h" // psxRegs for the stall-hunt heartbeat
 #include "pcsx2/Hw.h" // INTC_STAT/INTC_MASK for the stall-hunt heartbeat
 #include "pcsx2/GS.h" // GSCSRr for the stall-hunt heartbeat
+#include "pcsx2/Counters.h" // EE timer state for the stall-hunt heartbeat
 #include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SaveState.h"
@@ -2224,6 +2225,14 @@ void Host::OnPerformanceMetricsUpdated()
 				g_eeDispatchRing[(idx - 4) & 31], g_eeDispatchRing[(idx - 3) & 31],
 				g_eeDispatchRing[(idx - 2) & 31], g_eeDispatchRing[(idx - 1) & 31]);
 		}
+		// EE timers: the current stall polls T0_COUNT against 0x724 and never
+		// exits. mode/count/target per timer (raw state, racy snapshot).
+		INFO_LOG("hb9: T0 m={:08x} c={:04x} t={:04x} | T1 m={:08x} c={:04x} t={:04x} | "
+				 "T2 m={:08x} c={:04x} t={:04x} | T3 m={:08x} c={:04x} t={:04x}",
+			counters[0].modeval, counters[0].count & 0xffff, counters[0].target & 0xffff,
+			counters[1].modeval, counters[1].count & 0xffff, counters[1].target & 0xffff,
+			counters[2].modeval, counters[2].count & 0xffff, counters[2].target & 0xffff,
+			counters[3].modeval, counters[3].count & 0xffff, counters[3].target & 0xffff);
 		if (cpuRegs.pc < 0x02000000) // main-RAM guest code: dump the poll loop
 		{
 			const u32 base = (cpuRegs.pc - 0x10) & ~0xFu;
