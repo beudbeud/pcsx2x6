@@ -2144,6 +2144,26 @@ void Host::OnPerformanceMetricsUpdated()
 		// pre-context, then the delivery sentinel pair (ffff0001 <epc>), then the
 		// post-delivery interleave of dispatches (guest pcs) and C++ sentinels
 		// (ffff0002 <pc> = ERET, ffff0003 <tar> = interp branch pc write).
+		// Synchronous pre-delivery trail: the last 64 unified-ring entries as of
+		// the LAST delivery, oldest first — the final two are always the delivery
+		// pair (ffff0001 <epc>). Cannot be outrun by ring wrap.
+		{
+			const u32 pbase = g_eeRingPreIdx; // entries pbase-64..pbase-1 == (pbase+k)&63
+			for (int line = 0; line < 4; line++)
+			{
+				INFO_LOG("hb8.{}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
+						 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+					line,
+					g_eeRingPreSnapshot[(pbase + line * 16 + 0) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 1) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 2) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 3) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 4) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 5) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 6) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 7) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 8) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 9) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 10) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 11) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 12) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 13) & 63],
+					g_eeRingPreSnapshot[(pbase + line * 16 + 14) & 63], g_eeRingPreSnapshot[(pbase + line * 16 + 15) & 63]);
+			}
+		}
 		{
 			const u32 base = g_eeRingSnapshotIdx;
 			for (int line = 0; line < 4; line++)

@@ -72,6 +72,12 @@ void eeRingPush(u32 v)
 u32 g_eeRingCaptureArmed = 0;
 u32 g_eeIntLastRingIdx = 0;
 u32 g_eeRingSnapshot[64] = {};
+// Synchronous copy taken INSIDE the delivery site, right after the sentinel
+// pair is pushed — its last two chronological entries are always
+// FFFF0001+EPC, and everything before is true pre-delivery context. Unlike
+// the deferred post-snapshot this cannot be outrun by ring wrap.
+u32 g_eeRingPreSnapshot[64] = {};
+u32 g_eeRingPreIdx = 0;
 u32 g_eeRingSnapshotIdx = 0;
 // Incremented by the interpreter's ERET (COP0.cpp) — pairs with
 // g_eeIntDeliveryCount to tell whether the handler chain completed.
@@ -477,7 +483,9 @@ __fi void _cpuEventTest_Shared()
 		g_eeIntLastPC = cpuRegs.pc;
 		eeRingPush(0xFFFF0001);
 		eeRingPush(cpuRegs.CP0.n.EPC);
-		g_eeIntLastRingIdx = g_eeDispatchRingIdx - 18; // 16 pre-context + the pair
+		std::memcpy(g_eeRingPreSnapshot, g_eeDispatchRing, sizeof(g_eeRingPreSnapshot));
+		g_eeRingPreIdx = g_eeDispatchRingIdx;
+		g_eeIntLastRingIdx = g_eeDispatchRingIdx - 2; // pair anchors the post window
 		g_eeRingCaptureArmed = 1;
 	}
 

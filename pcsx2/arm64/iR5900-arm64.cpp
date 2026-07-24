@@ -382,7 +382,7 @@ static void recEventTest()
 	// the dispatch ring after 16 more dispatches — the frozen copy then holds
 	// the 16 guest blocks that ran right after the LAST delivery. Cheap: one
 	// compare per event test, one memcpy per delivery.
-	if (g_eeRingCaptureArmed && (g_eeDispatchRingIdx - g_eeIntLastRingIdx) >= 58)
+	if (g_eeRingCaptureArmed && (g_eeDispatchRingIdx - g_eeIntLastRingIdx) >= 40)
 	{
 		std::memcpy(g_eeRingSnapshot, g_eeDispatchRing, sizeof(g_eeRingSnapshot));
 		g_eeRingSnapshotIdx = g_eeIntLastRingIdx;
