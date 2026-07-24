@@ -3186,6 +3186,22 @@ static void recRecompile(const u32 startpc)
 {
 	u32 i;
 
+	// yaps2 bring-up diagnostic: the 2026-07-24 wedge delivers an interrupt
+	// exception (EXL=1, pc=0x80000200) but the vector seemingly never runs.
+	// Log the first compile of each exception vector — if 0x80000200 never
+	// prints while EXL wedges, the dispatcher never even reached it.
+	if (startpc == 0x80000180 || startpc == 0x80000200 || startpc == 0xBFC00380 || startpc == 0xBFC00400)
+	{
+		static u32 s_seen_vectors = 0;
+		const u32 bit = (startpc == 0x80000180) ? 1u : (startpc == 0x80000200) ? 2u :
+		                (startpc == 0xBFC00380) ? 4u : 8u;
+		if (!(s_seen_vectors & bit))
+		{
+			s_seen_vectors |= bit;
+			Console.WriteLn(Color_StrongGreen, "EE ARM64: first compile of exception vector %08x", startpc);
+		}
+	}
+
 	// Note: startpc=0 is valid (EE RAM address 0). The x86 rec asserts on this
 	// but it can legitimately happen during BIOS init (e.g., JR $ra with ra=0).
 	// We allow it since address 0 is properly mapped in recLUT.
