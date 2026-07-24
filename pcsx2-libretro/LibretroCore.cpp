@@ -2156,6 +2156,11 @@ void Host::OnPerformanceMetricsUpdated()
 				g_eeRingSnapshot[(base + 12) & 31], g_eeRingSnapshot[(base + 13) & 31],
 				g_eeRingSnapshot[(base + 14) & 31], g_eeRingSnapshot[(base + 15) & 31]);
 		}
+		// pc trajectory through the event-test sections for the LAST delivery:
+		// afterIOP / afterCounters / afterIntScan / afterVU / atExit. The first
+		// value differing from lastvec names the section that overwrote pc.
+		INFO_LOG("hb6: evtpc {:08x} {:08x} {:08x} {:08x} {:08x}",
+			g_eeEvtPc[0], g_eeEvtPc[1], g_eeEvtPc[2], g_eeEvtPc[3], g_eeEvtPc[4]);
 		INFO_LOG("hb2: ints={} erets={} lastmask={:04x} lastepc={:08x} lastvec={:08x} | "
 				 "gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
 				 "dstat={:08x} dctrl={:08x} gscsr={:08x}",

@@ -67,6 +67,11 @@ u32 g_eeRingSnapshotIdx = 0;
 // Incremented by the interpreter's ERET (COP0.cpp) — pairs with
 // g_eeIntDeliveryCount to tell whether the handler chain completed.
 u32 g_eeEretCount = 0;
+// pc trajectory through _cpuEventTest_Shared's sections when the call
+// delivered an interrupt: [0] after IOP, [1] after counters, [2] after the
+// interrupt scan, [3] after VU sync, [4] at exit. Identifies which section
+// overwrites the exception-vector pc after a delivery.
+u32 g_eeEvtPc[5] = {};
 EE_intProcessStatus eeRunInterruptScan = INT_NOT_RUNNING;
 
 u32 g_eeloadMain = 0, g_eeloadExec = 0, g_osdsys_str = 0;
@@ -425,10 +430,12 @@ __fi void _cpuEventTest_Shared()
 	// cycles (fixes Grandia II [PAL], which does a spin loop on a vsync and expects to
 	// be able to read the value before the exception handler clears it).
 
+	u32 evt_delivered = 0;
 	uint mask = intcInterrupt() | dmacInterrupt();
 	if (cpuIntsEnabled(mask))
 	{
 		cpuException(mask, cpuRegs.branch);
+		evt_delivered = 1;
 		// yaps2 bring-up diagnostic (rolling, spam-free): DMAC/SIF interrupts
 		// fire in bursts from BIOS boot onward, so a capped trace exhausts
 		// before the interesting delivery. Keep running stats instead; the
@@ -470,6 +477,8 @@ __fi void _cpuEventTest_Shared()
 	}
 
 	iopEventTest();
+	if (evt_delivered)
+		g_eeEvtPc[0] = cpuRegs.pc;
 
 	if (cpuTestCycle(nextStartCounter, nextDeltaCounter))
 	{
@@ -478,6 +487,8 @@ __fi void _cpuEventTest_Shared()
 	}
 
 	_cpuTestTIMR();
+	if (evt_delivered)
+		g_eeEvtPc[1] = cpuRegs.pc;
 
 	// ---- Interrupts -------------
 	// These are basically just DMAC-related events, which also piggy-back the same bits as
@@ -498,11 +509,16 @@ __fi void _cpuEventTest_Shared()
 			_cpuTestInterrupts();
 	}
 
+	if (evt_delivered)
+		g_eeEvtPc[2] = cpuRegs.pc;
+
 	// ---- VU Sync -------------
 	// We're in a EventTest.  All dynarec registers are flushed
 	// so there is no need to freeze registers here.
 	CpuVU0->ExecuteBlock();
 	CpuVU1->ExecuteBlock();
+	if (evt_delivered)
+		g_eeEvtPc[3] = cpuRegs.pc;
 
 	// ---- Schedule Next Event Test --------------
 	const float mutiplier = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
@@ -532,6 +548,8 @@ __fi void _cpuEventTest_Shared()
 
 	// Apply vsync and other counter nextCycles
 	cpuSetNextEvent(nextStartCounter, nextDeltaCounter);
+	if (evt_delivered)
+		g_eeEvtPc[4] = cpuRegs.pc;
 
 	eeEventTestIsActive = false;
 }
