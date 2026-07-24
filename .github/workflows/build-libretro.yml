@@ -26,18 +26,10 @@ jobs:
             # Portable x86-64 build (SSE4.1 baseline) instead of -march=native,
             # matching the recalbox recipe — the artifact must run on any x86-64.
             simd: -DDISABLE_ADVANCE_SIMD=ON
-            compiler: "" # x86 has no preserve_most requirement; default gcc is fine
           - name: linux-arm64
             arch: arm64
             runner: ubuntu-24.04-arm # native arm64 runner (no cross-compile)
             simd: ""
-            # The arm64 EE JIT calls the vtlb dispatchers under the
-            # preserve_most contract (x9-x15 spared) and skips pin
-            # spill/reload around them. GCC ignores the attribute with a
-            # warning, which would silently corrupt the EE pin registers at
-            # every MMIO slow path — vtlb.h #errors out rather than build
-            # that. clang is a hard requirement here, not a preference.
-            compiler: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++"
 
     steps:
       - name: Checkout
@@ -47,7 +39,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang cmake ninja-build git pkg-config ca-certificates curl \
+            build-essential cmake ninja-build git pkg-config ca-certificates curl \
             ccache patchelf \
             libpng-dev libjpeg-dev zlib1g-dev libzstd-dev libwebp-dev \
             libfreetype-dev libfontconfig-dev libcurl4-openssl-dev libpcap-dev \
@@ -91,7 +83,6 @@ jobs:
             -DX11_API=OFF \
             -DWAYLAND_API=OFF \
             -DUSE_BACKTRACE=OFF \
-            ${{ matrix.compiler }} \
             ${{ matrix.simd }}
 
       - name: Build

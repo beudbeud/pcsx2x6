@@ -91,21 +91,25 @@ extern bool vtlb_IsFaultingPC(u32 guest_pc);
 // (a prologue/epilogue x9-x15 save) — MMIO-dispatch-only, never on the
 // direct-RAM fast path. Return/argument registers are unaffected, so
 // C++ callers (interpreter memory ops) behave identically.
+//
+// This is a hard contract, not an optimization: emitted code that calls a
+// dispatcher which does NOT preserve x9-x15 corrupts the EE pins at every MMIO
+// slow path. Only clang implements the attribute (GCC parses it, warns, and
+// ignores it; MSVC has no equivalent), so on every other compiler the JIT must
+// route its calls through the asm shims in arm64/RecVtlbPreserveMost.cpp, which
+// reproduce the same guarantee. VTLB_PM_* below picks the right target; the
+// emitter must use those and never take the dispatcher's address directly.
 #ifdef ARCH_ARM64
 #if defined(__has_attribute) && __has_attribute(preserve_most)
 #define VTLB_PRESERVE_MOST __attribute__((preserve_most))
+#define VTLB_HAS_PRESERVE_MOST 1
 #else
-// Hard requirement, not an optimization: the arm64 recompiler emits calls to
-// these dispatchers assuming the preserve_most contract (x9-x15 spared) and
-// skips pin spill/reload around them (recVTLB-arm64.cpp, RecStubs.cpp). A
-// compiler that drops the attribute (GCC warns and ignores unknown
-// attributes; MSVC has no equivalent) would build a binary whose emitted
-// code silently corrupts the EE pin registers at every MMIO slow path.
-// Build arm64 targets with clang until a no-preserve_most emitter fallback exists.
-#error "ARCH_ARM64 requires a compiler with __attribute__((preserve_most)) - build with clang"
+#define VTLB_PRESERVE_MOST
+#define VTLB_HAS_PRESERVE_MOST 0
 #endif
 #else
 #define VTLB_PRESERVE_MOST
+#define VTLB_HAS_PRESERVE_MOST 1
 #endif
 
 template< typename DataType >
@@ -115,6 +119,44 @@ extern RETURNS_R128 VTLB_PRESERVE_MOST vtlb_memRead128(u32 mem);
 template< typename DataType >
 extern void VTLB_PRESERVE_MOST vtlb_memWrite(u32 mem, DataType value);
 extern void TAKES_R128 VTLB_PRESERVE_MOST vtlb_memWrite128(u32 mem, r128 value);
+
+// Addresses the arm64 recompiler emits calls to. Identical ABI in both cases:
+// arguments/return in the usual registers, x9-x15 preserved across the call.
+#if !VTLB_HAS_PRESERVE_MOST
+extern "C" {
+void vtlb_pm_memRead8();
+void vtlb_pm_memRead16();
+void vtlb_pm_memRead32();
+void vtlb_pm_memRead64();
+void vtlb_pm_memRead128();
+void vtlb_pm_memWrite8();
+void vtlb_pm_memWrite16();
+void vtlb_pm_memWrite32();
+void vtlb_pm_memWrite64();
+void vtlb_pm_memWrite128();
+}
+#define VTLB_PM_READ8    ((void*)&vtlb_pm_memRead8)
+#define VTLB_PM_READ16   ((void*)&vtlb_pm_memRead16)
+#define VTLB_PM_READ32   ((void*)&vtlb_pm_memRead32)
+#define VTLB_PM_READ64   ((void*)&vtlb_pm_memRead64)
+#define VTLB_PM_READ128  ((void*)&vtlb_pm_memRead128)
+#define VTLB_PM_WRITE8   ((void*)&vtlb_pm_memWrite8)
+#define VTLB_PM_WRITE16  ((void*)&vtlb_pm_memWrite16)
+#define VTLB_PM_WRITE32  ((void*)&vtlb_pm_memWrite32)
+#define VTLB_PM_WRITE64  ((void*)&vtlb_pm_memWrite64)
+#define VTLB_PM_WRITE128 ((void*)&vtlb_pm_memWrite128)
+#else
+#define VTLB_PM_READ8    ((void*)vtlb_memRead<mem8_t>)
+#define VTLB_PM_READ16   ((void*)vtlb_memRead<mem16_t>)
+#define VTLB_PM_READ32   ((void*)vtlb_memRead<mem32_t>)
+#define VTLB_PM_READ64   ((void*)vtlb_memRead<mem64_t>)
+#define VTLB_PM_READ128  ((void*)vtlb_memRead128)
+#define VTLB_PM_WRITE8   ((void*)vtlb_memWrite<mem8_t>)
+#define VTLB_PM_WRITE16  ((void*)vtlb_memWrite<mem16_t>)
+#define VTLB_PM_WRITE32  ((void*)vtlb_memWrite<mem32_t>)
+#define VTLB_PM_WRITE64  ((void*)vtlb_memWrite<mem64_t>)
+#define VTLB_PM_WRITE128 ((void*)vtlb_memWrite128)
+#endif
 
 // "Safe" variants of vtlb, designed for external tools.
 // These routines only access the various RAM, and will not call handlers
