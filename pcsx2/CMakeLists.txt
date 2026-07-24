@@ -137,7 +137,11 @@ set(pcsx2Sources
 	VU0microInterp.cpp
 	VU1micro.cpp
 	VU1microInterp.cpp
+	VU1Trace.cpp
 	VUflags.cpp
+	vu_capture.cpp
+	microVU_Divtrace.cpp
+	ee_divtrace.cpp
 	VUmicroMem.cpp
 	VUops.cpp
 )
@@ -199,10 +203,14 @@ set(pcsx2Headers
 	SupportURLs.h
 	StateWrapper.h
 	Vif_Dma.h
+	vu_capture.h
+	microVU_Divtrace.h
+	ee_divtrace.h
 	Vif.h
 	Vif_Unpack.h
 	VMManager.h
 	vtlb.h
+	VU1Trace.h
 	VUflags.h
 	VUmicro.h
 	VUops.h)
@@ -1084,40 +1092,46 @@ set(pcsx2x86Headers
 # ARM64
 set(pcsx2arm64Sources
 	arm64/AsmHelpers.cpp
+	arm64/iCore-arm64.cpp
+	arm64/iR3000A-arm64.cpp
+	arm64/iR3000Atables-arm64.cpp
+	arm64/iR5900-arm64.cpp
+	arm64/iR5900Templates-arm64.cpp
+	x86/BaseblockEx.cpp  # arch-neutral baseblock manager, shared with the x86 build
+	arm64/iR5900Arit-arm64.cpp
+	arm64/iR5900AritImm-arm64.cpp
+	arm64/iR5900Branch-arm64.cpp
+	arm64/iR5900Jump-arm64.cpp
+	arm64/iR5900LoadStore-arm64.cpp
+	arm64/recVTLB-arm64.cpp
+	arm64/iR5900Move-arm64.cpp
+	arm64/iR5900MultDiv-arm64.cpp
+	arm64/iR5900Shift-arm64.cpp
+	arm64/iR5900Misc-arm64.cpp
+	arm64/iCOP2-arm64.cpp
+	arm64/iCOP0-arm64.cpp
+	arm64/iFPU-arm64.cpp
+	arm64/iFPUd-arm64.cpp
+	arm64/iMMI-arm64.cpp
 	arm64/Vif_Dynarec.cpp
 	arm64/Vif_UnpackNEON.cpp
 	arm64/RecStubs.cpp
-	arm64/aR3000A.cpp
-	arm64/aR5900.cpp
-	arm64/aR5900Analysis.cpp
-	arm64/aR5900LoadStore.cpp
-	arm64/aR5900Arith.cpp
-	arm64/aR5900MultDiv.cpp
-	arm64/aR5900Branch.cpp
-	arm64/aR5900FPU.cpp
-	arm64/aR5900MMI.cpp
-	arm64/aVU.cpp
+	arm64/microVU-arm64.cpp
+	x86/iR5900Analysis.cpp  # arch-neutral EE instruction-liveness analysis, shared with the x86 build
 	)
 
 set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
-	arm64/aR3000A.h
-	arm64/aR5900.h
-	arm64/aR5900Analysis.h
-	arm64/aVU.h
-	arm64/aVU_IR.h
-	arm64/aVU_Misc.h
-	arm64/aVU_Analyze.inl
-	arm64/aVU_Alloc.inl
-	arm64/aVU_Clamp.inl
-	arm64/aVU_Misc.inl
-	arm64/aVU_Upper.inl
-	arm64/aVU_Lower.inl
-	arm64/aVU_Tables.inl
-	arm64/aVU_Flags.inl
-	arm64/aVU_Branch.inl
-	arm64/aVU_Compile.inl
-	arm64/aVU_Macro.inl
+	arm64/iCore-arm64.h
+	arm64/iR3000A-arm64.h
+	arm64/iR5900-arm64.h
+	arm64/iR5900Analysis.h
+	arm64/microVU-arm64.h
+	arm64/microVU_Persist-arm64.h
+	arm64/microVU_Persist-arm64.inl
+	arm64/microVU_ProgCache-arm64.h
+	arm64/microVU_ProgCache-arm64.inl
+	arm64/microVU_Misc-arm64.h
 )
 
 # These ones benefit a lot from LTO

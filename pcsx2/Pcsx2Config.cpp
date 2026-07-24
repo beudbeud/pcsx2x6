@@ -454,6 +454,8 @@ Pcsx2Config::RecompilerOptions::RecompilerOptions()
 	EnableVU1 = true;
 	EnableFastmem = true;
 	PauseOnTLBMiss = false;
+	EnableVUProgramCache = false; // default off; opt-in until the on-disk cache is validated on the target hardware
+	fpuGuardedAddSub = true; // PS2-accurate add/sub guard-bit emulation; opt-out for perf on titles verified not to need it.
 
 	// vu and fpu clamping default to standard overflow.
 	vu0Overflow = true;
@@ -545,6 +547,8 @@ void Pcsx2Config::RecompilerOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(fpuOverflow);
 	SettingsWrapBitBool(fpuExtraOverflow);
 	SettingsWrapBitBool(fpuFullMode);
+	SettingsWrapBitBool(fpuGuardedAddSub);
+	SettingsWrapBitBool(EnableVUProgramCache);
 }
 
 u32 Pcsx2Config::RecompilerOptions::GetEEClampMode() const
