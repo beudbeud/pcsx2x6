@@ -6,6 +6,7 @@
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
+#include "PerformanceMetrics.h"
 
 #include "common/Console.h"
 #include "common/BitUtils.h"
@@ -668,6 +669,8 @@ void GSState::BackThreadLoop()
 	// explicit pinning policy for this thread.
 	Threading::ThreadHandle::GetForCallingThread().SetAffinity(0);
 
+	PerformanceMetrics::SetGSBackThread(Threading::ThreadHandle::GetForCallingThread());
+
 	for (;;)
 	{
 		m_chan->sema.WaitForWorkWithSpin();
@@ -681,6 +684,8 @@ void GSState::BackThreadLoop()
 			m_chan->ring.Pop();
 		}
 	}
+
+	PerformanceMetrics::SetGSBackThread(Threading::ThreadHandle());
 }
 
 void GSState::ExecRecordSlot(const GSBackQueue::RecordSlot& slot)

@@ -2132,10 +2132,10 @@ void Host::OnPerformanceMetricsUpdated()
 	static int s_perf_log_divider = 0;
 	if ((++s_perf_log_divider % 10) != 0)
 		return;
-	INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% VU {:.0f}% | GPU {:.0f}%",
+	INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}%",
 		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
-		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetVUThreadUsage(),
-		PerformanceMetrics::GetGPUUsage());
+		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
+		PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage());
 }
 void Host::OnSaveStateLoading(const std::string_view filename)
 {

@@ -65,6 +65,7 @@ struct GSSWThreadStats
 	double time = 0.0;
 };
 std::vector<GSSWThreadStats> s_gs_sw_threads;
+static GSSWThreadStats s_gs_back_thread;
 
 static float s_average_gpu_time = 0.0f;
 static float s_accumulated_gpu_time = 0.0f;
@@ -124,6 +125,8 @@ void PerformanceMetrics::Reset()
 
 	for (GSSWThreadStats& stat : s_gs_sw_threads)
 		stat.last_cpu_time = stat.handle.GetCPUTime();
+
+	s_gs_back_thread.last_cpu_time = s_gs_back_thread.handle ? s_gs_back_thread.handle.GetCPUTime() : 0;
 }
 
 void PerformanceMetrics::Update(bool gs_register_write, bool fb_blit, bool is_skipping_present)
@@ -221,6 +224,15 @@ void PerformanceMetrics::Update(bool gs_register_write, bool fb_blit, bool is_sk
 		thread.time = static_cast<double>(delta) * time_divider;
 	}
 
+	if (s_gs_back_thread.handle)
+	{
+		const u64 time = s_gs_back_thread.handle.GetCPUTime();
+		const u64 delta = time - s_gs_back_thread.last_cpu_time;
+		s_gs_back_thread.last_cpu_time = time;
+		s_gs_back_thread.usage = static_cast<double>(delta) * pct_divider;
+		s_gs_back_thread.time = static_cast<double>(delta) * time_divider;
+	}
+
 	s_frames_since_last_update = 0;
 	s_unskipped_frames_since_last_update = 0;
 	s_presents_since_last_update = 0;
@@ -250,6 +262,24 @@ void PerformanceMetrics::SetGSSWThread(u32 index, Threading::ThreadHandle thread
 {
 	s_gs_sw_threads[index].last_cpu_time = thread ? thread.GetCPUTime() : 0;
 	s_gs_sw_threads[index].handle = std::move(thread);
+}
+
+void PerformanceMetrics::SetGSBackThread(Threading::ThreadHandle thread)
+{
+	s_gs_back_thread.last_cpu_time = thread ? thread.GetCPUTime() : 0;
+	s_gs_back_thread.usage = 0.0;
+	s_gs_back_thread.time = 0.0;
+	s_gs_back_thread.handle = std::move(thread);
+}
+
+double PerformanceMetrics::GetGSBackThreadUsage()
+{
+	return s_gs_back_thread.usage;
+}
+
+double PerformanceMetrics::GetGSBackThreadAverageTime()
+{
+	return s_gs_back_thread.time;
 }
 
 u64 PerformanceMetrics::GetFrameNumber()
