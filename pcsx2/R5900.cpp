@@ -404,7 +404,21 @@ __fi void _cpuEventTest_Shared()
 
 	uint mask = intcInterrupt() | dmacInterrupt();
 	if (cpuIntsEnabled(mask))
+	{
 		cpuException(mask, cpuRegs.branch);
+		// yaps2 bring-up diagnostic: the 2026-07-24 wedge shows Status.EXL=1
+		// with the guest resuming its wait loop instead of the vector, and the
+		// INTC never acked — i.e. delivery happened but the handler never ran.
+		// Trace the first deliveries so the next wedged log shows what pc/EPC
+		// the exception actually produced and how many times it fired.
+		static int s_ee_int_trace = 0;
+		if (s_ee_int_trace < 30)
+		{
+			s_ee_int_trace++;
+			Console.WriteLn("EE-int #%d: mask=%x delivered -> pc=%08x EPC=%08x Status=%08x",
+				s_ee_int_trace, mask, cpuRegs.pc, cpuRegs.CP0.n.EPC, cpuRegs.CP0.n.Status.val);
+		}
+	}
 
 	// ---- IOP -------------
 	// * It's important to run a iopEventTest before calling ExecuteBlock. This
