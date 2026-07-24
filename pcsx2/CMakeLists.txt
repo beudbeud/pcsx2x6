@@ -1104,6 +1104,7 @@ set(pcsx2arm64Sources
 	arm64/iR5900Jump-arm64.cpp
 	arm64/iR5900LoadStore-arm64.cpp
 	arm64/recVTLB-arm64.cpp
+	arm64/RecVtlbPreserveMost.cpp
 	arm64/iR5900Move-arm64.cpp
 	arm64/iR5900MultDiv-arm64.cpp
 	arm64/iR5900Shift-arm64.cpp

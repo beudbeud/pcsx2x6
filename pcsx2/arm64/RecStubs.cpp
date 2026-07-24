@@ -143,11 +143,11 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc, 
 		armFlushEEPinsBeforePreserveMostCall(); // emits nothing for the current table
 		if (is_load)
 		{
-			armEmitCall((void*)vtlb_memRead128);
+			armEmitCall(VTLB_PM_READ128);
 		}
 		else
 		{
-			armEmitCall((void*)vtlb_memWrite128);
+			armEmitCall(VTLB_PM_WRITE128);
 		}
 		armReloadCycleDelta();
 		// vtlb_memRead/Write128 are preserve_most: x9-x15 covers every
@@ -213,10 +213,10 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc, 
 		armFlushEEPinsBeforePreserveMostCall(); // emits nothing for the current table
 		switch (size_in_bits)
 		{
-			case 8:  armEmitCall((void*)vtlb_memRead<mem8_t>);  break;
-			case 16: armEmitCall((void*)vtlb_memRead<mem16_t>); break;
-			case 32: armEmitCall((void*)vtlb_memRead<mem32_t>); break;
-			case 64: armEmitCall((void*)vtlb_memRead<mem64_t>); break;
+			case 8:  armEmitCall(VTLB_PM_READ8);  break;
+			case 16: armEmitCall(VTLB_PM_READ16); break;
+			case 32: armEmitCall(VTLB_PM_READ32); break;
+			case 64: armEmitCall(VTLB_PM_READ64); break;
 			default: break;
 		}
 		armReloadCycleDelta();
@@ -310,10 +310,10 @@ void vtlb_DynBackpatchLoadStore(uptr code_address, u32 code_size, u32 guest_pc, 
 		armFlushEEPinsBeforePreserveMostCall(); // emits nothing for the current table
 		switch (size_in_bits)
 		{
-			case 8:  armEmitCall((void*)vtlb_memWrite<mem8_t>);  break;
-			case 16: armEmitCall((void*)vtlb_memWrite<mem16_t>); break;
-			case 32: armEmitCall((void*)vtlb_memWrite<mem32_t>); break;
-			case 64: armEmitCall((void*)vtlb_memWrite<mem64_t>); break;
+			case 8:  armEmitCall(VTLB_PM_WRITE8);  break;
+			case 16: armEmitCall(VTLB_PM_WRITE16); break;
+			case 32: armEmitCall(VTLB_PM_WRITE32); break;
+			case 64: armEmitCall(VTLB_PM_WRITE64); break;
 			default: pxFailRel("Unsupported store size in backpatch"); break;
 		}
 		armReloadCycleDelta();
