@@ -508,6 +508,14 @@ void LibretroHost::RegisterCoreOptions()
 			{{"software", "Software"}, {"vulkan", "Vulkan (Hardware)"}, {"opengl", "OpenGL (Hardware)"},
 				{nullptr, nullptr}},
 			"opengl"},
+		{"pcsx2_gs_back_thread", "GS Back Thread (Experimental)", nullptr,
+			"GV7 front/back split of the GS thread: GIF parsing stays on the GS thread while draw "
+			"building/submission moves to a second worker thread. Pipelined is the performance mode; "
+			"Inline Records and Lockstep are validation rungs. Needs a renderer restart to apply.",
+			nullptr, "performance",
+			{{"off", "Off"}, {"inline_records", "Inline Records (Validate)"},
+				{"lockstep", "Lockstep (Validate)"}, {"pipelined", "Pipelined (Fast)"}, {nullptr, nullptr}},
+			"off"},
 		{"pcsx2_upscale_multiplier", "Internal Resolution", nullptr,
 			"Internal rendering resolution multiplier. Also scales the output framebuffer.",
 			nullptr, "graphics",
@@ -731,6 +739,19 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		std::strcmp(get_option("pcsx2_disable_framebuffer_fetch", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("SPU2/Output", "LightweightMode",
 		std::strcmp(get_option("pcsx2_lightweight_audio", "disabled"), "enabled") == 0);
+
+	{
+		static constexpr const char* kBackThreadModes[] = {"off", "inline_records", "lockstep", "pipelined"};
+		const char* back_thread = get_option("pcsx2_gs_back_thread", "off");
+		for (size_t i = 0; i < std::size(kBackThreadModes); i++)
+		{
+			if (std::strcmp(back_thread, kBackThreadModes[i]) == 0)
+			{
+				s_settings_interface.SetIntValue("EmuCore/GS", "GSBackThreadMode", static_cast<int>(i));
+				break;
+			}
+		}
+	}
 
 	const bool widescreen = std::strcmp(get_option("pcsx2_widescreen_patches", "disabled"), "enabled") == 0;
 	s_settings_interface.SetBoolValue("EmuCore", "EnableWideScreenPatches", widescreen);
