@@ -551,6 +551,10 @@ void LibretroHost::RegisterCoreOptions()
 			"Helps GPU-bound scenes but causes minor texture shimmer. Hardware (OpenGL) renderer only.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Accurate)"}, {"enabled", "Enabled (Faster)"}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_lightweight_audio", "Lightweight Audio (Skip Reverb)", nullptr,
+			"Skips SPU2 reverb processing to save EE-thread CPU. Removes all echo and spatial "
+			"reverb (caves, halls and ambience sound flat).", nullptr, "performance",
+			{{"disabled", nullptr}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
 		{"pcsx2_aspect_ratio", "Aspect Ratio", nullptr,
 			"Automatic reports 16:9 when widescreen patches are enabled, 4:3 otherwise.", nullptr, "graphics",
 			{{"auto", "Automatic"}, {"4:3", nullptr}, {"16:9", nullptr}, {nullptr, nullptr}}, "auto"},
@@ -725,6 +729,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		std::strcmp(get_option("pcsx2_reduce_shader_precision", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/GS", "DisableFramebufferFetch",
 		std::strcmp(get_option("pcsx2_disable_framebuffer_fetch", "disabled"), "enabled") == 0);
+	s_settings_interface.SetBoolValue("SPU2/Output", "LightweightMode",
+		std::strcmp(get_option("pcsx2_lightweight_audio", "disabled"), "enabled") == 0);
 
 	const bool widescreen = std::strcmp(get_option("pcsx2_widescreen_patches", "disabled"), "enabled") == 0;
 	s_settings_interface.SetBoolValue("EmuCore", "EnableWideScreenPatches", widescreen);
