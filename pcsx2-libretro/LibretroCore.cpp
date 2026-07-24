@@ -2095,12 +2095,6 @@ void Host::OnGameChanged(const std::string& title, const std::string& elf_overri
 	INFO_LOG("Game changed: {} ({})", title, disc_serial);
 }
 
-// Defined in pcsx2/arm64/aR5900.cpp (ARM64 build only) — formats the execution-weighted
-// interpreter-fallback histogram for the interval into the buffer and resets it.
-#ifdef ARCH_ARM64
-void recPerfDumpExecFallbacks(char* out, size_t n);
-#endif
-
 void Host::OnPerformanceMetricsUpdated()
 {
 	// Per-thread load report every ~5s (metrics update every 0.5s) — bottleneck
@@ -2113,11 +2107,6 @@ void Host::OnPerformanceMetricsUpdated()
 		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetVUThreadUsage(),
 		PerformanceMetrics::GetGPUUsage());
-#ifdef ARCH_ARM64
-	char fb[512];
-	recPerfDumpExecFallbacks(fb, sizeof(fb));
-	INFO_LOG("{}", fb);
-#endif
 }
 
 void Host::OnSaveStateLoading(const std::string_view filename)
