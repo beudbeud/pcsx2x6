@@ -139,7 +139,16 @@ __fi void PSX_INT( IopEventId n, s32 ecycle )
 
 	psxSetNextBranchDelta(ecycle);
 	const float mutiplier = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
-	const s32 iopDelta = (psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier;
+	// Cast the u32 cycle delta to s32 *before* the float multiply. When `cycle`
+	// briefly leads `iopNextEventCycle`, the u32 subtraction underflows to ~4e9;
+	// multiplied by the clock ratio the float result is out of int range. The
+	// cast to int is host-defined: x86 CVTTSS2SI returns INT_MIN, ARM64 FCVTZS
+	// saturates to INT_MAX — which schedules the next IOP slice ~2^31 EE cycles
+	// away and starves the IOP (EE then spins forever on SIF/pad responses).
+	// Casting first lets the multiply happen in signed arithmetic where the
+	// small-negative case rounds correctly on both hosts.
+	const s32 iopCyclesUntilEvent = static_cast<s32>(psxRegs.iopNextEventCycle - psxRegs.cycle);
+	const s32 iopDelta = static_cast<s32>(iopCyclesUntilEvent * mutiplier);
 
 	if (psxRegs.iopCycleEE < iopDelta)
 	{
