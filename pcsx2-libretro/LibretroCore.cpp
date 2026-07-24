@@ -72,7 +72,11 @@
 #include "pcsx2/Input/InputManager.h"
 #include "pcsx2/DEV9/ACJV.h"
 #include "pcsx2/MTGS.h"
+#include "pcsx2/Memory.h" // psHu32 for the stall-hunt heartbeat
 #include "pcsx2/MemoryTypes.h"
+#include "pcsx2/R5900.h" // cpuRegs for the stall-hunt heartbeat
+#include "pcsx2/R3000A.h" // psxRegs for the stall-hunt heartbeat
+#include "pcsx2/Hw.h" // INTC_STAT/INTC_MASK for the stall-hunt heartbeat
 #include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SaveState.h"
@@ -2107,6 +2111,29 @@ void Host::OnPerformanceMetricsUpdated()
 		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetVUThreadUsage(),
 		PerformanceMetrics::GetGPUUsage());
+
+	// Stall-hunt heartbeat (yaps2 bring-up): sample EE/IOP PCs and cycle
+	// progress so a wedged run tells us WHERE the guest spins instead of just
+	// that it spins. Cross-thread racy reads of live emu state — fine for a
+	// diagnostic snapshot, do not act on individual values.
+	//   EE pc stuck in a narrow range          -> guest poll loop at that PC
+	//   IOP dcyc == 0 while EE dcyc advances   -> IOP starved of its slice
+	//   istat & imask != 0 across many beats   -> interrupt raised, never
+	//                                             delivered (rec event-test)
+	{
+		static u64 s_last_ee_cycle = 0;
+		static u64 s_last_iop_cycle = 0;
+		const u64 ee_cycle = cpuRegs.cycle;
+		const u64 iop_cycle = psxRegs.cycle;
+		INFO_LOG("hb: EE pc={:08x} dcyc={} | IOP pc={:08x} dcyc={} cycleEE={} | "
+				 "istat={:04x} imask={:04x} eeSt={:08x} psxInt={:08x}",
+			cpuRegs.pc, ee_cycle - s_last_ee_cycle,
+			psxRegs.pc, iop_cycle - s_last_iop_cycle, psxRegs.iopCycleEE,
+			psHu32(INTC_STAT), psHu32(INTC_MASK),
+			cpuRegs.CP0.n.Status.val, psxRegs.interrupt);
+		s_last_ee_cycle = ee_cycle;
+		s_last_iop_cycle = iop_cycle;
+	}
 }
 
 void Host::OnSaveStateLoading(const std::string_view filename)
