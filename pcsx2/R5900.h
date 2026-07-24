@@ -321,6 +321,10 @@ extern u32 g_eeRingCaptureArmed, g_eeIntLastRingIdx, g_eeRingSnapshotIdx;
 extern u32 g_eeRingSnapshot[32];
 extern u32 g_eeEretCount;
 extern u32 g_eeEvtPc[5];
+extern u32 g_eePcWriteRing[8][3];
+extern u32 g_eePcWriteIdx;
+extern u32 g_eeVecDispatchCount;
+void eePcWriteTrace(u32 id, u32 val);
 
 void intUpdateCPUCycles();
 void intEventTest();

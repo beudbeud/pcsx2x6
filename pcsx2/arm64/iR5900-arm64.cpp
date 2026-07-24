@@ -446,6 +446,20 @@ static const void* _DynGen_DispatcherReg()
 	armMoveAddressToReg(RSCRATCHADDR, g_eeDispatchRing);
 	armAsm->Str(a64::w0, a64::MemOperand(RSCRATCHADDR, RXVIXLSCRATCH, a64::LSL, 2));
 
+	// Second probe: count dispatches whose pc is exactly the interrupt vector.
+	// Settles "vector never dispatched" vs "dispatched but ring entry lost".
+	{
+		a64::Label not_vector;
+		armAsm->Mov(RWVIXLSCRATCH, 0x80000200);
+		armAsm->Cmp(a64::w0, RWVIXLSCRATCH);
+		armAsm->B(&not_vector, a64::ne);
+		armMoveAddressToReg(RSCRATCHADDR, &g_eeVecDispatchCount);
+		armAsm->Ldr(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
+		armAsm->Add(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
+		armAsm->Str(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
+		armAsm->Bind(&not_vector);
+	}
+
 	// Two-level LUT lookup:
 	// base = recLUT[pc >> 16]
 	// block = *(BASEBLOCK*)(base + pc * sizeof(BASEBLOCK)/4)

@@ -72,6 +72,23 @@ u32 g_eeEretCount = 0;
 // interrupt scan, [3] after VU sync, [4] at exit. Identifies which section
 // overwrites the exception-vector pc after a delivery.
 u32 g_eeEvtPc[5] = {};
+// Ring of the last 8 C++ writes to cpuRegs.pc: writer id, value written, and
+// the delivery count at write time. Writer ids: 1=cpuException(vector),
+// 2=ERET, 3=_doBranch_shared, 4=cpuReset, 5=COP0 debug. If the last entries
+// show cpuException(80000200) followed by nothing else while the dispatcher
+// reads 196ec0, the overwrite is emitted code; if a writer follows, named.
+u32 g_eePcWriteRing[8][3] = {};
+u32 g_eePcWriteIdx = 0;
+void eePcWriteTrace(u32 id, u32 val)
+{
+	const u32 i = (g_eePcWriteIdx++) & 7;
+	g_eePcWriteRing[i][0] = id;
+	g_eePcWriteRing[i][1] = val;
+	g_eePcWriteRing[i][2] = g_eeIntDeliveryCount;
+}
+// Bumped by emitted code in DispatcherReg whenever the dispatched pc is
+// exactly 0x80000200 — did the interrupt vector ever dispatch?
+u32 g_eeVecDispatchCount = 0;
 EE_intProcessStatus eeRunInterruptScan = INT_NOT_RUNNING;
 
 u32 g_eeloadMain = 0, g_eeloadExec = 0, g_osdsys_str = 0;
@@ -189,6 +206,7 @@ __ri void cpuException(u32 code, u32 bd)
 		cpuRegs.pc = 0x80000000 + offset;
 	else
 		cpuRegs.pc = 0xBFC00200 + offset;
+	eePcWriteTrace(1, cpuRegs.pc);
 
 	cpuUpdateOperationMode();
 }

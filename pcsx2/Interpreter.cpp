@@ -260,6 +260,7 @@ static __fi void _doBranch_shared(u32 tar)
 		}
 		intLastBranchTo = tar;
 		cpuRegs.pc = tar;
+		eePcWriteTrace(3, tar);
 		cpuRegs.branch = 0;
 	}
 }
