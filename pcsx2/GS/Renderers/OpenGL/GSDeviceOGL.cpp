@@ -5,6 +5,7 @@
 #include "GS/Renderers/OpenGL/GSDeviceOGL.h"
 #include "GS/Renderers/OpenGL/GLState.h"
 #include "GS/GSState.h"
+#include "GS/Renderers/Common/GSRenderer.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
@@ -3531,7 +3532,7 @@ void GSDeviceOGL::DebugMessageCallback(GLenum gl_source, GLenum gl_type, GLuint 
 	}
 
 	if (gl_severity != GL_DEBUG_SEVERITY_NOTIFICATION)
-		Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), GSState::s_n, severity.c_str(), message.c_str());
+		Console.Error("T:%s\tID:%d\tS:%s\t=> %s", type.c_str(), g_gs_renderer ? g_gs_renderer->s_n : 0, severity.c_str(), message.c_str());
 }
 
 #ifdef ENABLE_OGL_DEBUG
