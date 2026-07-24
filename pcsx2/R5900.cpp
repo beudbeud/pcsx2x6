@@ -51,6 +51,12 @@ u32 g_eeIntDeliveryCount = 0;
 u32 g_eeIntLastMask = 0;
 u32 g_eeIntLastEPC = 0;
 u32 g_eeIntLastPC = 0;
+// Ring of the last 32 guest PCs that went through the EE dispatcher (written
+// by emitted code in _DynGen_DispatcherReg on arm64; idle on x86). Self-loop
+// blocks re-enter via their internal backedge without dispatching, so this
+// holds the interesting block-to-block trail, not millions of loop iterations.
+u32 g_eeDispatchRing[32] = {};
+u32 g_eeDispatchRingIdx = 0;
 EE_intProcessStatus eeRunInterruptScan = INT_NOT_RUNNING;
 
 u32 g_eeloadMain = 0, g_eeloadExec = 0, g_osdsys_str = 0;

@@ -2148,6 +2148,23 @@ void Host::OnPerformanceMetricsUpdated()
 			psHu32(0x9000) /*D1_CHCR*/, psHu32(0xA000) /*D2_CHCR*/,
 			psHu32(0xE010) /*DMAC_STAT*/, psHu32(0xE000) /*DMAC_CTRL*/,
 			GSCSRr);
+		// Last 16 guest PCs the EE dispatcher routed (newest last). Self-loops
+		// re-enter via their internal backedge without dispatching, so this is
+		// the block-to-block trail — e.g. the exception vector and the kernel
+		// handler chain right after an interrupt delivery.
+		{
+			const u32 idx = g_eeDispatchRingIdx;
+			INFO_LOG("hb4: ring {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
+					 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+				g_eeDispatchRing[(idx - 16) & 31], g_eeDispatchRing[(idx - 15) & 31],
+				g_eeDispatchRing[(idx - 14) & 31], g_eeDispatchRing[(idx - 13) & 31],
+				g_eeDispatchRing[(idx - 12) & 31], g_eeDispatchRing[(idx - 11) & 31],
+				g_eeDispatchRing[(idx - 10) & 31], g_eeDispatchRing[(idx - 9) & 31],
+				g_eeDispatchRing[(idx - 8) & 31], g_eeDispatchRing[(idx - 7) & 31],
+				g_eeDispatchRing[(idx - 6) & 31], g_eeDispatchRing[(idx - 5) & 31],
+				g_eeDispatchRing[(idx - 4) & 31], g_eeDispatchRing[(idx - 3) & 31],
+				g_eeDispatchRing[(idx - 2) & 31], g_eeDispatchRing[(idx - 1) & 31]);
+		}
 		if (cpuRegs.pc < 0x02000000) // main-RAM guest code: dump the poll loop
 		{
 			const u32 base = (cpuRegs.pc - 0x10) & ~0xFu;
