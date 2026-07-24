@@ -314,7 +314,6 @@ static fpuRegisters& fpuRegs = _cpuRegistersPack.fpuRegs;
 extern bool eeEventTestIsActive;
 
 void intUpdateCPUCycles();
-void intExecuteOneInst();
 void intEventTest();
 void intSetBranch();
 
