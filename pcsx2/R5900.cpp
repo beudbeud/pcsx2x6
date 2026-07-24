@@ -469,6 +469,9 @@ __fi void _cpuEventTest_Shared()
 	uint mask = intcInterrupt() | dmacInterrupt();
 	if (cpuIntsEnabled(mask))
 	{
+		const u32 pre_pc = cpuRegs.pc;
+		const u32 pre_status = cpuRegs.CP0.n.Status.val;
+		const u32 pre_branch = (u32)cpuRegs.branch;
 		cpuException(mask, cpuRegs.branch);
 		evt_delivered = 1;
 		// yaps2 bring-up diagnostic (rolling, spam-free): DMAC/SIF interrupts
@@ -481,7 +484,11 @@ __fi void _cpuEventTest_Shared()
 		g_eeIntLastMask = mask;
 		g_eeIntLastEPC = cpuRegs.CP0.n.EPC;
 		g_eeIntLastPC = cpuRegs.pc;
+		// Delivery quad: header, pre-exception pc, pre-exception Status
+		// (low byte carries pre-branch in bits 24+), post-exception EPC.
 		eeRingPush(0xFFFF0001);
+		eeRingPush(pre_pc);
+		eeRingPush((pre_status & 0x00FFFFFF) | (pre_branch << 24));
 		eeRingPush(cpuRegs.CP0.n.EPC);
 		std::memcpy(g_eeRingPreSnapshot, g_eeDispatchRing, sizeof(g_eeRingPreSnapshot));
 		g_eeRingPreIdx = g_eeDispatchRingIdx;
