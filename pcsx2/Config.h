@@ -656,7 +656,15 @@ struct Pcsx2Config
 		bool
 			fpuOverflow : 1,
 			fpuExtraOverflow : 1,
-			fpuFullMode : 1;
+			fpuFullMode : 1,
+			// EE FPU add/sub guard-bit emulation (single-precision fast path). ON by
+			// default — the PS2-accurate behavior. Opt-OUT via INI for EE-FPU-heavy
+			// titles verified to render fine without it (each ADD.S/SUB.S then costs
+			// one op instead of the guard sequence). Independent of the clamp tiers:
+			// Full mode runs the DOUBLE path, which guards unconditionally regardless.
+			fpuGuardedAddSub : 1,
+			// Persisted microVU program cache (arm64 rec).
+			EnableVUProgramCache : 1;
 
 		bool
 			EnableEECache : 1;
@@ -1532,6 +1540,10 @@ namespace EmuFolders
 #define CHECK_CACHE (EmuConfig.Cpu.Recompiler.EnableEECache)
 #define CHECK_IOPREC (EmuConfig.Cpu.Recompiler.EnableIOP)
 #define CHECK_FASTMEM (EmuConfig.Cpu.Recompiler.EnableEE && EmuConfig.Cpu.Recompiler.EnableFastmem)
+// If enabled (default), add/sub emulate the PS2 FPU's missing mantissa guard bits
+// on the single-precision fast path. Disable only for EE-heavy titles confirmed
+// not to need it.
+#define CHECK_FPU_GUARDED (EmuConfig.Cpu.Recompiler.fpuGuardedAddSub)
 #define CHECK_EXTRAMEM (memGetExtraMemMode())
 
 //------------ SPECIAL GAME FIXES!!! ---------------
