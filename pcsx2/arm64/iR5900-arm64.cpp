@@ -378,17 +378,6 @@ const void* g_fpuGuardMaskStub = nullptr;
 
 static void recEventTest()
 {
-	// yaps2 bring-up diagnostic: once armed by an interrupt delivery, snapshot
-	// the dispatch ring after 16 more dispatches — the frozen copy then holds
-	// the 16 guest blocks that ran right after the LAST delivery. Cheap: one
-	// compare per event test, one memcpy per delivery.
-	if (g_eeRingCaptureArmed && (g_eeDispatchRingIdx - g_eeIntLastRingIdx) >= 40)
-	{
-		std::memcpy(g_eeRingSnapshot, g_eeDispatchRing, sizeof(g_eeRingSnapshot));
-		g_eeRingSnapshotIdx = g_eeIntLastRingIdx;
-		g_eeRingCaptureArmed = 0;
-	}
-
 	eeEventTestIsActive = true;
 	_cpuEventTest_Shared();
 	eeEventTestIsActive = false;
@@ -432,33 +421,6 @@ static const void* _DynGen_DispatcherReg()
 	u8* retval = armGetCurrentCodePointer();
 
 	armAsm->Ldr(a64::w0, armCpuRegMem(&cpuRegs.pc));
-
-	// yaps2 bring-up diagnostic: record every dispatched guest pc into
-	// g_eeDispatchRing (see R5900.cpp). Uses only x16/x17 — dead at this
-	// point, and the LUT code below re-materializes x17 anyway.
-	//   idx = g_eeDispatchRingIdx++; ring[idx & 31] = pc;
-	armMoveAddressToReg(RSCRATCHADDR, &g_eeDispatchRingIdx);
-	armAsm->Ldr(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
-	armAsm->Add(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
-	armAsm->Str(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
-	armAsm->Sub(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
-	armAsm->And(RWVIXLSCRATCH, RWVIXLSCRATCH, 63); // zero-extends into x16
-	armMoveAddressToReg(RSCRATCHADDR, g_eeDispatchRing);
-	armAsm->Str(a64::w0, a64::MemOperand(RSCRATCHADDR, RXVIXLSCRATCH, a64::LSL, 2));
-
-	// Second probe: count dispatches whose pc is exactly the interrupt vector.
-	// Settles "vector never dispatched" vs "dispatched but ring entry lost".
-	{
-		a64::Label not_vector;
-		armAsm->Mov(RWVIXLSCRATCH, 0x80000200);
-		armAsm->Cmp(a64::w0, RWVIXLSCRATCH);
-		armAsm->B(&not_vector, a64::ne);
-		armMoveAddressToReg(RSCRATCHADDR, &g_eeVecDispatchCount);
-		armAsm->Ldr(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
-		armAsm->Add(RWVIXLSCRATCH, RWVIXLSCRATCH, 1);
-		armAsm->Str(RWVIXLSCRATCH, a64::MemOperand(RSCRATCHADDR));
-		armAsm->Bind(&not_vector);
-	}
 
 	// Two-level LUT lookup:
 	// base = recLUT[pc >> 16]
@@ -3233,22 +3195,6 @@ static u32 eeSuperblockClampSplit(u32 startpc, u32 branch_i, u32 target)
 static void recRecompile(const u32 startpc)
 {
 	u32 i;
-
-	// yaps2 bring-up diagnostic: the 2026-07-24 wedge delivers an interrupt
-	// exception (EXL=1, pc=0x80000200) but the vector seemingly never runs.
-	// Log the first compile of each exception vector — if 0x80000200 never
-	// prints while EXL wedges, the dispatcher never even reached it.
-	if (startpc == 0x80000180 || startpc == 0x80000200 || startpc == 0xBFC00380 || startpc == 0xBFC00400)
-	{
-		static u32 s_seen_vectors = 0;
-		const u32 bit = (startpc == 0x80000180) ? 1u : (startpc == 0x80000200) ? 2u :
-		                (startpc == 0xBFC00380) ? 4u : 8u;
-		if (!(s_seen_vectors & bit))
-		{
-			s_seen_vectors |= bit;
-			Console.WriteLn(Color_StrongGreen, "EE ARM64: first compile of exception vector %08x", startpc);
-		}
-	}
 
 	// Note: startpc=0 is valid (EE RAM address 0). The x86 rec asserts on this
 	// but it can legitimately happen during BIOS init (e.g., JR $ra with ra=0).

@@ -45,67 +45,6 @@ static constexpr uint eeWaitCycles = 3072;
 
 bool eeEventTestIsActive = false;
 
-// yaps2 bring-up diagnostics — rolling EE interrupt-delivery stats, printed by
-// the libretro heartbeat. See _cpuEventTest_Shared.
-u32 g_eeIntDeliveryCount = 0;
-u32 g_eeIntLastMask = 0;
-u32 g_eeIntLastEPC = 0;
-u32 g_eeIntLastPC = 0;
-// Ring of the last 32 guest PCs that went through the EE dispatcher (written
-// by emitted code in _DynGen_DispatcherReg on arm64; idle on x86). Self-loop
-// blocks re-enter via their internal backedge without dispatching, so this
-// holds the interesting block-to-block trail, not millions of loop iterations.
-// 64 entries; written by BOTH the emitted dispatcher (guest pc) and the C++
-// sentinels below (same EE thread, one shared index). Sentinels:
-//   FFFF0001 <epc>   interrupt delivery (cpuException from the event test)
-//   FFFF0002 <pc>    ERET retired (value = resulting pc)
-//   FFFF0003 <tar>   _doBranch_shared wrote pc=tar
-u32 g_eeDispatchRing[64] = {};
-u32 g_eeDispatchRingIdx = 0;
-void eeRingPush(u32 v)
-{
-	g_eeDispatchRing[(g_eeDispatchRingIdx++) & 63] = v;
-}
-// Armed at every interrupt delivery; recEventTest snapshots the ring once 16
-// more dispatches have flowed, so the snapshot holds the 16 guest blocks that
-// ran right AFTER the last delivery (the live ring only shows steady state).
-u32 g_eeRingCaptureArmed = 0;
-u32 g_eeIntLastRingIdx = 0;
-u32 g_eeRingSnapshot[64] = {};
-// Synchronous copy taken INSIDE the delivery site, right after the sentinel
-// pair is pushed — its last two chronological entries are always
-// FFFF0001+EPC, and everything before is true pre-delivery context. Unlike
-// the deferred post-snapshot this cannot be outrun by ring wrap.
-u32 g_eeRingPreSnapshot[64] = {};
-u32 g_eeRingPreIdx = 0;
-u32 g_eeRingSnapshotIdx = 0;
-// Incremented by the interpreter's ERET (COP0.cpp) — pairs with
-// g_eeIntDeliveryCount to tell whether the handler chain completed.
-u32 g_eeEretCount = 0;
-// pc trajectory through _cpuEventTest_Shared's sections when the call
-// delivered an interrupt: [0] after IOP, [1] after counters, [2] after the
-// interrupt scan, [3] after VU sync, [4] at exit. Identifies which section
-// overwrites the exception-vector pc after a delivery.
-u32 g_eeEvtPc[5] = {};
-// Ring of the last 8 C++ writes to cpuRegs.pc: writer id, value written, and
-// the delivery count at write time. Writer ids: 1=cpuException(vector),
-// 2=ERET, 3=_doBranch_shared, 4=cpuReset, 5=COP0 debug. If the last entries
-// show cpuException(80000200) followed by nothing else while the dispatcher
-// reads 196ec0, the overwrite is emitted code; if a writer follows, named.
-u32 g_eePcWriteRing[8][3] = {};
-u32 g_eePcWriteIdx = 0;
-void eePcWriteTrace(u32 id, u32 val)
-{
-	const u32 i = (g_eePcWriteIdx++) & 7;
-	g_eePcWriteRing[i][0] = id;
-	g_eePcWriteRing[i][1] = val;
-	g_eePcWriteRing[i][2] = g_eeIntDeliveryCount;
-	eeRingPush(0xFFFF0000u + id);
-	eeRingPush(val);
-}
-// Bumped by emitted code in DispatcherReg whenever the dispatched pc is
-// exactly 0x80000200 — did the interrupt vector ever dispatch?
-u32 g_eeVecDispatchCount = 0;
 EE_intProcessStatus eeRunInterruptScan = INT_NOT_RUNNING;
 
 u32 g_eeloadMain = 0, g_eeloadExec = 0, g_osdsys_str = 0;
@@ -223,8 +162,6 @@ __ri void cpuException(u32 code, u32 bd)
 		cpuRegs.pc = 0x80000000 + offset;
 	else
 		cpuRegs.pc = 0xBFC00200 + offset;
-	eePcWriteTrace(1, cpuRegs.pc);
-
 	cpuUpdateOperationMode();
 }
 
@@ -465,15 +402,10 @@ __fi void _cpuEventTest_Shared()
 	// cycles (fixes Grandia II [PAL], which does a spin loop on a vsync and expects to
 	// be able to read the value before the exception handler clears it).
 
-	u32 evt_delivered = 0;
 	uint mask = intcInterrupt() | dmacInterrupt();
 	if (cpuIntsEnabled(mask))
 	{
-		const u32 pre_pc = cpuRegs.pc;
-		const u32 pre_status = cpuRegs.CP0.n.Status.val;
-		const u32 pre_branch = (u32)cpuRegs.branch;
 		cpuException(mask, cpuRegs.branch);
-		evt_delivered = 1;
 
 #ifdef __aarch64__
 		// The arm64 rec calls interpreter fallbacks that run this event test
@@ -491,26 +423,6 @@ __fi void _cpuEventTest_Shared()
 			s_recTlbMissOccurred = 1;
 		}
 #endif
-		// yaps2 bring-up diagnostic (rolling, spam-free): DMAC/SIF interrupts
-		// fire in bursts from BIOS boot onward, so a capped trace exhausts
-		// before the interesting delivery. Keep running stats instead; the
-		// libretro heartbeat prints them every ~5s. At the wedge this shows
-		// whether the count is frozen (no more deliveries — EXL stuck, as
-		// expected) and what the LAST delivery was (mask + EPC + vector pc).
-		g_eeIntDeliveryCount++;
-		g_eeIntLastMask = mask;
-		g_eeIntLastEPC = cpuRegs.CP0.n.EPC;
-		g_eeIntLastPC = cpuRegs.pc;
-		// Delivery quad: header, pre-exception pc, pre-exception Status
-		// (low byte carries pre-branch in bits 24+), post-exception EPC.
-		eeRingPush(0xFFFF0001);
-		eeRingPush(pre_pc);
-		eeRingPush((pre_status & 0x00FFFFFF) | (pre_branch << 24));
-		eeRingPush(cpuRegs.CP0.n.EPC);
-		std::memcpy(g_eeRingPreSnapshot, g_eeDispatchRing, sizeof(g_eeRingPreSnapshot));
-		g_eeRingPreIdx = g_eeDispatchRingIdx;
-		g_eeIntLastRingIdx = g_eeDispatchRingIdx - 2; // pair anchors the post window
-		g_eeRingCaptureArmed = 1;
 	}
 
 	// ---- IOP -------------
@@ -540,8 +452,6 @@ __fi void _cpuEventTest_Shared()
 	}
 
 	iopEventTest();
-	if (evt_delivered)
-		g_eeEvtPc[0] = cpuRegs.pc;
 
 	if (cpuTestCycle(nextStartCounter, nextDeltaCounter))
 	{
@@ -550,8 +460,6 @@ __fi void _cpuEventTest_Shared()
 	}
 
 	_cpuTestTIMR();
-	if (evt_delivered)
-		g_eeEvtPc[1] = cpuRegs.pc;
 
 	// ---- Interrupts -------------
 	// These are basically just DMAC-related events, which also piggy-back the same bits as
@@ -572,16 +480,11 @@ __fi void _cpuEventTest_Shared()
 			_cpuTestInterrupts();
 	}
 
-	if (evt_delivered)
-		g_eeEvtPc[2] = cpuRegs.pc;
-
 	// ---- VU Sync -------------
 	// We're in a EventTest.  All dynarec registers are flushed
 	// so there is no need to freeze registers here.
 	CpuVU0->ExecuteBlock();
 	CpuVU1->ExecuteBlock();
-	if (evt_delivered)
-		g_eeEvtPc[3] = cpuRegs.pc;
 
 	// ---- Schedule Next Event Test --------------
 	const float mutiplier = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
@@ -611,8 +514,6 @@ __fi void _cpuEventTest_Shared()
 
 	// Apply vsync and other counter nextCycles
 	cpuSetNextEvent(nextStartCounter, nextDeltaCounter);
-	if (evt_delivered)
-		g_eeEvtPc[4] = cpuRegs.pc;
 
 	eeEventTestIsActive = false;
 }

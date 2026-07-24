@@ -260,22 +260,15 @@ static __fi void _doBranch_shared(u32 tar)
 		}
 		intLastBranchTo = tar;
 		cpuRegs.pc = tar;
-		eePcWriteTrace(3, tar);
 		cpuRegs.branch = 0;
 	}
 }
 
 static void doBranch( u32 target )
 {
-	// yaps2 bring-up: label interp-branch call boundaries in the unified ring
-	// so nesting (evil branches) and the delivery interleave are visible.
-	eeRingPush(0xFFFF0006);
-	eeRingPush(target);
 	_doBranch_shared( target );
 	intUpdateCPUCycles();
 	intEventTest();
-	eeRingPush(0xFFFF0007);
-	eeRingPush(cpuRegs.pc);
 }
 
 void intDoBranch(u32 target)
