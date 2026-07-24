@@ -474,6 +474,23 @@ __fi void _cpuEventTest_Shared()
 		const u32 pre_branch = (u32)cpuRegs.branch;
 		cpuException(mask, cpuRegs.branch);
 		evt_delivered = 1;
+
+#ifdef __aarch64__
+		// The arm64 rec calls interpreter fallbacks that run this event test
+		// mid-op (doBranch's intEventTest, the branch-likely not-taken arm).
+		// A delivery there arms pc = vector, but the interpreter op then
+		// returns into the block's static flow. Arm the same divert flag the
+		// TLB-miss/CancelInstruction paths use, so the recCall/recBranchCall
+		// sites' recEmitInterpTlbMissCheck exits to DispatcherReg on the
+		// vector pc instead of letting the block bury it. For deliveries on
+		// the normal dispatcher path the flag costs at most one spurious
+		// (architecturally correct) divert at the next interp-call site.
+		if (Cpu != &intCpu)
+		{
+			extern u32 s_recTlbMissOccurred;
+			s_recTlbMissOccurred = 1;
+		}
+#endif
 		// yaps2 bring-up diagnostic (rolling, spam-free): DMAC/SIF interrupts
 		// fire in bursts from BIOS boot onward, so a capped trace exhausts
 		// before the interesting delivery. Keep running stats instead; the

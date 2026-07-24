@@ -915,6 +915,16 @@ void recBranchCall(void (*func)())
 
 	armReloadCycleDelta();
 	armReloadEEGPRPins();
+
+	// Same contract as recCall: if the interpreter call raised or delivered
+	// an exception (TLB miss, CancelInstruction, or an interrupt delivered
+	// by an event test nested in the op — doBranch's intEventTest, the
+	// branch-likely not-taken arm), divert to DispatcherReg on the vector pc
+	// before this block's tail resumes the static flow. Without this, a
+	// delivery inside an interpreted branch buries the vector: EXL stays
+	// set, no further interrupts deliver, and guest wait loops spin forever
+	// (Tekken 4 boot wedge, 2026-07-24).
+	recEmitInterpTlbMissCheck();
 }
 
 // s_nBlockCycles is 3-bit fixed point. Divide by 8 when done!
