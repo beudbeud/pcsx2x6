@@ -2140,10 +2140,26 @@ void Host::OnPerformanceMetricsUpdated()
 		// hardware state that never comes true. Snapshot the DMA/GIF/VIF/GS
 		// registers that such a handler could poll, plus the loop's own code so
 		// the polled address is readable straight off the MIPS disassembly.
-		INFO_LOG("hb2: ints={} lastmask={:04x} lastepc={:08x} lastvec={:08x} | "
+		// The 16 dispatches that followed the LAST interrupt delivery (armed
+		// capture, frozen — see recEventTest). Oldest first. If 0x80000200 is
+		// absent here, the vector never dispatched after that delivery.
+		{
+			const u32 base = g_eeRingSnapshotIdx;
+			INFO_LOG("hb5: post-int {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} "
+					 "{:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+				g_eeRingSnapshot[(base + 0) & 31], g_eeRingSnapshot[(base + 1) & 31],
+				g_eeRingSnapshot[(base + 2) & 31], g_eeRingSnapshot[(base + 3) & 31],
+				g_eeRingSnapshot[(base + 4) & 31], g_eeRingSnapshot[(base + 5) & 31],
+				g_eeRingSnapshot[(base + 6) & 31], g_eeRingSnapshot[(base + 7) & 31],
+				g_eeRingSnapshot[(base + 8) & 31], g_eeRingSnapshot[(base + 9) & 31],
+				g_eeRingSnapshot[(base + 10) & 31], g_eeRingSnapshot[(base + 11) & 31],
+				g_eeRingSnapshot[(base + 12) & 31], g_eeRingSnapshot[(base + 13) & 31],
+				g_eeRingSnapshot[(base + 14) & 31], g_eeRingSnapshot[(base + 15) & 31]);
+		}
+		INFO_LOG("hb2: ints={} erets={} lastmask={:04x} lastepc={:08x} lastvec={:08x} | "
 				 "gifstat={:08x} vif1stat={:08x} d1chcr={:08x} d2chcr={:08x} "
 				 "dstat={:08x} dctrl={:08x} gscsr={:08x}",
-			g_eeIntDeliveryCount, g_eeIntLastMask, g_eeIntLastEPC, g_eeIntLastPC,
+			g_eeIntDeliveryCount, g_eeEretCount, g_eeIntLastMask, g_eeIntLastEPC, g_eeIntLastPC,
 			psHu32(0x3020) /*GIF_STAT*/, psHu32(0x3C00) /*VIF1_STAT*/,
 			psHu32(0x9000) /*D1_CHCR*/, psHu32(0xA000) /*D2_CHCR*/,
 			psHu32(0xE010) /*DMAC_STAT*/, psHu32(0xE000) /*DMAC_CTRL*/,

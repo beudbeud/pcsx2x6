@@ -378,6 +378,17 @@ const void* g_fpuGuardMaskStub = nullptr;
 
 static void recEventTest()
 {
+	// yaps2 bring-up diagnostic: once armed by an interrupt delivery, snapshot
+	// the dispatch ring after 16 more dispatches — the frozen copy then holds
+	// the 16 guest blocks that ran right after the LAST delivery. Cheap: one
+	// compare per event test, one memcpy per delivery.
+	if (g_eeRingCaptureArmed && (g_eeDispatchRingIdx - g_eeIntLastRingIdx) >= 16)
+	{
+		std::memcpy(g_eeRingSnapshot, g_eeDispatchRing, sizeof(g_eeRingSnapshot));
+		g_eeRingSnapshotIdx = g_eeIntLastRingIdx;
+		g_eeRingCaptureArmed = 0;
+	}
+
 	eeEventTestIsActive = true;
 	_cpuEventTest_Shared();
 	eeEventTestIsActive = false;
