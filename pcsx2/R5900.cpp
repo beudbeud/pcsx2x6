@@ -469,7 +469,15 @@ __fi void _cpuEventTest_Shared()
 
 	// ---- Schedule Next Event Test --------------
 	const float mutiplier = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
-	const int nextIopEventDeta = ((psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier);
+	// See R3000A.cpp:PSX_INT for the host-divergence rationale: cast the u32
+	// cycle delta to s32 *before* the float multiply. When `cycle` briefly
+	// leads `iopNextEventCycle` the u32 subtraction underflows; the
+	// out-of-range float->int cast then SATURATES TO INT_MAX on ARM64
+	// (FCVTZS), scheduling the next EE event test ~2^31 cycles away — no
+	// vsync, no INTC delivery, guest wait loops spin "forever". This is the
+	// main EE event scheduler, so the impact dwarfs the PSX_INT site.
+	const s32 iopCyclesUntilEvent = static_cast<s32>(psxRegs.iopNextEventCycle - psxRegs.cycle);
+	const int nextIopEventDeta = static_cast<s32>(iopCyclesUntilEvent * mutiplier);
 	// 8 or more cycles behind and there's an event scheduled
 	if (EEsCycle >= nextIopEventDeta)
 	{
@@ -482,7 +490,7 @@ __fi void _cpuEventTest_Shared()
 	else
 	{
 		// Otherwise IOP is caught up/not doing anything so we can wait for the next event.
-		cpuSetNextEventDelta(((psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier) - EEsCycle);
+		cpuSetNextEventDelta(nextIopEventDeta - EEsCycle);
 	}
 
 	// Apply vsync and other counter nextCycles
