@@ -544,6 +544,16 @@ static __ri void vtlb_Miss(u32 addr, u32 mode)
 	// cpuRegs.pc to the exception vector, which the rec picks up at the next
 	// dispatch — no CancelInstruction longjmp (which is interpreter-only; the
 	// arm64 rec returns and lets the exception state take effect at block end).
+	//
+	// Log first, and on the same terms as the x86 path below: this diverges from
+	// upstream x86 behaviour (which ignores the miss), so a game that silently
+	// tolerated misses before will now be redirected into its exception handler.
+	// Without the log that difference is invisible from a boot trace.
+	{
+		static int spamStop = 0;
+		if (spamStop++ < 50 || IsDevBuild)
+			Console.Error("%s (raising exception)", message.c_str());
+	}
 	if (mode)
 		cpuTlbMissW(addr, cpuRegs.branch);
 	else
