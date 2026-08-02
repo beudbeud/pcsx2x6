@@ -61,7 +61,7 @@ struct EEVM_MemoryAllocMess
 // Needs to fit within IOPmemSize of Memory.h
 struct IopVM_MemoryAllocMess
 {
-	u8 Main[Ps2MemSize::TotalRam]; // Main memory
+	u8 Main[Ps2MemSize::TotalIopRam]; // Main memory
 	u8 P[_64kb];                   // I really have no idea what this is... --air
 	u8 Sif[0x100];                 // a few special SIF/SBUS registers (likely not needed)
 	u8 ACRAM[NamcoMemSize::ACRAM];
