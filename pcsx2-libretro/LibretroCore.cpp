@@ -446,8 +446,14 @@ void LibretroHost::SettingsOverride()
 
 	s_settings_interface.SetBoolValue("Logging", "EnableSystemConsole", false);
 
+	// Arcade states are ~270MB raw: the EE always exposes 128MB (VMManager forces ExtraMemory)
+	// and ACRAM is always allocated at Wangan's 128MB max. Uncompressed that overflows
+	// SERIALIZE_BUFFER_SIZE and every save fails. Both blocks are overwhelmingly zeros, so
+	// zstd-1 shrinks them to nothing while staying fast enough not to hitch the save.
 	s_settings_interface.SetIntValue("EmuCore", "SavestateCompressionType",
-		static_cast<int>(SavestateCompressionMethod::Uncompressed));
+		static_cast<int>(SavestateCompressionMethod::Zstandard));
+	s_settings_interface.SetIntValue("EmuCore", "SavestateCompressionRatio",
+		static_cast<int>(SavestateCompressionLevel::Low));
 
 	if (s_settings_interface.GetStringValue("Filenames", "BIOS").empty())
 	{
