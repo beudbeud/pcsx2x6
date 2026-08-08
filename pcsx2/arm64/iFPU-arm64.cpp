@@ -38,9 +38,9 @@ namespace Interp = R5900::Interpreter::OpcodeImpl::COP1;
 //------------------------------------------------------------------
 // FCR31 block residency (GE-12)
 //------------------------------------------------------------------
-// The leak/4248 guest-class-0xc design: the C.cond/BC1/CFC1/CTC1/DIV/SQRT
-// family accesses fprc[31] through the GPR allocator (ARM64TYPE_FPRC — the
-// load/writeback plumbing existed in iCore but had no allocation site).
+// The leak/4248 guest-class-0xc design: the C.cond/BC1/CFC1/CTC1/DIV/SQRT/
+// RSQRT family accesses fprc[31] through the GPR allocator (ARM64TYPE_FPRC —
+// the load/writeback plumbing existed in iCore but had no allocation site).
 // C.cond becomes Fcmp+Cset+Bfi on the resident reg, BC1 a Tbnz on it (zero
 // loads after a preceding compare), and the DIV/SQRT flag RMWs lose their
 // Ldr/Str round-trips. Every iFlushCall seam writes the slot back (FPRC
@@ -1134,21 +1134,48 @@ static void recRSQRT_S_xmm(int info)
 	armAsm->Fmov(armSRegister(dreg), armSRegister(EEREC_S));
 	armAsm->Fmov(armSRegister(treg), armSRegister(EEREC_T));
 
+	// GE-12: the three flag RMWs below go to the resident FCR31 when there is
+	// one. Alloc here, before the RWARG1 clobber and before the branch arms —
+	// any eviction store the alloc emits has to land outside a
+	// runtime-conditional emit region, same rule as recDIV_S_xmm/recSQRT_S_xmm.
+	const int fl = fpuTryAllocFCR31(MODE_READ | MODE_WRITE);
+	const a64::Register flagReg = (fl >= 0) ? armWRegister(fl) : RWSCRATCH;
+
 	// Raw Ft bits drive the zero/negative branch and the +/-fMax result sign.
 	armAsm->Fmov(RWARG1, armSRegister(EEREC_T));
 
 	// Clear I|D (sticky SI|SD are left intact).
-	armLoadEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
-	armAsm->Bic(RWSCRATCH, RWSCRATCH, FPUflagI | FPUflagD);
-	armStoreEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
+	if (fl < 0)
+		armLoadEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
+	armAsm->Bic(flagReg, flagReg, FPUflagI | FPUflagD);
+	if (fl < 0)
+		armStoreEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
 
-	a64::Label notZero, doDiv, end;
+	a64::Label notZero, xOverZero, flagsDone, doDiv, end;
 
 	// Ft is treated as zero when its exponent field is 0 (denormals included).
 	armAsm->Tst(RWARG1, 0x7F800000);
 	armAsm->B(&notZero, a64::ne);
 
-	// Zero divisor: set D|SD; result = sign(FS) | 0x7f7fffff.
+	armAsm->Fmov(RWARG2, armSRegister(dreg)); // raw Fs bits, saved before any write
+
+	// The dividend decides the cause: 0/0 raises I|SI, x/0 raises D|SD. Same
+	// split as recDIV_S_xmm above and DOUBLE::recRSQRT_S_xmm in
+	// iFPUd-arm64.cpp. Tested on the exponent field, like the divisor above,
+	// so FPCR.FZ does not decide whether a denormal dividend counts as zero.
+	if (fl < 0)
+		armLoadEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
+	armAsm->Tst(RWARG2, 0x7F800000);
+	armAsm->B(&xOverZero, a64::ne);
+	armAsm->Orr(flagReg, flagReg, FPUflagI | FPUflagSI); // 0/0
+	armAsm->B(&flagsDone);
+	armAsm->Bind(&xOverZero);
+	armAsm->Orr(flagReg, flagReg, FPUflagD | FPUflagSD); // x/0
+	armAsm->Bind(&flagsDone);
+	if (fl < 0)
+		armStoreEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
+
+	// Result = sign(FS) | 0x7f7fffff.
 	//
 	// FS, not FT. This op divides by sqrt(|Ft|), so by the time the division
 	// happens the divisor has no sign left to contribute -- only the dividend
@@ -1161,10 +1188,6 @@ static void recRSQRT_S_xmm(int info)
 	// The MAGNITUDE stays at FLT_MAX rather than the console's 0x7FFFFFFF: this
 	// tier saturates in host singles throughout and cannot hold the EE's top
 	// binade. That is the standing fast-path compromise, not this fix.
-	armLoadEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
-	armAsm->Orr(RWSCRATCH, RWSCRATCH, FPUflagD | FPUflagSD);
-	armStoreEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
-	armAsm->Fmov(RWARG2, armSRegister(dreg)); // raw Fs bits, saved before any write
 	armAsm->And(RWARG2, RWARG2, 0x80000000);
 	armAsm->Orr(RWARG2, RWARG2, 0x7f7fffff);
 	armAsm->Fmov(armSRegister(EEREC_D), RWARG2);
@@ -1173,9 +1196,11 @@ static void recRSQRT_S_xmm(int info)
 	armAsm->Bind(&notZero);
 	// Negative divisor (exp nonzero, sign set): set I|SI. sqrt still takes |Ft|.
 	armAsm->Tbz(RWARG1, 31, &doDiv);
-	armLoadEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
-	armAsm->Orr(RWSCRATCH, RWSCRATCH, FPUflagI | FPUflagSI);
-	armStoreEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
+	if (fl < 0)
+		armLoadEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
+	armAsm->Orr(flagReg, flagReg, FPUflagI | FPUflagSI);
+	if (fl < 0)
+		armStoreEERegPtr(RWSCRATCH, &fpuRegs.fprc[31]);
 
 	armAsm->Bind(&doDiv);
 	armAsm->Fabs(armSRegister(treg), armSRegister(treg)); // |Ft| (no-op if positive)
