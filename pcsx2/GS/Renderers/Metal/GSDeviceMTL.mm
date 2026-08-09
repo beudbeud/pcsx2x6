@@ -996,6 +996,13 @@ bool GSDeviceMTL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	m_features.dxt_textures = true;
 	m_features.bptc_textures = true;
 	m_features.framebuffer_fetch = m_dev.features.framebuffer_fetch && !GSConfig.DisableFramebufferFetch;
+	// Programmable blending is the one in-tile destination read that is genuinely structure-free:
+	// a feedback draw binds the target and stays in the same render pass (DoRenderHW), with no
+	// pass break and no copy. That is what makes it safe for the renderer to take a feedback read
+	// on a draw that did not need one. Vulkan's ordered-attachment-access spelling does NOT
+	// qualify, because there the loop is declared through the pass configuration and toggling it
+	// ends the pass. Without fetch, iOS has no barrier either and falls back to a real copy.
+	m_features.cheap_rt_feedback_read = m_features.framebuffer_fetch;
 	m_features.stencil_buffer = true;
 	m_features.cas_sharpening = true;
 	m_features.test_and_sample_depth = true;
