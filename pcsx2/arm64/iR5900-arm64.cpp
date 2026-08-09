@@ -5,6 +5,7 @@
 // Dispatcher, block management, all instructions as interpreter fallbacks.
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <memory>
 #include <unordered_map>
@@ -128,7 +129,7 @@ static ArmConstantPool s_eeConstantPool;
 static fastjmp_buf m_SetJmp_StateCheck;
 static bool eeCpuExecuting = false;
 static bool eeRecNeedsReset = false;
-static bool eeRecExitRequested = false;
+static std::atomic<bool> eeRecExitRequested{false};
 
 #ifdef PCSX2_RECOMPILER_TESTS
 // Harness-entry state. Set by recEeExecuteBlock before entering the JIT,
@@ -2984,20 +2985,27 @@ static void recExitExecution()
 
 static void recSafeExitExecution()
 {
-	eeRecExitRequested = true;
-
-	if (!eeEventTestIsActive)
-	{
-		cpuRegs.nextEventCycle = 0;
-	}
-	else
-	{
-		if (psxRegs.iopCycleEE > 0)
-		{
-			psxRegs.iopBreak += psxRegs.iopCycleEE;
-			psxRegs.iopCycleEE = 0;
-		}
-	}
+	// Callable from ANY thread: the Android pause/stop JNI fires this cross-thread
+	// against a running EE (desktop hosts only call it from the CPU thread). The
+	// flag is the whole mechanism — recEventTest consumes it at the next event
+	// test, at most one scheduler horizon (~an hblank of guest time) away.
+	//
+	// The x86-inherited accelerants this used to carry were cross-thread poison:
+	//
+	//  - `cpuRegs.nextEventCycle = 0` raced the pinned cycle delta (RECCYCLE =
+	//    cycle - nextEventCycle). A hit landing while the EE was mid-chain made
+	//    the next armFlushCycleDelta reconstruct cycle = delta + 0, warping the
+	//    EE clock back to near VM birth (observed: -142e9 cycles). Counter
+	//    baselines were then "ahead" of cycle, and the old u32 rcntSyncCounter
+	//    blowup minted the GoW2 poisoned-savestate scar from exactly this seam.
+	//    On x86 the store was safe AND useful — block tails compare cycle
+	//    against nextEventCycle in MEMORY, so zeroing it forced the very next
+	//    tail into the event test. arm64 tails test the pinned delta's sign, so
+	//    here it never even accelerated the exit.
+	//
+	//  - the iopCycleEE/iopBreak fold raced the IOP timeslice bookkeeping on
+	//    the CPU thread. It only ever shaved one IOP slice of exit latency.
+	eeRecExitRequested.store(true, std::memory_order_release);
 }
 
 static void recCancelInstruction()
