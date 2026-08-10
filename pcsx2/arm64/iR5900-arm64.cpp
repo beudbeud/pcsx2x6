@@ -1847,10 +1847,126 @@ static void eeProfileEmitHit(const R5900::OPCODE& op)
 	armAsm->Str(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
 }
 
+// ---------------------------------------------------------------------------
+// Per-block execution profiler (same PCSX2_EE_PROFILE=1 switch).
+//
+// The fallback histogram came back empty — every EE instruction SoulCalibur 3
+// runs is natively recompiled — so the question moved to "which recompiled
+// blocks burn the time". A counter at the block prologue answers it: linked
+// branches target block_fnptr, so it fires on EVERY entry, not just dispatched
+// ones.
+//
+// Costs ~4 instructions per block entry, which inflates EE% and depresses fps
+// while profiling. That skews ABSOLUTE numbers; the RANKING between blocks —
+// the only thing this is read for — stays honest.
+// ---------------------------------------------------------------------------
+static constexpr u32 EE_BLOCK_PROFILE_MAX = 16384;
+static u64 s_ee_block_hits[EE_BLOCK_PROFILE_MAX];
+static u32 s_ee_block_pc[EE_BLOCK_PROFILE_MAX];
+static std::unordered_map<u32, u32> s_ee_block_slots;
+
+static void eeProfileEmitBlockHit(u32 startpc)
+{
+	if (!eeProfileEnabled())
+		return;
+
+	u32 slot;
+	const auto it = s_ee_block_slots.find(startpc);
+	if (it != s_ee_block_slots.end())
+	{
+		slot = it->second;
+	}
+	else
+	{
+		if (s_ee_block_slots.size() >= EE_BLOCK_PROFILE_MAX - 1)
+			slot = EE_BLOCK_PROFILE_MAX - 1; // shared overflow bucket, pc stays 0
+		else
+		{
+			slot = static_cast<u32>(s_ee_block_slots.size());
+			s_ee_block_pc[slot] = startpc;
+		}
+		s_ee_block_slots.emplace(startpc, slot);
+	}
+
+	// Prologue: guest state is memory-resident and the allocator was just
+	// re-initialized, so RSCRATCHADDR (out of the VIXL pool) and RXSCRATCH are
+	// both free here — same reasoning as the test-build block hook below.
+	armMoveAddressToReg(RSCRATCHADDR, &s_ee_block_hits[slot]);
+	armAsm->Ldr(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
+	armAsm->Add(RXSCRATCH, RXSCRATCH, 1);
+	armAsm->Str(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
+}
+
+static void eeProfileDumpBlocks()
+{
+	const u32 count = std::min<u32>(static_cast<u32>(s_ee_block_slots.size()), EE_BLOCK_PROFILE_MAX);
+	if (count == 0)
+	{
+		Console.WriteLn("EE hot blocks: no block compiled yet");
+		return;
+	}
+
+	std::vector<u32> order;
+	order.reserve(count);
+	u64 total = 0;
+	for (u32 i = 0; i < count; i++)
+	{
+		total += s_ee_block_hits[i];
+		if (s_ee_block_hits[i] != 0)
+			order.push_back(i);
+	}
+	if (total == 0)
+	{
+		Console.WriteLn(fmt::format("EE hot blocks: 0 entries this window ({} blocks compiled)", count).c_str());
+		return;
+	}
+
+	std::sort(order.begin(), order.end(),
+		[](u32 a, u32 b) { return s_ee_block_hits[a] > s_ee_block_hits[b]; });
+
+	std::string line = fmt::format("EE hot blocks: {} entries over {} blocks |", total, count);
+	for (size_t i = 0; i < order.size() && i < 10; i++)
+	{
+		const u32 k = order[i];
+		line += fmt::format(" {:08X}={} ({:.1f}%)", s_ee_block_pc[k], s_ee_block_hits[k],
+			100.0 * static_cast<double>(s_ee_block_hits[k]) / static_cast<double>(total));
+	}
+	Console.WriteLn(line.c_str());
+
+	// Decode the hottest block's guest instructions: the PC alone says where to
+	// look, this says what is actually in there. Stops at the first branch's
+	// delay slot, which is where a block ends.
+	if (!order.empty() && s_ee_block_pc[order[0]] != 0)
+	{
+		const u32 hot = s_ee_block_pc[order[0]];
+		std::string ops = fmt::format("EE hottest block {:08X}:", hot);
+		const u32 saved_code = cpuRegs.code;
+		for (u32 i = 0; i < 24; i++)
+		{
+			const u32 code = memRead32(hot + i * 4);
+			cpuRegs.code = code; // GetInstruction dispatches on it
+			const R5900::OPCODE& op = R5900::GetInstruction(code);
+			ops += fmt::format(" {}", (code == 0) ? "NOP" : op.Name);
+			if (op.flags & IS_BRANCH)
+			{
+				ops += " <branch+ds>";
+				break;
+			}
+		}
+		cpuRegs.code = saved_code;
+		Console.WriteLn(ops.c_str());
+	}
+
+	for (u32 i = 0; i < count; i++)
+		s_ee_block_hits[i] = 0;
+}
+
 void EEInterpProfileDump()
 {
 	if (!eeProfileEnabled())
 		return;
+
+	eeProfileDumpBlocks();
 
 	// Snapshot then zero: each dump is a window, so a hot spot that only shows
 	// up in one scene isn't buried under everything since boot.
@@ -3299,6 +3415,10 @@ static void recRecompile(const u32 startpc)
 
 	_initArm64GPRregs();
 	_initArm64NEONregs();
+
+	// Block-entry execution counter (PCSX2_EE_PROFILE=1). Emitted here, at
+	// block_fnptr, so statically-linked entries are counted too.
+	eeProfileEmitBlockHit(startpc);
 
 #ifdef PCSX2_RECOMPILER_TESTS
 	// Optional block-entry diagnostic hook (test builds only). Emitted only when
