@@ -74,6 +74,9 @@
 #include "pcsx2/MTGS.h"
 #include "pcsx2/MemoryTypes.h"
 #include "pcsx2/PerformanceMetrics.h"
+#if defined(__aarch64__)
+#include "pcsx2/arm64/iR5900-arm64.h" // EEInterpProfileDump
+#endif
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SaveState.h"
 #include "pcsx2/USB/USB.h"
@@ -2207,6 +2210,12 @@ void Host::OnPerformanceMetricsUpdated()
 		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
 		PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage());
+
+#if defined(__aarch64__)
+	// Same cadence as the perf line, so a hot spot can be read against the
+	// thread loads of the very same window. No-op unless PCSX2_EE_PROFILE=1.
+	EEInterpProfileDump();
+#endif
 }
 void Host::OnSaveStateLoading(const std::string_view filename)
 {

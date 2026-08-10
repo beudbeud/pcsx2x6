@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <cstdlib>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1792,6 +1794,95 @@ static bool delaySlotNeedsBranchBracket(u32 code, const R5900::OPCODE& op)
 	return false;
 }
 
+// ---------------------------------------------------------------------------
+// EE interpreter-fallback profiler (opt-in: PCSX2_EE_PROFILE=1).
+//
+// Answers one question: which opcodes still fall back to the interpreter, and
+// how often do those fallbacks actually EXECUTE. Counting fallback sites at
+// compile time is useless — a block compiled once and run a million times is
+// what costs, so the counter is emitted into the block and incremented at run
+// time, right after the interpreter call returns (everything is flushed there,
+// so RSCRATCHADDR/RXSCRATCH are free).
+//
+// ~4 instructions per fallback execution, against a full register flush plus a
+// C call — noise. Nothing is emitted at all when the env var is unset.
+// ---------------------------------------------------------------------------
+static constexpr u32 EE_PROFILE_MAX = 512;
+static const R5900::OPCODE* s_ee_profile_ops[EE_PROFILE_MAX];
+static u64 s_ee_profile_hits[EE_PROFILE_MAX];
+static u32 s_ee_profile_count = 0;
+
+static bool eeProfileEnabled()
+{
+	static const bool on = []() {
+		const char* v = std::getenv("PCSX2_EE_PROFILE");
+		return v && v[0] == '1';
+	}();
+	return on;
+}
+
+// Compile-time only (host side), so a linear scan over <=512 entries is fine.
+static u32 eeProfileIndexFor(const R5900::OPCODE& op)
+{
+	for (u32 i = 0; i < s_ee_profile_count; i++)
+	{
+		if (s_ee_profile_ops[i] == &op)
+			return i;
+	}
+	if (s_ee_profile_count >= EE_PROFILE_MAX)
+		return EE_PROFILE_MAX - 1; // overflow bucket; 512 distinct opcodes never happens
+	s_ee_profile_ops[s_ee_profile_count] = &op;
+	return s_ee_profile_count++;
+}
+
+static void eeProfileEmitHit(const R5900::OPCODE& op)
+{
+	if (!eeProfileEnabled())
+		return;
+
+	const u32 idx = eeProfileIndexFor(op);
+	armMoveAddressToReg(RSCRATCHADDR, &s_ee_profile_hits[idx]);
+	armAsm->Ldr(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
+	armAsm->Add(RXSCRATCH, RXSCRATCH, 1);
+	armAsm->Str(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
+}
+
+void EEInterpProfileDump()
+{
+	if (!eeProfileEnabled())
+		return;
+
+	// Snapshot then zero: each dump is a window, so a hot spot that only shows
+	// up in one scene isn't buried under everything since boot.
+	u64 hits[EE_PROFILE_MAX];
+	const u32 count = s_ee_profile_count;
+	u64 total = 0;
+	for (u32 i = 0; i < count; i++)
+	{
+		hits[i] = s_ee_profile_hits[i];
+		s_ee_profile_hits[i] = 0;
+		total += hits[i];
+	}
+	if (total == 0)
+		return;
+
+	u32 order[EE_PROFILE_MAX];
+	for (u32 i = 0; i < count; i++)
+		order[i] = i;
+	std::sort(order, order + count, [&hits](u32 a, u32 b) { return hits[a] > hits[b]; });
+
+	std::string line = fmt::format("EE interp fallbacks: {} total |", total);
+	for (u32 i = 0; i < count && i < 12; i++)
+	{
+		const u32 k = order[i];
+		if (hits[k] == 0)
+			break;
+		line += fmt::format(" {}={} ({:.1f}%)", s_ee_profile_ops[k]->Name, hits[k],
+			100.0 * static_cast<double>(hits[k]) / static_cast<double>(total));
+	}
+	Console.WriteLn(line.c_str());
+}
+
 void recompileNextInstruction(bool delayslot, bool swapped_delay_slot)
 {
 	// Apply GameDB DynamicPatch pattern-matches during recompilation, matching
@@ -1947,6 +2038,8 @@ void recompileNextInstruction(bool delayslot, bool swapped_delay_slot)
 				recBranchCall(opcode.interpret);
 			else
 				recCall(opcode.interpret);
+
+			eeProfileEmitHit(opcode);
 		}
 		else
 			opcode.recompile();

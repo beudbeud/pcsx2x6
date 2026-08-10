@@ -895,3 +895,8 @@ void eeRecompileCodeRC2_MEM(R5900FNPTR constcode, R5900FNPTR_INFO noconstcode, i
 
 int eeRecompileCodeXMM(int xmminfo);
 void eeFPURecompileCode(R5900FNPTR_INFO xmmcode, R5900FNPTR fpucode, int xmminfo);
+
+// EE interpreter-fallback profiler (opt-in: PCSX2_EE_PROFILE=1). Logs, per
+// window, which opcodes still route to the interpreter and how many times
+// those fallbacks executed. No-op when the env var is unset.
+void EEInterpProfileDump();
