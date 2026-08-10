@@ -2742,6 +2742,9 @@ bool GSDeviceVK::CheckFeatures()
 	m_features.texture_barrier = GSConfig.OverrideTextureBarriers != 0;
 	m_features.multidraw_fb_copy = false;
 	m_features.broken_point_sampler = false;
+	// Mali Vulkan stacks frequently report dualSrcBlend=false. When absent, GSRendererHW SW-blends
+	// only the draws whose equation genuinely needs SRC1. From sashkinbro/EmuCoreX.
+	m_features.dual_source_blend = m_device_features.dualSrcBlend;
 
 	// geometryShader is needed because gl_PrimitiveID is part of the Geometry SPIR-V Execution Model.
 	m_features.primitive_id = m_device_features.geometryShader;
