@@ -611,6 +611,18 @@ void LibretroHost::RegisterCoreOptions()
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", "Enabled (use RT copy)"}, {nullptr, nullptr}},
 			"disabled"},
+		{"pcsx2_mtvu", "MTVU (Multi-Threaded VU1)", nullptr,
+			"Runs VU1 on its own thread. Helps on desktop-class CPUs (amd64 build). Measured "
+			"slightly SLOWER on RPi5, where the EE thread is already the bottleneck and the "
+			"extra sync costs more than it saves. Applies on the fly.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_texture_preloading", "Texture Preloading", nullptr,
+			"How much of each texture the hardware renderers upload at once. Full (default) uploads "
+			"whole textures and hash-caches them, trading GS-thread CPU for fewer partial uploads. "
+			"Try None/Partial if the GS thread is the bottleneck. Hardware renderers only.",
+			nullptr, "performance",
+			{{"2", "Full - Hash Cache (Default)"}, {"1", "Partial"}, {"0", "None"}, {nullptr, nullptr}}, "2"},
 		{"pcsx2_hw_render", "Hardware Render (zero-copy, experimental)", nullptr,
 			"EXPERIMENTAL: present the GL frame directly through the libretro hardware-render context "
 			"(zero-copy) instead of the GPU->CPU readback path. On desktop this also decouples emulation "
@@ -772,6 +784,10 @@ void LibretroHost::ReadCoreOptions(bool startup)
 
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleRate", get_int_option("pcsx2_ee_cycle_rate", "0"));
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleSkip", get_int_option("pcsx2_ee_cycle_skip", "0"));
+	s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "vuThread",
+		std::strcmp(get_option("pcsx2_mtvu", "disabled"), "enabled") == 0);
+	s_settings_interface.SetIntValue("EmuCore/GS", "texture_preloading",
+		std::clamp(get_int_option("pcsx2_texture_preloading", "2"), 0, 2));
 
 	// GPU->CPU readback control. Not masked by ManualUserHacks, so it always applies.
 	s_settings_interface.SetIntValue("EmuCore/GS", "HWDownloadMode", get_int_option("pcsx2_hw_download_mode", "0"));
