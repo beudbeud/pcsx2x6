@@ -1863,8 +1863,16 @@ void EEInterpProfileDump()
 		s_ee_profile_hits[i] = 0;
 		total += hits[i];
 	}
+	// Print even at zero, and say how many distinct fallback sites were ever
+	// compiled: "no output" would otherwise be indistinguishable from "the
+	// profiler never ran", and zero fallbacks is itself the answer — it means
+	// the EE time is inside JIT'd code and needs a sampling profiler instead.
 	if (total == 0)
+	{
+		Console.WriteLn(fmt::format("EE interp fallbacks: 0 executed this window ({} distinct sites compiled)",
+			count).c_str());
 		return;
+	}
 
 	u32 order[EE_PROFILE_MAX];
 	for (u32 i = 0; i < count; i++)
