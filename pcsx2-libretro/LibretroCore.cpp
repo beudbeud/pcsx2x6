@@ -167,6 +167,19 @@ namespace LibretroHost
 	static u32 s_frame_width = 0;
 	static u32 s_frame_height = 0;
 
+	// Entry-state deferral. RetroArch's --entryslot / auto-load-state calls retro_unserialize
+	// BEFORE the first retro_run, i.e. while the CPU thread is parked in
+	// PumpMessagesOnCPUThread waiting for its first run token. A state applied there leaves the
+	// guest wedged: the frame handshake keeps running (59.9fps) but the emulated machine does
+	// nothing (EE ~7%) and the screen stays black. Loading the same state once the loop is
+	// ticking works, so stash it and apply it from retro_run instead.
+	static std::vector<u8> s_pending_state;
+	static u64 s_frames_run = 0;
+	// ponytail: frame count, not a boot-progress signal. Measured: applying before the first
+	// retro_run wedges; applying ~12s in works. 120 frames (~2s) sits well clear of the failure
+	// and is the knob to raise if a game ever comes back wedged.
+	static constexpr u64 STATE_LOAD_MIN_FRAMES = 120;
+
 	// deferred work queue for Host::RunOnCPUThread
 	static std::mutex s_cpu_work_mutex;
 	static std::deque<std::function<void()>> s_cpu_work;
@@ -1562,6 +1575,9 @@ void retro_unload_game(void)
 	s_audio_stream = nullptr;
 	GSSetFramebufferReadback(nullptr, 0, 0);
 	s_memory_map_sent = false;
+	s_frames_run = 0;
+	s_pending_state.clear();
+	s_pending_state.shrink_to_fit();
 }
 
 void retro_reset(void)
@@ -1759,6 +1775,8 @@ static void UpdateAVInfoIfChanged()
 		av_info.geometry.base_height, av_info.timing.fps, sample_rate);
 }
 
+static bool ApplyStateFromBuffer(const u8* zip, u64 zip_size);
+
 void retro_run(void)
 {
 	bool options_updated = false;
@@ -1799,6 +1817,19 @@ void retro_run(void)
 		if (s_video_cb)
 			s_video_cb(black.data(), DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH * sizeof(u32));
 		return;
+	}
+
+	s_frames_run++;
+
+	// Deferred entry state (see s_pending_state). Must run before s_frame_mutex is taken:
+	// ApplyStateFromBuffer blocks on the CPU thread, which drains the work from inside
+	// PumpMessagesOnCPUThread — and that needs the same mutex.
+	if (!s_pending_state.empty() && s_frames_run >= STATE_LOAD_MIN_FRAMES)
+	{
+		const bool ok = ApplyStateFromBuffer(s_pending_state.data(), s_pending_state.size());
+		INFO_LOG("entry save state applied after {} frames: {}", s_frames_run, ok ? "ok" : "FAILED");
+		s_pending_state.clear();
+		s_pending_state.shrink_to_fit();
 	}
 
 	std::unique_lock lock(s_frame_mutex);
@@ -1948,25 +1979,17 @@ bool retro_serialize(void* data, size_t size)
 	return result;
 }
 
-bool retro_unserialize(const void* data, size_t size)
+// Applies a zip payload (header already validated/stripped) on the CPU thread.
+static bool ApplyStateFromBuffer(const u8* zip, u64 zip_size)
 {
-	if (!s_running.load(std::memory_order_acquire) || size < sizeof(SerializeHeader))
-		return false;
-
-	SerializeHeader header;
-	std::memcpy(&header, data, sizeof(header));
-	if (header.magic != SERIALIZE_MAGIC || sizeof(SerializeHeader) + header.zip_size > size)
-		return false;
-
 	bool result = false;
 	Host::RunOnCPUThread(
-		[data, &header, &result]() {
+		[zip, zip_size, &result]() {
 			if (VMManager::GetState() != VMState::Running && VMManager::GetState() != VMState::Paused)
 				return;
 
 			Error error;
-			if (!SaveState_UnzipFromBuffer(
-					static_cast<const u8*>(data) + sizeof(SerializeHeader), header.zip_size, &error))
+			if (!SaveState_UnzipFromBuffer(zip, zip_size, &error))
 			{
 				ERROR_LOG("retro_unserialize: {}", error.GetDescription());
 				return;
@@ -1977,6 +2000,32 @@ bool retro_unserialize(const void* data, size_t size)
 		true);
 
 	return result;
+}
+
+bool retro_unserialize(const void* data, size_t size)
+{
+	if (!s_running.load(std::memory_order_acquire) || size < sizeof(SerializeHeader))
+		return false;
+
+	SerializeHeader header;
+	std::memcpy(&header, data, sizeof(header));
+	if (header.magic != SERIALIZE_MAGIC || sizeof(SerializeHeader) + header.zip_size > size)
+		return false;
+
+	const u8* const zip = static_cast<const u8*>(data) + sizeof(SerializeHeader);
+
+	// Too early for the guest to survive it (see s_pending_state): keep our own copy — the
+	// frontend's buffer is only ours for the duration of this call — and let retro_run apply it.
+	// Reporting success here is what the entry-state path expects; the alternative (returning
+	// false) makes RetroArch give up on the state entirely.
+	if (s_frames_run < STATE_LOAD_MIN_FRAMES)
+	{
+		s_pending_state.assign(zip, zip + header.zip_size);
+		return true;
+	}
+
+	s_pending_state.clear(); // an explicit load supersedes anything still queued
+	return ApplyStateFromBuffer(zip, header.zip_size);
 }
 
 void retro_cheat_reset(void) {}
