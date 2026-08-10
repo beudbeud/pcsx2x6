@@ -2200,20 +2200,26 @@ void Host::OnGameChanged(const std::string& title, const std::string& elf_overri
 
 void Host::OnPerformanceMetricsUpdated()
 {
-	// Per-thread load report every ~5s (metrics update every 0.5s) — bottleneck
-	// hunting: attract mode runs under 60fps on RPi5 and MTVU made no difference,
-	// so the limiter is EE or GS, not VU1.
 	static int s_perf_log_divider = 0;
 	if ((++s_perf_log_divider % 10) != 0)
 		return;
+
+#ifdef PCSX2_DEVBUILD
+	// Per-thread load report every ~5s (metrics update every 0.5s) — bottleneck
+	// hunting: it is what tells EE-bound from GS-bound, and a game that stopped
+	// producing these has stopped emulating. Dev/Debug builds only: a release
+	// core has no business writing a log line every 5 seconds forever.
 	INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}%",
 		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
 		PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage());
+#endif
 
 #if defined(__aarch64__)
-	// Same cadence as the perf line, so a hot spot can be read against the
-	// thread loads of the very same window. No-op unless PCSX2_EE_PROFILE=1.
+	// NOT under PCSX2_DEVBUILD on purpose: profiling a Debug build measures
+	// unoptimised code, which is worthless for finding where release-build time
+	// goes. Stays gated on PCSX2_EE_PROFILE=1 instead — without it the JIT emits
+	// no counters at all, so a release core pays nothing.
 	EEInterpProfileDump();
 #endif
 }
