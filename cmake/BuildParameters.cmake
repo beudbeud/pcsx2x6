@@ -37,6 +37,18 @@ if(UNIX)
 	option(USE_LINKED_FFMPEG "Links with ffmpeg instead of using dynamic loading" OFF)
 endif()
 
+# common/Perf.cpp already writes /tmp/perf-<pid>.map, and every recompiler
+# already registers its blocks (Perf::ee/iop/any) — but the whole thing is
+# compiled out unless ProfileWithPerf is defined, and nothing exposed it. With
+# the map, `perf report` attributes samples to guest block PCs (EE_00100148)
+# instead of one opaque JIT address range, which is the only way to see where
+# time goes inside recompiled code. Needs the perf binary on the target.
+option(ENABLE_PERF_PROFILE "Emit /tmp/perf-<pid>.map so perf can symbolise JIT blocks" OFF)
+if(ENABLE_PERF_PROFILE)
+	add_compile_definitions(ProfileWithPerf)
+	message(STATUS "perf JIT symbolisation enabled (ProfileWithPerf)")
+endif()
+
 if(APPLE)
 	option(OSX_USE_DEFAULT_SEARCH_PATH "Don't prioritize system library paths" OFF)
 	option(SKIP_POSTPROCESS_BUNDLE "Skip postprocessing bundle for redistributability" OFF)
