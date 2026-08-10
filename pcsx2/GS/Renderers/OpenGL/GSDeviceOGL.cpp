@@ -869,6 +869,12 @@ bool GSDeviceOGL::CheckFeatures()
 	m_features.broken_point_sampler = false;
 	m_features.primitive_id = true;
 
+	// GLES may omit dual-source blending (GL_EXT/ARB_blend_func_extended); desktop GL always has it.
+	// When absent, GSRendererHW emulates SRC1 blend equations in-shader per-draw rather than forcing
+	// a global high blending-accuracy level (Mali no longer needs Blending=Max). From sashkinbro/EmuCoreX.
+	m_features.dual_source_blend =
+		!m_is_gles || GLAD_GL_EXT_blend_func_extended || GLAD_GL_ARB_blend_func_extended;
+
 	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch ||
 		(m_is_gles && GLAD_GL_ARM_shader_framebuffer_fetch);
 	if (m_features.framebuffer_fetch && GSConfig.DisableFramebufferFetch)

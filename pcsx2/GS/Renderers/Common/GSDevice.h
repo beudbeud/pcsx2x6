@@ -1395,10 +1395,16 @@ public:
 		bool aa1                  : 1; ///< Supports the GS AA1 feature.
 		bool rov                  : 1; ///< Supports rasterizer ordered views for both depth and color.
 		bool color_clip           : 1; ///< ColorClip (R16G16B16A16_UNORM) format is renderable. Required for HW colclip emulation.
+		bool dual_source_blend    : 1; ///< Supports a second fragment output (SRC1) as a hardware blend factor.
 		FeatureSupport()
 		{
 			memset(this, 0, sizeof(*this));
 			color_clip = true; // Default true; Vulkan clears this if the format is not a supported RT.
+			// Desktop backends (GL 3.3+, Metal, DX) always support this. GLES and Vulkan override it
+			// after querying the device, because mobile GPUs (notably Mali) may omit dual-source
+			// blending. When absent, GSRendererHW emulates SRC1 blend equations in-shader per-draw
+			// instead of forcing a global high blending-accuracy level. Ported from sashkinbro/EmuCoreX.
+			dual_source_blend = true;
 		}
 		/// Supports feedback loops through either texture barriers or rt copies.
 		bool feedback_loops() const { return texture_barrier || multidraw_fb_copy; }
