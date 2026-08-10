@@ -232,10 +232,27 @@ static bool harnessShouldExit()
 }
 #endif
 
+// Profiler hooks, defined with the rest of the profiler further down.
+static bool eeProfileEnabled();
+static u64 s_ee_dispatch_hits;
+
 // ARM64 EE dispatcher — same two-level LUT as IOP but using cpuRegs.pc
 static const void* _DynGen_DispatcherReg()
 {
 	u8* retval = armGetCurrentCodePointer();
+
+	// Profiling: how many block entries come through here (two dependent
+	// loads + an indirect branch) instead of a direct link. Against the
+	// per-block entry total this says whether the hot loops are re-dispatching
+	// every iteration or are properly linked. Everything is flushed on entry,
+	// so the scratches are free.
+	if (eeProfileEnabled())
+	{
+		armMoveAddressToReg(RSCRATCHADDR, &s_ee_dispatch_hits);
+		armAsm->Ldr(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
+		armAsm->Add(RXSCRATCH, RXSCRATCH, 1);
+		armAsm->Str(RXSCRATCH, a64::MemOperand(RSCRATCHADDR));
+	}
 
 	armAsm->Ldr(a64::w0, armCpuRegMem(&cpuRegs.pc));
 
@@ -1860,7 +1877,7 @@ static void eeProfileEmitHit(const R5900::OPCODE& op)
 // while profiling. That skews ABSOLUTE numbers; the RANKING between blocks —
 // the only thing this is read for — stays honest.
 // ---------------------------------------------------------------------------
-static constexpr u32 EE_BLOCK_PROFILE_MAX = 16384;
+static constexpr u32 EE_BLOCK_PROFILE_MAX = 65536; // 16384 saturated on SoulCalibur 3
 static u64 s_ee_block_hits[EE_BLOCK_PROFILE_MAX];
 static u32 s_ee_block_pc[EE_BLOCK_PROFILE_MAX];
 static std::unordered_map<u32, u32> s_ee_block_slots;
@@ -1912,7 +1929,9 @@ static void eeProfileDumpBlocks()
 	for (u32 i = 0; i < count; i++)
 	{
 		total += s_ee_block_hits[i];
-		if (s_ee_block_hits[i] != 0)
+		// Slot MAX-1 is the shared overflow bucket (pc stays 0). It counts
+		// toward the total but must not appear in the ranking as a block.
+		if (s_ee_block_hits[i] != 0 && s_ee_block_pc[i] != 0)
 			order.push_back(i);
 	}
 	if (total == 0)
@@ -1924,7 +1943,10 @@ static void eeProfileDumpBlocks()
 	std::sort(order.begin(), order.end(),
 		[](u32 a, u32 b) { return s_ee_block_hits[a] > s_ee_block_hits[b]; });
 
-	std::string line = fmt::format("EE hot blocks: {} entries over {} blocks |", total, count);
+	const u64 dispatched = s_ee_dispatch_hits;
+	s_ee_dispatch_hits = 0;
+	std::string line = fmt::format("EE hot blocks: {} entries over {} blocks, {} via dispatcher ({:.1f}%) |",
+		total, count, dispatched, 100.0 * static_cast<double>(dispatched) / static_cast<double>(total));
 	for (size_t i = 0; i < order.size() && i < 10; i++)
 	{
 		const u32 k = order[i];
