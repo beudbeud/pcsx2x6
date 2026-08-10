@@ -468,7 +468,37 @@ namespace R5900
 						const int way = addr & 0x1;
 						CacheLine line = cache.lineAt(index, way);
 
-						line.tag.setAddr(cpuRegs.CP0.n.TagLo);
+						// TagLo carries a guest physical page. Our tags do not: they hold the
+						// host pointer the fill translated to (CacheLine::load stores `ppf`),
+						// which is what writeBackIfNeeded dereferences, so copying the guest
+						// word in raw aimed a 64-byte store at an address the guest chose --
+						// setAddr zeroes the top 32 bits, so somewhere below 4 GiB: an
+						// emulator crash normally, or a write into whatever happened to be
+						// mapped there. Translate it the way a fill does instead, through the
+						// KSEG0 alias of the physical page (Memory.cpp maps 0x80000000 onto
+						// physical 0), so the write-back lands at the physical address the
+						// guest named, and take isValidPFN from the same translation so the
+						// two cannot disagree. A tag that does not resolve to plain memory --
+						// an MMIO handler page, or a physical address that does not exist --
+						// is marked unbacked; the line still caches and reports its flags,
+						// and loses its data on eviction (see the comment on CacheTag).
+						//
+						// The lookup goes through the physical map, not through the KSEG0
+						// alias of the page: KSEG0 is only 512 MB wide, so routing a
+						// physical page through it meant masking the tag to 29 bits, and
+						// every page at or above 0x20000000 then folded into the low half
+						// of the map and resolved to whatever lives there. Main RAM's
+						// mirror at 0x30000000 came back as the hardware register window
+						// and read as unbacked; a page past the end of the map folded onto
+						// ordinary RAM and the write-back went into it. vtlb_GetPhyPtr
+						// covers the whole 1 GB physical map, mirrors included, and answers
+						// null for both a handler page and an address off the end of it.
+						const u32 pageTag = cpuRegs.CP0.n.TagLo & ~static_cast<u32>(CacheTag::ALL_BITS);
+						void* const host = vtlb_GetPhyPtr(pageTag);
+						const bool backed = host != nullptr;
+
+						line.tag.setValidPFN(backed);
+						line.tag.setAddr(backed ? reinterpret_cast<uptr>(host) : static_cast<uptr>(pageTag));
 						line.tag.rawValue &= ~CacheTag::ALL_FLAGS;
 						line.tag.rawValue |= (cpuRegs.CP0.n.TagLo & CacheTag::ALL_FLAGS);
 
