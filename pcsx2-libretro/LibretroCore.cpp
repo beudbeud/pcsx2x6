@@ -633,6 +633,12 @@ void LibretroHost::RegisterCoreOptions()
 			"extra sync costs more than it saves. Applies on the fly.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_fpu_guarded_addsub", "FPU Guard-Bit Emulation (add/sub)", nullptr,
+			"Emulates the PS2 FPU's missing mantissa guard bits on single-precision add/sub "
+			"(~10 host instructions instead of 1 per ADD.S/SUB.S). Accurate (default); disable "
+			"only for EE-bound titles verified not to need it — wrong physics/geometry otherwise.",
+			nullptr, "performance",
+			{{"enabled", "Enabled (Default)"}, {"disabled", nullptr}, {nullptr, nullptr}}, "enabled"},
 		{"pcsx2_texture_preloading", "Texture Preloading", nullptr,
 			"How much of each texture the hardware renderers upload at once. Full (default) uploads "
 			"whole textures and hash-caches them, trading GS-thread CPU for fewer partial uploads. "
@@ -802,6 +808,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleSkip", get_int_option("pcsx2_ee_cycle_skip", "0"));
 	s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "vuThread",
 		std::strcmp(get_option("pcsx2_mtvu", "disabled"), "enabled") == 0);
+	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "fpuGuardedAddSub",
+		std::strcmp(get_option("pcsx2_fpu_guarded_addsub", "enabled"), "enabled") == 0);
 	s_settings_interface.SetIntValue("EmuCore/GS", "texture_preloading",
 		std::clamp(get_int_option("pcsx2_texture_preloading", "2"), 0, 2));
 
