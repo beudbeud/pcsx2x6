@@ -904,6 +904,18 @@ bool GSDeviceOGL::CheckFeatures()
 	else
 		m_features.texture_barrier = m_features.framebuffer_fetch || GLAD_GL_ARB_texture_barrier || GLAD_GL_NV_texture_barrier;
 
+	// V3D (RPi5): the driver's CopyImageSubData lands in mesa's
+	// util_resource_copy_region CPU fallback — measured at ~15-20% of the GS
+	// thread on SC3's merge path (v3d_move_pixels_general in perf), with the
+	// GPU near 0%. Route copy-shaped StretchRects back through the draw path
+	// there; every other driver keeps the cheaper true copy.
+	{
+		const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+		m_features.cpu_copy_image = renderer && std::strstr(renderer, "V3D");
+		if (m_features.cpu_copy_image)
+			Console.WriteLn("GL: V3D driver detected — copy-shaped StretchRects stay on the draw path.");
+	}
+
 	m_features.provoking_vertex_last = true;
 	m_features.dxt_textures = GLAD_GL_EXT_texture_compression_s3tc;
 	m_features.bptc_textures =

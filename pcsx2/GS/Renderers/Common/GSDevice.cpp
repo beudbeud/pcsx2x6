@@ -907,7 +907,9 @@ bool GSDevice::TryStretchRectAsCopy(GSTexture* sTex, const GSVector4& sRect, GST
 void GSDevice::StretchRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect,
 	ShaderConvertSelector shader, Filter filter)
 {
-	if (TryStretchRectAsCopy(sTex, sRect, dTex, dRect, shader))
+	// cpu_copy_image (V3D): the "copy" would be a CPU memcpy on the GS
+	// thread while the GPU idles — the draw is strictly cheaper there.
+	if (!m_features.cpu_copy_image && TryStretchRectAsCopy(sTex, sRect, dTex, dRect, shader))
 		return;
 
 	DoStretchRectWithAssertions(sTex, sRect, dTex, dRect, shader, filter);
