@@ -1924,17 +1924,28 @@ void GSDeviceOGL::CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r
 	if (dTex->GetState() == GSTexture::State::Cleared && !full_draw_copy)
 		CommitClear(dTex, false);
 
-	if (GLAD_GL_VERSION_4_3 || GLAD_GL_ARB_copy_image)
+	// GE-17 (V3D): CopyImageSubData lands in mesa's util_resource_copy_region
+	// CPU fallback (~18% of the GS thread on SC3's merge path, GPU idle).
+	// Route COLOR copies through the FBO + CopyTexSubImage fallback below —
+	// mesa services that with the driver blit (TFU / render blit) on the GPU.
+	// Depth stays on copy_image: a depth CopyTexSubImage is not legal on
+	// GLES, and depth copies were never the hot path. (The first attempt
+	// skipped the copy conversion entirely and drew instead — that stalled
+	// the interlaced-merge presents: SC3 menus 60->50 fps at idle CPU.)
+	const bool use_copy_image = !(m_features.cpu_copy_image && !sTex->IsDepthStencil()) &&
+		(GLAD_GL_VERSION_4_3 || GLAD_GL_ARB_copy_image || GLAD_GL_EXT_copy_image || GLAD_GL_NV_copy_image);
+
+	if (use_copy_image && (GLAD_GL_VERSION_4_3 || GLAD_GL_ARB_copy_image))
 	{
 		glCopyImageSubData(sid, GL_TEXTURE_2D, 0, r.x, r.y, 0, did, GL_TEXTURE_2D,
 			0, destX, destY, 0, r.width(), r.height(), 1);
 	}
-	else if (GLAD_GL_EXT_copy_image)
+	else if (use_copy_image && GLAD_GL_EXT_copy_image)
 	{
 		glCopyImageSubDataEXT(sid, GL_TEXTURE_2D, 0, r.x, r.y, 0, did, GL_TEXTURE_2D,
 			0, destX, destY, 0, r.width(), r.height(), 1);
 	}
-	else if (GLAD_GL_NV_copy_image)
+	else if (use_copy_image && GLAD_GL_NV_copy_image)
 	{
 		glCopyImageSubDataNV(sid, GL_TEXTURE_2D, 0, r.x, r.y, 0, did, GL_TEXTURE_2D,
 			0, destX, destY, 0, r.width(), r.height(), 1);
