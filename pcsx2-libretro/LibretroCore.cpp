@@ -222,6 +222,9 @@ namespace LibretroHost
 	static std::atomic<u32> s_audio_sample_rate{SAMPLE_RATE};
 	static bool s_memory_map_sent = false;
 	static std::atomic<u32> s_aspect_bits{0};
+	// Release perf-log opt-in (pcsx2_perf_log core option); written by
+	// ReadCoreOptions, read from the perf-metrics callback on the GS thread.
+	static std::atomic<bool> s_perf_log_option{false};
 
 	class LibretroAudioStream final : public AudioStream
 	{
@@ -633,6 +636,11 @@ void LibretroHost::RegisterCoreOptions()
 			"extra sync costs more than it saves. Applies on the fly.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_perf_log", "Performance Log", nullptr,
+			"Print the per-thread load line (fps | EE GS GSB VU | GPU) to the frontend log every ~5s. "
+			"The bench/tuning workflow reads these lines; costs nothing measurable.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
 		{"pcsx2_fpu_guarded_addsub", "FPU Guard-Bit Emulation (add/sub)", nullptr,
 			"Emulates the PS2 FPU's missing mantissa guard bits on single-precision add/sub "
 			"(~10 host instructions instead of 1 per ADD.S/SUB.S). Accurate (default); disable "
@@ -810,6 +818,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		std::strcmp(get_option("pcsx2_mtvu", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "fpuGuardedAddSub",
 		std::strcmp(get_option("pcsx2_fpu_guarded_addsub", "enabled"), "enabled") == 0);
+	s_perf_log_option.store(
+		std::strcmp(get_option("pcsx2_perf_log", "disabled"), "enabled") == 0, std::memory_order_relaxed);
 	s_settings_interface.SetIntValue("EmuCore/GS", "texture_preloading",
 		std::clamp(get_int_option("pcsx2_texture_preloading", "2"), 0, 2));
 
@@ -2215,16 +2225,17 @@ void Host::OnPerformanceMetricsUpdated()
 	// Per-thread load report every ~5s (metrics update every 0.5s) — bottleneck
 	// hunting: it is what tells EE-bound from GS-bound, and a game that stopped
 	// producing these has stopped emulating. Dev/Debug builds always; a release
-	// core has no business writing a log line every 5 seconds forever, so there
-	// it is opt-in via PCSX2_PERF_LOG=1 (the A/B bench rig reads these lines
-	// from Release cores — the build the numbers actually matter for).
+	// core has no business writing a log line every 5 seconds by default, so
+	// there it is opt-in: the pcsx2_perf_log core option (frontend-launched
+	// sessions) or PCSX2_PERF_LOG=1 in the environment (the scripted bench rig).
 #ifdef PCSX2_DEVBUILD
 	constexpr bool perf_log = true;
 #else
-	static const bool perf_log = []() {
+	static const bool perf_log_env = []() {
 		const char* v = std::getenv("PCSX2_PERF_LOG");
 		return v && *v == '1';
 	}();
+	const bool perf_log = perf_log_env || s_perf_log_option.load(std::memory_order_relaxed);
 #endif
 	if (perf_log)
 	{
