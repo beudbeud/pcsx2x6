@@ -275,14 +275,15 @@ struct cpuRegistersPack
 	alignas(16) fpuRegisters fpuRegs;
 
 	// EE call-ret shadow-stack ring (arm64 EE recompiler, EE_CALLRET_STACK;
-	// see iR5900-arm64.cpp). Lives in the pack so JIT block tails reach both
-	// fields with single [RSTATE, #imm] accesses. Prediction-only state: NOT
+	// see iR5900-arm64.cpp). Lives in the pack so JIT block tails reach it
+	// with a single [RSTATE, #imm] access. Prediction-only state: NOT
 	// savestate-serialized (Freeze(cpuRegs) covers cpuRegisters alone) and
-	// reset by recResetRaw. eeCallRetOff is a byte offset into the ring,
-	// 16-aligned, wrapped by the emitted And; u64 so JIT stores stay whole-
-	// register. x86 builds carry the 16 bytes and never touch them.
-	alignas(16) u64 eeCallRetBase;
-	u64 eeCallRetOff;
+	// reset by recResetRaw. GE-16: one live frame pointer (base | offset —
+	// the ring is 64KB-aligned and 64KB-sized, so the emitted Bfxil wraps
+	// the low 16 bits in place, keeping base+off recombination and the
+	// separate offset load off the push/pop paths). Always 16-aligned.
+	// x86 builds carry the 8 bytes and never touch them.
+	alignas(16) u64 eeCallRetPtr;
 
 	// COP2 macro-mode constants/scratch — in the pack for the same reason as
 	// the call-ret fields: one [RSTATE, #imm] instruction per access from
