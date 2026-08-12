@@ -636,6 +636,12 @@ void LibretroHost::RegisterCoreOptions()
 			"extra sync costs more than it saves. Applies on the fly.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_fast_cdvd", "Fast CDVD", nullptr,
+			"Removes the emulated DVD seek/read delays. Shortens loads and menu/character-select "
+			"asset streaming; a few titles depend on real disc timing (leave disabled if a game "
+			"hangs or skips FMVs).",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
 		{"pcsx2_perf_log", "Performance Log", nullptr,
 			"Print the per-thread load line (fps | EE GS GSB VU | GPU) to the frontend log every ~5s. "
 			"The bench/tuning workflow reads these lines; costs nothing measurable.",
@@ -820,6 +826,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		std::strcmp(get_option("pcsx2_fpu_guarded_addsub", "enabled"), "enabled") == 0);
 	s_perf_log_option.store(
 		std::strcmp(get_option("pcsx2_perf_log", "disabled"), "enabled") == 0, std::memory_order_relaxed);
+	s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "fastCDVD",
+		std::strcmp(get_option("pcsx2_fast_cdvd", "disabled"), "enabled") == 0);
 	s_settings_interface.SetIntValue("EmuCore/GS", "texture_preloading",
 		std::clamp(get_int_option("pcsx2_texture_preloading", "2"), 0, 2));
 
