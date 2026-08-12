@@ -646,14 +646,39 @@ static void recLoad(u32 bits, bool sign)
 		// order-safe (writeback touches memory, not x0) but retiring here
 		// keeps the quad out of the thunk's save mask either way.
 		if (dpin)
+		{
 			_deleteGPRtoNEONreg(_Rt_, DELETE_REG_FREE);
-		// GE-07: with allocator state now live across fastmem, x0 (a pool
-		// member) may hold a guest value — evict it before it becomes the
-		// load result. Freed before mask capture so the thunk skips it too.
-		if (!dpin && arm64gprs[0].inuse)
-			_freeArm64GPR(0);
-		vtlbFastmemRead(addr_reg, dpin ? static_cast<unsigned>(dpin->GetCode()) : 0, bits, sign);
-		recStoreLoadResult(dpin ? *dpin : a64::Register(a64::x0));
+			vtlbFastmemRead(addr_reg, static_cast<unsigned>(dpin->GetCode()), bits, sign);
+			recStoreLoadResult(*dpin);
+		}
+		else
+		{
+			// GE-07: with allocator state live across fastmem, x0 (a pool
+			// member) may hold a guest value — evict it before it becomes the
+			// load result / dest scratch. Freed before mask capture so the
+			// thunk skips it too.
+			if (arm64gprs[0].inuse)
+				_freeArm64GPR(0);
+
+			// GE-15: unpinned dest — resolve it through the central GE-M2
+			// write API. A still-live Rt gets a MODE_WRITE pool slot and the
+			// Ldr lands straight in it, leaving the result RESIDENT (the
+			// _eeStoreGPRDestReg below emits nothing, marks the slot
+			// MODE_READ so consumers pick it up, and the canonical store is
+			// deferred to the next flush seam). A dead Rt (or $zero) resolves
+			// to the x0 scratch and keeps the old immediate-Str shape. The
+			// backpatch thunk already excludes a GPR load's data_register
+			// from its save mask and lands the slow-path C result there
+			// (RecStubs). Dest resolution runs after the address is in
+			// w9/a pin: an alloc eviction only emits a writeback Str, which
+			// can't clobber either.
+			const a64::Register dest =
+				_Rt_ ? _eeGetGPRDestReg(_Rt_, a64::x0, /*alloc_if_used=*/true)
+				     : a64::Register(a64::x0);
+			vtlbFastmemRead(addr_reg, static_cast<int>(dest.GetCode()), bits, sign);
+			if (_Rt_)
+				_eeStoreGPRDestReg(_Rt_, dest);
+		}
 	}
 	else
 	{
