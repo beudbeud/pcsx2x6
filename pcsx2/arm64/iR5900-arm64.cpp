@@ -1058,8 +1058,8 @@ void armAssertRawGPRPtrCoherent(const void* field)
 // call site's BL, so a matching guest JR-$ra can RET to it and the hardware
 // return-address stack — pushed by that BL — predicts the transfer.
 //
-// Ring instead of FEX's guard-page stack: eeCallRetOff wraps via a masked
-// And, so over/underflow simply cycles the ring — no bounds checks, no
+// Ring instead of FEX's guard-page stack: the frame pointer's low 16 bits
+// wrap via an in-place Bfxil (GE-16), so over/underflow simply cycles the ring — no bounds checks, no
 // SIGSEGV recentering (our PageFaultHandler interface exposes no ucontext),
 // and net push/pop imbalance (interpreter-path calls, exceptions, thread
 // switches) degrades to compare-misses that re-sync within one call depth.
@@ -1073,10 +1073,12 @@ void armAssertRawGPRPtrCoherent(const void* field)
 namespace
 {
 	constexpr u32 kEECallRetRingBytes = 0x10000; // 4096 x 16-byte frames
-	constexpr u64 kEECallRetOffMask = kEECallRetRingBytes - 16;
 	constexpr u64 kEECallRetSentinelRA = 1;
 
-	alignas(16) u8 s_eeCallRetRing[kEECallRetRingBytes];
+	// GE-16: aligned to its own size, so a frame pointer is base | offset and
+	// the emitted push/pop wrap the low 16 bits in place with one Bfxil —
+	// no separate base/offset loads, no And-mask, no recombining Add.
+	alignas(kEECallRetRingBytes) u8 s_eeCallRetRing[kEECallRetRingBytes];
 
 	void eeCallRetResetRing()
 	{
@@ -1086,8 +1088,7 @@ namespace
 			p[i] = kEECallRetSentinelRA;
 			p[i + 1] = 0;
 		}
-		_cpuRegistersPack.eeCallRetBase = reinterpret_cast<u64>(s_eeCallRetRing);
-		_cpuRegistersPack.eeCallRetOff = 0;
+		_cpuRegistersPack.eeCallRetPtr = reinterpret_cast<u64>(s_eeCallRetRing);
 	}
 
 	// (Push/pop emission is gated off at the recJAL/recJALR/recJR call sites
@@ -1104,12 +1105,13 @@ namespace
 	{
 		armAsm->Mov(RXSCRATCH, return_pc);
 		armAsm->Adr(RSCRATCHADDR, landing);
-		armAsm->Ldr(a64::x9, armCpuRegMem(&_cpuRegistersPack.eeCallRetBase));
-		armAsm->Ldr(a64::x10, armCpuRegMem(&_cpuRegistersPack.eeCallRetOff));
-		armAsm->Sub(a64::x10, a64::x10, 16);
-		armAsm->And(a64::x10, a64::x10, kEECallRetOffMask);
-		armAsm->Str(a64::x10, armCpuRegMem(&_cpuRegistersPack.eeCallRetOff));
-		armAsm->Add(a64::x9, a64::x9, a64::x10);
+		// GE-16: pre-decrement the live frame pointer, wrapping the low 16
+		// bits in place (ring aligned to its 64KB size). The pointer stays
+		// 16-aligned, so the old And-mask's low-bit clearing is preserved.
+		armAsm->Ldr(a64::x9, armCpuRegMem(&_cpuRegistersPack.eeCallRetPtr));
+		armAsm->Sub(a64::x10, a64::x9, 16);
+		armAsm->Bfxil(a64::x9, a64::x10, 0, 16);
+		armAsm->Str(a64::x9, armCpuRegMem(&_cpuRegistersPack.eeCallRetPtr));
 		armAsm->Stp(RXSCRATCH, RSCRATCHADDR, a64::MemOperand(a64::x9));
 	}
 } // namespace
@@ -1231,13 +1233,13 @@ void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg)
 		// event detour (which still reaches the return target through the
 		// dispatcher) leaves the ring balanced. Frame regs survive the event
 		// check below: it is flags-only (Adds/Cmp + b.ge).
-		armAsm->Ldr(a64::x9, armCpuRegMem(&_cpuRegistersPack.eeCallRetBase));
-		armAsm->Ldr(a64::x10, armCpuRegMem(&_cpuRegistersPack.eeCallRetOff));
-		armAsm->Add(a64::x9, a64::x9, a64::x10);
+		// GE-16: read the frame at the live pointer, then post-increment it
+		// with the in-place Bfxil wrap (see emitCallRetPush).
+		armAsm->Ldr(a64::x9, armCpuRegMem(&_cpuRegistersPack.eeCallRetPtr));
 		armAsm->Ldp(RXSCRATCH, RSCRATCHADDR, a64::MemOperand(a64::x9));
-		armAsm->Add(a64::x10, a64::x10, 16);
-		armAsm->And(a64::x10, a64::x10, kEECallRetOffMask);
-		armAsm->Str(a64::x10, armCpuRegMem(&_cpuRegistersPack.eeCallRetOff));
+		armAsm->Add(a64::x10, a64::x9, 16);
+		armAsm->Bfxil(a64::x9, a64::x10, 0, 16);
+		armAsm->Str(a64::x9, armCpuRegMem(&_cpuRegistersPack.eeCallRetPtr));
 
 		a64::Label event_island;
 		emitCycleUpdateAndEventCheck(&event_island);
