@@ -1396,6 +1396,7 @@ public:
 		bool rov                  : 1; ///< Supports rasterizer ordered views for both depth and color.
 		bool color_clip           : 1; ///< ColorClip (R16G16B16A16_UNORM) format is renderable. Required for HW colclip emulation.
 		bool dual_source_blend    : 1; ///< Supports a second fragment output (SRC1) as a hardware blend factor.
+		bool cpu_copy_image       : 1; ///< Driver's texture-copy entry point (glCopyImageSubData) degrades to a CPU pixel copy (mesa util_resource_copy_region — V3D/RPi5). Prefer the draw path where a shader-equivalent exists: the GPU sits idle while the GS thread does the memcpy.
 		FeatureSupport()
 		{
 			memset(this, 0, sizeof(*this));
