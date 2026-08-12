@@ -2204,16 +2204,27 @@ void Host::OnPerformanceMetricsUpdated()
 	if ((++s_perf_log_divider % 10) != 0)
 		return;
 
-#ifdef PCSX2_DEVBUILD
 	// Per-thread load report every ~5s (metrics update every 0.5s) — bottleneck
 	// hunting: it is what tells EE-bound from GS-bound, and a game that stopped
-	// producing these has stopped emulating. Dev/Debug builds only: a release
-	// core has no business writing a log line every 5 seconds forever.
-	INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}%",
-		PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
-		PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
-		PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage());
+	// producing these has stopped emulating. Dev/Debug builds always; a release
+	// core has no business writing a log line every 5 seconds forever, so there
+	// it is opt-in via PCSX2_PERF_LOG=1 (the A/B bench rig reads these lines
+	// from Release cores — the build the numbers actually matter for).
+#ifdef PCSX2_DEVBUILD
+	constexpr bool perf_log = true;
+#else
+	static const bool perf_log = []() {
+		const char* v = std::getenv("PCSX2_PERF_LOG");
+		return v && *v == '1';
+	}();
 #endif
+	if (perf_log)
+	{
+		INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}%",
+			PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
+			PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
+			PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage());
+	}
 
 #if defined(__aarch64__)
 	// NOT under PCSX2_DEVBUILD on purpose: profiling a Debug build measures
