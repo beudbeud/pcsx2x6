@@ -1029,16 +1029,38 @@ void vu0SyncRunAheadThin()
 //  - VIREG entries are freed WITH writeback: VU0 execution writes VU0.VI, so
 //    a retained VI mirror would go stale across the call.
 //  - TEMP / PCWRITEBACK entries are freed (transient, no reloadable home).
-//  - NEON: same free policy as FLUSH_FREE_XMM — 128-bit classes can't ride a
-//    C call and the macro body that follows wants the file to itself. The VF
-//    compile cache (q16-q20) dies at any C seam.
+//  - NEON (SL-14): EE-side classes (GPRREG quads, FPREG/FPACC) in q11-q15
+//    are retained mapped+dirty — the sync stubs raw-preserve q11-q15 in
+//    full on the sync path, so 128-bit values survive despite AAPCS only
+//    covering the lower halves. VU0-owned VFREG, TEMPs, and caller-saved
+//    spillover are freed. The VF compile cache (q16-q20) dies at any C seam.
 static void cop2FlushForConditionalSync()
 {
 	cop2VfCacheFlush();
 
+	// SL-14: EE-side NEON entries (GPR quads / FPU regs) in the q11-q15
+	// callee-saved range RIDE the seam mapped and dirty — the sync stubs
+	// raw-preserve q11-q15 (full 128 bits) around the sync-path C calls, the
+	// fast (VU0-idle) path touches no NEON, and the sync callees have no path
+	// that reads EE GPR/FPU canonical memory (same argument as the scalar GPR
+	// retention below). VU0-owned classes (VFREG) must still die — the sync
+	// may RUN a VU0 program that writes them — as must TEMPs and anything in
+	// caller-saved spillover. The macro-mode mVU regAlloc can no longer touch
+	// q8-q15 (SL-14 pool gate in microVU_IR-arm64.h), so an inlined macro
+	// body downstream cannot clobber a retained entry behind the allocator's
+	// back; hand-rolled COP2 codegen allocates through the EE allocator,
+	// which evicts retained entries coherently if it needs the slot.
 	for (int i = 0; i < NUM_ARM_NEON_REGS; i++)
 	{
-		if (arm64neon[i].inuse)
+		if (!arm64neon[i].inuse)
+			continue;
+		const bool retainable =
+			static_cast<u32>(i) >= NEON_CALLEE_SAVED_START &&
+			static_cast<u32>(i) < NEON_CALLEE_SAVED_END &&
+			(arm64neon[i].type == NEONTYPE_GPRREG ||
+				arm64neon[i].type == NEONTYPE_FPREG ||
+				arm64neon[i].type == NEONTYPE_FPACC);
+		if (!retainable)
 			_freeNEONreg(i);
 	}
 
@@ -1070,9 +1092,11 @@ static void cop2FlushForConditionalSync()
 //
 // Fast path (VPU_STAT bit 0 clear — VU0 idle): Ldr + Tbnz + Ret.
 // Sync path: raw-save LR + the caller-saved EE int-allocator pool regs
-// (x4-x7/x14/x15 — where retained GPR/FPRC values live), publish the
-// absolute cycle, flush the lazy-dirty caller-saved pins, run the sync
-// callee(s), re-derive the cycle delta, reload pins, restore, Ret.
+// (x4-x7/x14/x15 — where retained GPR/FPRC values live) + the q11-q15
+// NEON range in full (SL-14 — where retained GPR-quad/FPR entries live;
+// AAPCS only preserves the lower halves), publish the absolute cycle,
+// flush the lazy-dirty caller-saved pins, run the sync callee(s),
+// re-derive the cycle delta, reload pins, restore, Ret.
 
 enum : int
 {
@@ -1095,10 +1119,17 @@ static const u8* cop2DynGenOneSyncStub(void (*syncFn)(), void (*finishFn)())
 	armAsm->Ret();
 
 	armAsm->Bind(&doSync);
-	armAsm->Stp(a64::x4, a64::x5, a64::MemOperand(a64::sp, -64, a64::PreIndex));
+	armAsm->Stp(a64::x4, a64::x5, a64::MemOperand(a64::sp, -160, a64::PreIndex));
 	armAsm->Stp(a64::x6, a64::x7, a64::MemOperand(a64::sp, 16));
 	armAsm->Stp(a64::x14, a64::x15, a64::MemOperand(a64::sp, 32));
 	armAsm->Str(a64::x30, a64::MemOperand(a64::sp, 48));
+	// SL-14: retained EE NEON entries (cop2FlushForConditionalSync) live in
+	// q11-q15 as full 128-bit values — AAPCS only preserves the lower halves,
+	// so raw-save them around the sync callees (which may run mVU JIT code
+	// that uses the whole file). Sync path only; the fast path stays 3 insns.
+	armAsm->Stp(a64::q11, a64::q12, a64::MemOperand(a64::sp, 64));
+	armAsm->Stp(a64::q13, a64::q14, a64::MemOperand(a64::sp, 96));
+	armAsm->Str(a64::q15, a64::MemOperand(a64::sp, 128));
 
 	// Publish the absolute cycle before the sync — the callees read
 	// cpuRegs.cycle to determine how many VU0 micro cycles to run — and
@@ -1128,10 +1159,13 @@ static const u8* cop2DynGenOneSyncStub(void (*syncFn)(), void (*finishFn)())
 	armAsm->Dup(a64::v25.V4S(), a64::v8.V4S(), 0);
 	armAsm->Dup(a64::v26.V4S(), a64::v9.V4S(), 0);
 
+	armAsm->Ldr(a64::q15, a64::MemOperand(a64::sp, 128));
+	armAsm->Ldp(a64::q13, a64::q14, a64::MemOperand(a64::sp, 96));
+	armAsm->Ldp(a64::q11, a64::q12, a64::MemOperand(a64::sp, 64));
 	armAsm->Ldr(a64::x30, a64::MemOperand(a64::sp, 48));
 	armAsm->Ldp(a64::x14, a64::x15, a64::MemOperand(a64::sp, 32));
 	armAsm->Ldp(a64::x6, a64::x7, a64::MemOperand(a64::sp, 16));
-	armAsm->Ldp(a64::x4, a64::x5, a64::MemOperand(a64::sp, 64, a64::PostIndex));
+	armAsm->Ldp(a64::x4, a64::x5, a64::MemOperand(a64::sp, 160, a64::PostIndex));
 	armAsm->Ret();
 
 	return start;
