@@ -90,9 +90,15 @@ protected:
 	}
 
 	// SL-13: NEON pool gate — cop2mode excludes q25/q26 (see reset()).
+	// SL-14: cop2mode additionally excludes q8-q15. Macro-mode emitters run
+	// INLINE in EE blocks, where q8/q9/q10 hold the pinned FPU clamp/mulmask
+	// constants (previously a latent clobber — first-fit never reached them)
+	// and q11-q15 now carry RETAINED EE allocator entries across the COP2
+	// sync seam (cop2FlushForConditionalSync keeps GPR-quad/FPR homes mapped;
+	// the sync stubs raw-preserve q11-q15). Micro mode keeps the full pool.
 	__ri bool neonUsable(int i) const
 	{
-		return !neonCop2Mode || (i != 25 && i != 26);
+		return !neonCop2Mode || ((i < 8 || i > 15) && i != 25 && i != 26);
 	}
 
 	// Find least-recently-used NEON reg (recursive, for eviction)
