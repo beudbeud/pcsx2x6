@@ -17,12 +17,20 @@
 //     reclaimed until a full reset, so this 4-byte rewrite always lands
 //     on memory the recompiler still owns.
 //
-// Stale sites divert to the DISPATCHER, never to JITCompile. Every link
-// tail stores the target guest pc into cpuRegs.pc before its branch (both
-// recs, all forms — see SetBranchImm / psxSetBranchImm), so a diverted
-// site re-dispatches from a pc that is already correct; the recLUT (the
-// single SMC-invalidation rewrite point) then routes it to the current
-// code, or through JITCompile if the target is genuinely uncompiled.
+// Stale sites divert to the DISPATCHER, never to JITCompile. The
+// dispatcher re-dispatches from cpuRegs.pc, so every diversion must see a
+// correct pc there. Two policies keep that true:
+//   - IOP rec (and legacy forms): every link tail stores the target guest
+//     pc before its branch (psxSetBranchImm), so a plain divert to
+//     DispatcherReg is enough.
+//   - EE rec (GE-13): linked tails do NOT store pc on the hot path.
+//     Instead each Link() passes a `stale_target` — a per-exit island that
+//     publishes the target pc and exits via DispatcherEvent — and each
+//     block carries a `redirect_stub` (publishes its own startpc, then
+//     DispatcherReg) that Remove() stamps over the entry.
+// Either way the recLUT (the single SMC-invalidation rewrite point) then
+// routes to the current code, or through JITCompile if the target is
+// genuinely uncompiled.
 // Routing stale sites at JITCompile directly instead re-enters
 // recRecompile on an already-compiled block whenever the target has been
 // removed-and-recompiled — tripping the fnptr assert on Devel, and on
@@ -234,7 +242,12 @@ public:
 	// `pc`. Patches immediately if a block already exists; otherwise
 	// records the site so New(pc, ...) can patch it later. `call` sites
 	// get BL instead of B (and keep it across every re-patch).
-	void Link(u32 pc, void* patch_site, bool call = false)
+	// `stale_target` (GE-13): where the site branches while the target is
+	// uncompiled. Non-zero = a caller-provided stub that publishes the
+	// target pc itself (the EE rec's per-exit event island); zero = the
+	// plain dispatcher divert, valid only when the site's own tail stores
+	// pc (IOP rec, dynamic-pc landings).
+	void Link(u32 pc, void* patch_site, bool call = false, uptr stale_target = 0)
 	{
 		pxAssertRel(jitcompile, "SetJITCompile() must be called before Link()");
 		pxAssertRel((reinterpret_cast<uptr>(patch_site) & kLinkSiteCallBit) == 0,
@@ -242,7 +255,7 @@ public:
 
 		BASEBLOCKEX* target = Get(pc);
 		const uptr target_addr = (target && target->startpc == pc)
-			? target->fnptr : StaleDispatchTarget();
+			? target->fnptr : (stale_target ? stale_target : StaleDispatchTarget());
 		// No flush: the site is in the block being emitted right now, and
 		// armEndBlock() range-flushes that buffer. See PatchWord.
 		PatchWord(reinterpret_cast<uptr>(patch_site),
@@ -389,7 +402,12 @@ public:
 			for (int i = first; i <= last; ++i)
 			{
 				const uptr site = blocks[i].fnptr;
-				PatchAtomic(site, EncodeB(site, StaleDispatchTarget()));
+				// GE-13: prefer the block's own redirect stub — it re-publishes
+				// startpc, which linked callers no longer store. Flat-array
+				// field read only, so the signal-safety contract holds.
+				const uptr divert = blocks[i].redirect_stub
+					? blocks[i].redirect_stub : StaleDispatchTarget();
+				PatchAtomic(site, EncodeB(site, divert));
 
 				if (blocks[i].backedge_site)
 					PatchAtomic(blocks[i].backedge_site,

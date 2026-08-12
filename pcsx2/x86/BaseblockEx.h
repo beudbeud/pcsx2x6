@@ -36,6 +36,14 @@ struct BASEBLOCKEX
 	uptr backedge_site;
 	uptr backedge_stub;
 
+	// arm64 GE-13 (unused by the x86 rec, zeroed by insert()): cold per-block
+	// entry-redirect stub (`mov pc, #startpc; str; b DispatcherReg`). Linked
+	// tails no longer publish cpuRegs.pc on the hot path, so the stale-entry
+	// stamp Remove() writes must publish this block's startpc itself before
+	// re-dispatching. Zero (x86 rec, IOP rec) falls back to a direct
+	// `B DispatcherReg`, which relies on the caller's tail having stored pc.
+	uptr redirect_stub;
+
 #ifdef PCSX2_DEVBUILD
 	// Could be useful to instrument the block
 	//u32 visited; // number of times called
