@@ -1116,19 +1116,44 @@ namespace
 
 // Block-tail cycle update + event check under the delta representation:
 // fold the pending block cycles into RECCYCLE with a flag-setting add, then
-// branch to DispatcherEvent when the delta is non-negative (an event is
+// branch to `event_island` when the delta is non-negative (an event is
 // due). Replaces the old per-exit `ldr nextEventCycle; cmp; b.ge` — no
 // memory access on the hot linked path. The adds can't overflow s64: the
 // delta stays within the event-scheduling horizon (≤ a frame) and block
 // cycles are 16-bit scaled.
-static void emitCycleUpdateAndEventCheck()
+//
+// GE-13: the taken (event-due) arm targets a LOCAL island the caller binds
+// after its tail, not DispatcherEvent directly. DispatcherEvent sits at the
+// front of the 64MB EE region, beyond B.cond's ±1MB imm19 for nearly every
+// block, and armEmitCondBranch's out-of-range fallback inverts the
+// condition into a skip-over-B pair — a TAKEN branch on every hot linked
+// exit. The nearby island keeps the hot path a fall-through b.ge.
+static void emitCycleUpdateAndEventCheck(a64::Label* event_island)
 {
 	const u32 cycles = scaleblockcycles_clear();
 	if (cycles != 0)
 		armAsm->Adds(RECCYCLE, RECCYCLE, cycles);
 	else
 		armAsm->Cmp(RECCYCLE, 0);
-	armEmitCondBranch(a64::ge, DispatcherEvent);
+	armAsm->B(event_island, a64::ge);
+}
+
+// GE-13 island tails. Plain form: cpuRegs.pc is already published
+// (dynamic-target tails store it inline). Pc form: publishes the
+// compile-time target before exiting — linked tails no longer store pc on
+// the hot path, and every dispatcher entry must see a correct one.
+static void emitEventIsland(a64::Label* event_island)
+{
+	armAsm->Bind(event_island);
+	armEmitJmp(DispatcherEvent);
+}
+
+static void emitEventIslandWithPc(a64::Label* event_island, u32 target_pc)
+{
+	armAsm->Bind(event_island);
+	armAsm->Mov(RWSCRATCH, target_pc);
+	armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
+	armEmitJmp(DispatcherEvent);
 }
 
 void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg)
@@ -1214,7 +1239,8 @@ void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg)
 		armAsm->And(a64::x10, a64::x10, kEECallRetOffMask);
 		armAsm->Str(a64::x10, armCpuRegMem(&_cpuRegistersPack.eeCallRetOff));
 
-		emitCycleUpdateAndEventCheck();
+		a64::Label event_island;
+		emitCycleUpdateAndEventCheck(&event_island);
 
 		// Hit: RET to the frame's landing — paired with the pushing BL, the
 		// hardware RAS predicts it. Miss: STILL exit via RET (into the
@@ -1230,6 +1256,8 @@ void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg)
 		armAsm->Bind(&miss);
 		armMoveAddressToReg(RSCRATCHADDR, DispatcherReg);
 		armAsm->Ret(RSCRATCHADDR);
+
+		emitEventIsland(&event_island); // pc stored above (dynamic target)
 	}
 	else if (mode == EEBranchRegMode::Call)
 	{
@@ -1240,7 +1268,8 @@ void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg)
 		a64::Label landing;
 		emitCallRetPush(call_return_pc, &landing);
 
-		emitCycleUpdateAndEventCheck();
+		a64::Label event_island;
+		emitCycleUpdateAndEventCheck(&event_island);
 
 		armEmitCall(DispatcherReg);
 
@@ -1249,16 +1278,23 @@ void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg)
 			a64::SingleEmissionCheckScope guard(armAsm);
 			u8* patch_site = armGetCurrentCodePointer();
 			armAsm->b(int64_t{0});
+			// Stale divert: pc at the landing is published dynamically by the
+			// callee's return tail, so the plain dispatcher divert is correct.
 			recBlocks.Link(HWADDR(call_return_pc), patch_site);
 		}
+
+		emitEventIsland(&event_island); // pc stored above (dynamic target)
 	}
 	else
 	{
 		// Update the pinned cycle delta and check events (delta >= 0 →
 		// DispatcherEvent converts RECCYCLE itself before calling recEventTest).
-		emitCycleUpdateAndEventCheck();
+		a64::Label event_island;
+		emitCycleUpdateAndEventCheck(&event_island);
 
 		armEmitJmp(DispatcherReg);
+
+		emitEventIsland(&event_island); // pc stored above (dynamic target)
 	}
 
 	armAsm->Bind(&unaligned);
@@ -1437,19 +1473,20 @@ void SetBranchImm(u32 imm)
 	g_branch = 1;
 	pxAssert(imm);
 
-	armAsm->Mov(RWSCRATCH, imm);
-	armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
-
-	iFlushCall(FLUSH_EVERYTHING);
-
 	// WaitLoop speedhack: when the block scanner detected this block as a
 	// pure-nop spin branching back to itself (s_nBlockFF), fast-forward the
 	// delta to max(delta, 0) — i.e. cycle to max(cycle, nextEventCycle) —
 	// and jump straight to DispatcherEvent. Saves the dozens of iterations
 	// the loop would otherwise burn waiting for an event to fire. Matches
 	// the x86 path in iR5900.cpp:iBranchTest under Speedhacks.WaitLoop.
+	// The exit is unconditional, so pc is published inline.
 	if (EmuConfig.Speedhacks.WaitLoop && s_nBlockFF && imm == s_branchTo)
 	{
+		armAsm->Mov(RWSCRATCH, imm);
+		armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
+
+		iFlushCall(FLUSH_EVERYTHING);
+
 		const u32 cycles = scaleblockcycles_clear();
 		if (cycles != 0)
 			armAsm->Add(RECCYCLE, RECCYCLE, cycles);
@@ -1459,19 +1496,31 @@ void SetBranchImm(u32 imm)
 		return;
 	}
 
-	// Update the pinned cycle delta and check events.
-	emitCycleUpdateAndEventCheck();
+	iFlushCall(FLUSH_EVERYTHING);
+
+	// GE-13 hot linked exit: adds + b.ge (not taken) + linked B. The old
+	// unconditional `mov/str cpuRegs.pc` moved into the event island below:
+	// the linked target never reads pc, only the dispatcher entries do, and
+	// every path that reaches one — event due (b.ge), target not yet
+	// compiled (Link stale_target = the island), target removed (the
+	// target's own redirect_stub) — publishes it first.
+	a64::Label event_island;
+	emitCycleUpdateAndEventCheck(&event_island);
 
 	// Block linking: emit a single B as the patch site. Initially routed
-	// through JITCompile via recBlocks.Link(); once the target block is
-	// compiled, recBlocks.New() rewrites this B's imm26 to branch to the
+	// through the event island via recBlocks.Link(); once the target block
+	// is compiled, recBlocks.New() rewrites this B's imm26 to branch to the
 	// target's fnptr directly, bypassing the dispatcher.
+	u8* patch_site;
 	{
 		a64::SingleEmissionCheckScope guard(armAsm);
-		u8* patch_site = armGetCurrentCodePointer();
+		patch_site = armGetCurrentCodePointer();
 		armAsm->b(int64_t{0}); // placeholder; recBlocks.Link will overwrite
-		recBlocks.Link(HWADDR(imm), patch_site);
 	}
+
+	u8* island = armGetCurrentCodePointer();
+	emitEventIslandWithPc(&event_island, imm);
+	recBlocks.Link(HWADDR(imm), patch_site, /*call=*/false, reinterpret_cast<uptr>(island));
 }
 
 // recJAL tail: SetBranchImm's shape plus a call-ret frame push, a BL-form
@@ -1491,9 +1540,6 @@ void SetBranchImmCall(u32 imm, u32 return_pc)
 	g_branch = 1;
 	pxAssert(imm);
 
-	armAsm->Mov(RWSCRATCH, imm);
-	armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
-
 	iFlushCall(FLUSH_EVERYTHING);
 
 	// Push before the event check: an event detour still reaches the callee
@@ -1502,16 +1548,19 @@ void SetBranchImmCall(u32 imm, u32 return_pc)
 	a64::Label landing;
 	emitCallRetPush(return_pc, &landing);
 
-	emitCycleUpdateAndEventCheck();
+	// GE-13: see SetBranchImm — the callee-pc publication lives in the
+	// event island, which also serves as the BL's stale divert.
+	a64::Label event_island;
+	emitCycleUpdateAndEventCheck(&event_island);
 
-	// BL-form link site: patched toward JITCompile now, re-patched to the
-	// callee block when it compiles — always keeping the BL opcode so the
-	// RAS entry gets pushed no matter where the site currently points.
+	// BL-form link site: patched toward the event island now, re-patched to
+	// the callee block when it compiles — always keeping the BL opcode so
+	// the RAS entry gets pushed no matter where the site currently points.
+	u8* call_site;
 	{
 		a64::SingleEmissionCheckScope guard(armAsm);
-		u8* patch_site = armGetCurrentCodePointer();
+		call_site = armGetCurrentCodePointer();
 		armAsm->bl(int64_t{0}); // placeholder; recBlocks.Link will overwrite
-		recBlocks.Link(HWADDR(imm), patch_site, /*call=*/true);
 	}
 
 	// The RET landing: a plain linked B to the return-PC block (the one
@@ -1519,12 +1568,19 @@ void SetBranchImmCall(u32 imm, u32 return_pc)
 	// call so the continuation falls through; our block formation ends at
 	// the call, and one predicted direct B costs ~a cycle on the hit path).
 	armAsm->Bind(&landing);
+	u8* ret_site;
 	{
 		a64::SingleEmissionCheckScope guard(armAsm);
-		u8* patch_site = armGetCurrentCodePointer();
+		ret_site = armGetCurrentCodePointer();
 		armAsm->b(int64_t{0}); // placeholder; recBlocks.Link will overwrite
-		recBlocks.Link(HWADDR(return_pc), patch_site);
 	}
+
+	u8* island = armGetCurrentCodePointer();
+	emitEventIslandWithPc(&event_island, imm);
+	recBlocks.Link(HWADDR(imm), call_site, /*call=*/true, reinterpret_cast<uptr>(island));
+	// Landing stale divert stays the plain dispatcher: pc there is published
+	// dynamically by the callee's return tail (SetBranchReg stores it).
+	recBlocks.Link(HWADDR(return_pc), ret_site);
 }
 
 // =====================================================================================================
@@ -2660,6 +2716,16 @@ static void dyna_page_reset(u32 start, u32 sz)
 	mmap_MarkCountedRamPage(start);
 }
 
+// GE-13: manual-check divert islands. DispatchBlockDiscard/DispatchPageReset
+// fall back into DispatcherReg, which re-dispatches from cpuRegs.pc — no
+// longer published by linked entries — so the head checks branch to a
+// per-block island (bound after the tail by recEmitBlockEntryIslands) that
+// publishes startpc first. Bonus: the B.cond targets a local label instead
+// of a far dispatcher, removing armEmitCondBranch's out-of-range inversion
+// (a taken skip branch on the hot path of every manual-block entry).
+static std::unique_ptr<a64::Label> s_discardIsland;
+static std::unique_ptr<a64::Label> s_pageResetIsland;
+
 // Self-modifying code detection — generates inline memory comparison checks
 // for blocks in manually-protected pages, and sets up page protection for new pages.
 // Port of x86 memory_protect_recompiled_code(). Returns true when the block
@@ -2744,7 +2810,9 @@ static bool memory_protect_recompiled_code(u32 startpc, u32 size)
 					else
 						armAsm->Ccmp(a64::w9, a64::w2, a64::NoFlag, a64::eq);
 				}
-				armEmitCondBranch(a64::ne, DispatchBlockDiscard);
+				if (!s_discardIsland)
+					s_discardIsland = std::make_unique<a64::Label>();
+				armAsm->B(s_discardIsland.get(), a64::ne);
 			}
 			else
 			{
@@ -2763,7 +2831,9 @@ static bool memory_protect_recompiled_code(u32 startpc, u32 size)
 					// Compare with compile-time snapshot
 					armAsm->Mov(a64::w9, expected);
 					armAsm->Cmp(RWSCRATCH, a64::w9);
-					armEmitCondBranch(a64::ne, DispatchBlockDiscard);
+					if (!s_discardIsland)
+						s_discardIsland = std::make_unique<a64::Label>();
+					armAsm->B(s_discardIsland.get(), a64::ne);
 
 					stg -= 4;
 					lpc += 4;
@@ -2780,7 +2850,9 @@ static bool memory_protect_recompiled_code(u32 startpc, u32 size)
 				armAsm->Strh(RWSCRATCH, a64::MemOperand(RSCRATCHADDR));
 				// Check for u16 overflow (bit 16+ set means wrapped past 0xFFFF)
 				armAsm->Tst(RWSCRATCH, 0xFFFF0000u);
-				armEmitCondBranch(a64::ne, DispatchPageReset);
+				if (!s_pageResetIsland)
+					s_pageResetIsland = std::make_unique<a64::Label>();
+				armAsm->B(s_pageResetIsland.get(), a64::ne);
 			}
 			break;
 		}
@@ -3213,8 +3285,10 @@ static bool skipMPEG_By_Pattern(u32 sPC)
 		// due (delta >= 0), else DispatcherReg to run the block at pc=ra.
 		// s_nBlockCycles is still 0 here (no instruction emitted yet) — matches
 		// x86, where iBranchTest's scaleblockcycles() also sees a zero count.
-		emitCycleUpdateAndEventCheck();
+		a64::Label event_island;
+		emitCycleUpdateAndEventCheck(&event_island);
 		armEmitJmp(DispatcherReg);
+		emitEventIsland(&event_island); // pc stored above (from $ra)
 
 		g_branch = 1;
 		pc = s_nEndBlock;
@@ -3224,14 +3298,22 @@ static bool skipMPEG_By_Pattern(u32 sPC)
 	return false;
 }
 
-// Port of x86 recSkipTimeoutLoop().
-static bool recSkipTimeoutLoop(s32 reg, bool is_timeout_loop)
+// Port of x86 recSkipTimeoutLoop(). `vstartpc` is the block's VIRTUAL
+// startpc (cpuRegs.pc holds virtual addresses; s_pCurBlockEx->startpc is
+// the HWADDR'd physical key and would be wrong for KSEG mirrors).
+static bool recSkipTimeoutLoop(u32 vstartpc, s32 reg, bool is_timeout_loop)
 {
 	if (!EmuConfig.Speedhacks.WaitLoop || !is_timeout_loop)
 		return false;
 
 	DevCon.WriteLn("[EE] Skipping timeout loop at 0x%08X -> 0x%08X (reg=%d)",
 		s_pCurBlockEx->startpc, s_nEndBlock, reg);
+
+	// GE-13: linked entries no longer publish cpuRegs.pc, and the two
+	// DispatcherEvent exits below re-dispatch from it — publish the block's
+	// own startpc first. (Cheap: this code replaces an entire timeout loop.)
+	armAsm->Mov(RWSCRATCH, vstartpc);
+	armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
 
 	// Logic: skip the loop by advancing cycles based on the register value.
 	// In delta terms (delta = cycle - nextEventCycle; subtract nextEventCycle
@@ -3426,9 +3508,12 @@ static void recRecompile(const u32 startpc)
 	s_nBlockInterlocked = false;
 
 	// A recompile at a startpc reuses the existing BASEBLOCKEX — drop any
-	// stale SL-1 back-edge registration from the previous compile.
+	// stale SL-1 back-edge / GE-13 redirect-stub registration from the
+	// previous compile (the new ones are set at this compile's tail).
 	s_pCurBlockEx->backedge_site = 0;
 	s_pCurBlockEx->backedge_stub = 0;
+	s_pCurBlockEx->redirect_stub = 0;
+	pxAssert(!s_discardIsland && !s_pageResetIsland);
 
 	pc = startpc;
 	g_cpuHasConstReg = g_cpuFlushedConstReg = 1;
@@ -3925,7 +4010,7 @@ StartRecomp:
 	// Skip-MPEG speedhack fires first (short-circuits the timeout-loop check, as
 	// in x86); both emit a complete self-contained block + set g_branch/pc.
 	const bool doRecompilation = !skipMPEG_By_Pattern(startpc) &&
-		!recSkipTimeoutLoop(timeout_reg, is_timeout_loop && timeout_reg >= 0 && timeout_has_bne);
+		!recSkipTimeoutLoop(startpc, timeout_reg, is_timeout_loop && timeout_reg >= 0 && timeout_has_bne);
 
 	// Code generation (forward pass)
 	if (doRecompilation)
@@ -4077,9 +4162,12 @@ StartRecomp:
 		// post-call remainder.
 		iFlushCall(FLUSH_EVERYTHING);
 
-		emitCycleUpdateAndEventCheck();
+		a64::Label event_island;
+		emitCycleUpdateAndEventCheck(&event_island);
 
 		armEmitJmp(DispatcherReg);
+
+		emitEventIsland(&event_island); // pc stored by the branch's C helper
 	}
 	else
 	{
@@ -4131,6 +4219,36 @@ StartRecomp:
 	// bookkeeping ran on it above). The bodies outline into the cold arena
 	// below, after the hot block finalizes.
 	recEmitSideExitIslands();
+
+	// GE-13 entry islands, in the same cold spot:
+	//  - the manual SMC-check diverts (publish startpc, then the discard /
+	//    page-reset dispatcher — w0/w1 still hold the args the head set up);
+	//  - the entry-redirect stub Remove() stamps over the block entry
+	//    (publish startpc, re-dispatch). Registered on the BASEBLOCKEX like
+	//    backedge_stub. startpc is the VIRTUAL pc, matching what the old
+	//    per-tail `str cpuRegs.pc` published for this block's entry.
+	if (s_discardIsland)
+	{
+		armAsm->Bind(s_discardIsland.get());
+		armAsm->Mov(RWSCRATCH, startpc);
+		armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
+		armEmitJmp(DispatchBlockDiscard);
+		s_discardIsland.reset();
+	}
+	if (s_pageResetIsland)
+	{
+		armAsm->Bind(s_pageResetIsland.get());
+		armAsm->Mov(RWSCRATCH, startpc);
+		armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
+		armEmitJmp(DispatchPageReset);
+		s_pageResetIsland.reset();
+	}
+	{
+		s_pCurBlockEx->redirect_stub = (uptr)armGetCurrentCodePointer();
+		armAsm->Mov(RWSCRATCH, startpc);
+		armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.pc));
+		armEmitJmp(DispatcherReg);
+	}
 
 	pxAssert(armGetCurrentCodePointer() < SysMemory::GetEERecEnd());
 
