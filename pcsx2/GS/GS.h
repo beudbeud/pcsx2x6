@@ -123,7 +123,8 @@ void GSSetFramebufferDMABUFExport(bool enable);
 
 /// Fires on the GS thread when the exported dmabuf changes (first frame / resize): hands the
 /// fd + layout to the frontend, which imports it once and blits it each frame.
-using GSFramebufferDMABUFCallback = void (*)(int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc, u64 modifier);
+using GSFramebufferDMABUFCallback = void (*)(u32 slot, int fd, u32 width, u32 height, u32 stride, u32 offset,
+	u32 fourcc, u64 modifier, int fence_fd);
 void GSSetFramebufferDMABUFCallback(GSFramebufferDMABUFCallback cb);
 
 /// Force the next frame to re-export + re-fire the dmabuf callback (e.g. after the frontend's

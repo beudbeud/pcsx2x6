@@ -108,8 +108,11 @@ namespace LibretroHost
 	static bool s_hw_render_requested = false;
 	static std::atomic_bool s_hw_render_active{false};
 
-	// Zero-copy dmabuf present: the GS thread hands a dmabuf fd (+ layout) for the composited
-	// frame RT; the frontend thread imports it once and blits the aliasing texture each frame.
+	// Zero-copy dmabuf present: the GS thread hands, per frame, which ring slot to sample plus a
+	// native fence ordering our GPU read after its blit; each slot's dmabuf fd (+ layout) is
+	// handed once and imported once by the frontend thread. The ring lets the GS render frame N
+	// while we still sample frame N-1 — no glFinish on the GS thread (GE-24).
+	static constexpr u32 DMABUF_RING = 2; // must match GLContext::kDmaBufRingSize
 	struct DmaBufDesc
 	{
 		int fd = -1;
@@ -118,20 +121,27 @@ namespace LibretroHost
 		bool dirty = false; // a new fd is waiting to be imported
 	};
 	static std::mutex s_dmabuf_mutex;
-	static DmaBufDesc s_dmabuf;
+	static DmaBufDesc s_dmabuf_slots[DMABUF_RING];
+	static int s_dmabuf_present_slot = -1; // latest slot the GS wrote (guarded by s_dmabuf_mutex)
+	static int s_dmabuf_present_fence = -1; // its native fence fd, -1 = none (guarded by s_dmabuf_mutex)
 	// blitter state — all touched only on the frontend thread (retro_run / context_reset)
 	static bool s_blit_gl_loaded = false;
 	static GLuint s_blit_prog = 0;
 	static GLuint s_blit_vao = 0;
-	static GLuint s_blit_tex = 0;
+	static GLuint s_blit_tex[DMABUF_RING] = {};
 	static u32 s_blit_w = 0, s_blit_h = 0;
-	static EGLImageKHR s_blit_image = EGL_NO_IMAGE_KHR;
+	static EGLImageKHR s_blit_image[DMABUF_RING] = {EGL_NO_IMAGE_KHR, EGL_NO_IMAGE_KHR};
 	// EGL import entry points (dlsym'd from libEGL; the GL HW context can't be assumed to
 	// expose them through get_proc_address)
 	static PFNEGLCREATEIMAGEKHRPROC s_eglCreateImageKHR = nullptr;
 	static PFNEGLDESTROYIMAGEKHRPROC s_eglDestroyImageKHR = nullptr;
 	static EGLDisplay (*s_eglGetCurrentDisplay)() = nullptr;
 	static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC s_glEGLImageTargetTexture2DOES = nullptr;
+	// EGL fence entry points (optional: EGL_ANDROID_native_fence_sync + EGL_KHR_wait_sync)
+	static PFNEGLCREATESYNCKHRPROC s_eglCreateSyncKHR = nullptr;
+	static PFNEGLDESTROYSYNCKHRPROC s_eglDestroySyncKHR = nullptr;
+	static PFNEGLWAITSYNCKHRPROC s_eglWaitSyncKHR = nullptr;
+	static PFNEGLCLIENTWAITSYNCKHRPROC s_eglClientWaitSyncKHR = nullptr;
 
 	// Zero-copy via a shared GLX context (desktop X11, e.g. NVIDIA where dmabuf export is
 	// unavailable): the GS hands the GL texture id of the composited frame; the frontend's
@@ -1074,12 +1084,20 @@ static void HWRenderContextReset()
 {
 	INFO_LOG("HW render: context reset — frontend HW context is current on the frontend thread.");
 	s_hw_render_active.store(true, std::memory_order_release);
-	// The GL context was (re)created: our blitter objects + imported texture are gone. Rebuild
-	// lazily, and ask the GS to re-export so we get a fresh dmabuf fd to import into the new ctx.
+	// The GL context was (re)created: our blitter objects + imported textures are gone. Rebuild
+	// lazily, and ask the GS to re-export so we get fresh dmabuf fds to import into the new ctx.
 	s_blit_gl_loaded = false;
-	s_blit_prog = s_blit_vao = s_blit_tex = 0;
-	s_blit_image = EGL_NO_IMAGE_KHR;
+	s_blit_prog = s_blit_vao = 0;
 	s_blit_w = s_blit_h = 0;
+	{
+		std::unique_lock lk(s_dmabuf_mutex);
+		for (u32 i = 0; i < DMABUF_RING; i++)
+		{
+			s_blit_tex[i] = 0;
+			s_blit_image[i] = EGL_NO_IMAGE_KHR;
+		}
+		s_dmabuf_present_slot = -1;
+	}
 	GSForceDMABUFReexport();
 
 #if !defined(__aarch64__)
@@ -1129,22 +1147,47 @@ static void HWRenderContextDestroy()
 	s_hw_render_active.store(false, std::memory_order_release);
 	// The GL objects belong to the now-destroyed context; forget them so they are rebuilt.
 	s_blit_gl_loaded = false;
-	s_blit_prog = s_blit_vao = s_blit_tex = 0;
-	s_blit_image = EGL_NO_IMAGE_KHR;
+	s_blit_prog = s_blit_vao = 0;
 	s_blit_w = s_blit_h = 0;
 	std::unique_lock lk(s_dmabuf_mutex);
-	if (s_dmabuf.fd >= 0)
-		close(s_dmabuf.fd);
-	s_dmabuf = DmaBufDesc{};
+	for (u32 i = 0; i < DMABUF_RING; i++)
+	{
+		s_blit_tex[i] = 0;
+		s_blit_image[i] = EGL_NO_IMAGE_KHR;
+		if (s_dmabuf_slots[i].fd >= 0)
+			close(s_dmabuf_slots[i].fd);
+		s_dmabuf_slots[i] = DmaBufDesc{};
+	}
+	if (s_dmabuf_present_fence >= 0)
+		close(s_dmabuf_present_fence);
+	s_dmabuf_present_fence = -1;
+	s_dmabuf_present_slot = -1;
 }
 
-// GS thread: a new exported dmabuf (first frame / resize). Stash it for the frontend to import.
-static void OnDMABUFFrame(int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc, u64 modifier)
+// GS thread: per-frame handoff — the ring slot just blitted, its dmabuf fd the first time the
+// slot is handed out (else -1), and a native fence fd for the GPU-side read/write ordering.
+static void OnDMABUFFrame(u32 slot, int fd, u32 width, u32 height, u32 stride, u32 offset, u32 fourcc,
+	u64 modifier, int fence_fd)
 {
 	std::unique_lock lk(s_dmabuf_mutex);
-	if (s_dmabuf.dirty && s_dmabuf.fd >= 0)
-		close(s_dmabuf.fd); // a previous fd never got imported
-	s_dmabuf = DmaBufDesc{fd, width, height, stride, offset, fourcc, modifier, true};
+	if (slot >= DMABUF_RING)
+	{
+		if (fd >= 0)
+			close(fd);
+		if (fence_fd >= 0)
+			close(fence_fd);
+		return;
+	}
+	if (fd >= 0)
+	{
+		if (s_dmabuf_slots[slot].dirty && s_dmabuf_slots[slot].fd >= 0)
+			close(s_dmabuf_slots[slot].fd); // a previous fd never got imported
+		s_dmabuf_slots[slot] = DmaBufDesc{fd, width, height, stride, offset, fourcc, modifier, true};
+	}
+	if (s_dmabuf_present_fence >= 0)
+		close(s_dmabuf_present_fence); // frame produced but never presented; don't leak its fence
+	s_dmabuf_present_fence = fence_fd;
+	s_dmabuf_present_slot = static_cast<int>(slot);
 }
 
 static GLuint HWCompileShader(GLenum type, const char* src)
@@ -1192,6 +1235,11 @@ static bool HWBlitInit()
 			s_eglDestroyImageKHR = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(egl_gpa("eglDestroyImageKHR"));
 			s_glEGLImageTargetTexture2DOES =
 				reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(egl_gpa("glEGLImageTargetTexture2DOES"));
+			// Optional fence entry points; absence just means the GS side already glFinish'd.
+			s_eglCreateSyncKHR = reinterpret_cast<PFNEGLCREATESYNCKHRPROC>(egl_gpa("eglCreateSyncKHR"));
+			s_eglDestroySyncKHR = reinterpret_cast<PFNEGLDESTROYSYNCKHRPROC>(egl_gpa("eglDestroySyncKHR"));
+			s_eglWaitSyncKHR = reinterpret_cast<PFNEGLWAITSYNCKHRPROC>(egl_gpa("eglWaitSyncKHR"));
+			s_eglClientWaitSyncKHR = reinterpret_cast<PFNEGLCLIENTWAITSYNCKHRPROC>(egl_gpa("eglClientWaitSyncKHR"));
 		}
 	}
 	if (!s_eglCreateImageKHR || !s_eglDestroyImageKHR || !s_eglGetCurrentDisplay || !s_glEGLImageTargetTexture2DOES)
@@ -1233,18 +1281,19 @@ static bool HWBlitInit()
 		return false;
 	}
 	glGenVertexArrays(1, &s_blit_vao);
-	glGenTextures(1, &s_blit_tex);
+	glGenTextures(DMABUF_RING, s_blit_tex);
 	INFO_LOG("HW blit: initialized (zero-copy dmabuf present).");
 	return true;
 }
 
-// Frontend thread: import the dmabuf into s_blit_tex (the texture then aliases the GS RT buffer).
-static bool HWImportDmaBuf(const DmaBufDesc& d)
+// Frontend thread: import a slot's dmabuf into s_blit_tex[slot] (the texture then aliases the
+// GS ring buffer).
+static bool HWImportDmaBuf(u32 slot, const DmaBufDesc& d)
 {
-	if (s_blit_image != EGL_NO_IMAGE_KHR)
+	if (s_blit_image[slot] != EGL_NO_IMAGE_KHR)
 	{
-		s_eglDestroyImageKHR(s_eglGetCurrentDisplay(), s_blit_image);
-		s_blit_image = EGL_NO_IMAGE_KHR;
+		s_eglDestroyImageKHR(s_eglGetCurrentDisplay(), s_blit_image[slot]);
+		s_blit_image[slot] = EGL_NO_IMAGE_KHR;
 	}
 	// For a LINEAR buffer (modifier 0) omit the modifier attribs entirely: the default import
 	// layout is linear, and this avoids relying on EGL_EXT_image_dma_buf_import_modifiers. Only
@@ -1263,15 +1312,15 @@ static bool HWImportDmaBuf(const DmaBufDesc& d)
 		attribs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT; attribs[n++] = static_cast<EGLint>(d.modifier >> 32);
 	}
 	attribs[n++] = EGL_NONE;
-	s_blit_image = s_eglCreateImageKHR(s_eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT,
+	s_blit_image[slot] = s_eglCreateImageKHR(s_eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT,
 		static_cast<EGLClientBuffer>(nullptr), attribs);
-	if (s_blit_image == EGL_NO_IMAGE_KHR)
+	if (s_blit_image[slot] == EGL_NO_IMAGE_KHR)
 	{
 		Console.Warning("HW blit: eglCreateImageKHR(dmabuf) failed.");
 		return false;
 	}
-	glBindTexture(GL_TEXTURE_2D, s_blit_tex);
-	s_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, static_cast<GLeglImageOES>(s_blit_image));
+	glBindTexture(GL_TEXTURE_2D, s_blit_tex[slot]);
+	s_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, static_cast<GLeglImageOES>(s_blit_image[slot]));
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1279,7 +1328,7 @@ static bool HWImportDmaBuf(const DmaBufDesc& d)
 	glBindTexture(GL_TEXTURE_2D, 0);
 	s_blit_w = d.width;
 	s_blit_h = d.height;
-	INFO_LOG("HW blit: imported dmabuf {}x{}.", d.width, d.height);
+	INFO_LOG("HW blit: imported dmabuf slot {} {}x{}.", slot, d.width, d.height);
 	return true;
 }
 
@@ -1290,23 +1339,62 @@ static bool HWPresentDMABuf()
 	if (!s_hw_render_active.load(std::memory_order_acquire) || !HWBlitInit())
 		return false;
 
-	DmaBufDesc local;
+	DmaBufDesc pending[DMABUF_RING];
+	int present_slot, present_fence;
 	{
 		std::unique_lock lk(s_dmabuf_mutex);
-		if (s_dmabuf.dirty)
+		for (u32 i = 0; i < DMABUF_RING; i++)
 		{
-			local = s_dmabuf;
-			s_dmabuf.dirty = false;
-			s_dmabuf.fd = -1; // ownership transferred to `local`
+			if (s_dmabuf_slots[i].dirty)
+			{
+				pending[i] = s_dmabuf_slots[i];
+				s_dmabuf_slots[i].dirty = false;
+				s_dmabuf_slots[i].fd = -1; // ownership transferred to `pending`
+			}
+		}
+		present_slot = s_dmabuf_present_slot;
+		present_fence = s_dmabuf_present_fence;
+		s_dmabuf_present_fence = -1; // ownership transferred (fence is single-consume)
+	}
+	for (u32 i = 0; i < DMABUF_RING; i++)
+	{
+		if (pending[i].dirty && pending[i].fd >= 0)
+		{
+			HWImportDmaBuf(i, pending[i]);
+			close(pending[i].fd); // the EGLImage keeps the buffer alive
 		}
 	}
-	if (local.dirty && local.fd >= 0)
+	if (present_slot < 0 || s_blit_image[present_slot] == EGL_NO_IMAGE_KHR || s_blit_w == 0)
 	{
-		HWImportDmaBuf(local);
-		close(local.fd); // the EGLImage keeps the buffer alive
-	}
-	if (s_blit_image == EGL_NO_IMAGE_KHR || s_blit_w == 0)
+		if (present_fence >= 0)
+			close(present_fence);
 		return false;
+	}
+
+	// Order our GPU read after the GS context's blit into this slot: import its native fence and
+	// make the GPU (not this thread) wait on it. No fence = the GS side already glFinish'd.
+	if (present_fence >= 0)
+	{
+		bool fence_consumed = false;
+		if (s_eglCreateSyncKHR && s_eglDestroySyncKHR && (s_eglWaitSyncKHR || s_eglClientWaitSyncKHR))
+		{
+			const EGLint sync_attribs[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, present_fence, EGL_NONE};
+			const EGLSyncKHR sync =
+				s_eglCreateSyncKHR(s_eglGetCurrentDisplay(), EGL_SYNC_NATIVE_FENCE_ANDROID, sync_attribs);
+			if (sync != EGL_NO_SYNC_KHR)
+			{
+				fence_consumed = true; // eglCreateSyncKHR adopted the fd
+				if (s_eglWaitSyncKHR)
+					s_eglWaitSyncKHR(s_eglGetCurrentDisplay(), sync, 0);
+				else
+					s_eglClientWaitSyncKHR(s_eglGetCurrentDisplay(), sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR,
+						100000000ull); // 100ms safety cap
+				s_eglDestroySyncKHR(s_eglGetCurrentDisplay(), sync);
+			}
+		}
+		if (!fence_consumed)
+			close(present_fence);
+	}
 
 	glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(s_hw_render.get_current_framebuffer()));
 	glViewport(0, 0, static_cast<GLsizei>(s_blit_w), static_cast<GLsizei>(s_blit_h));
@@ -1316,7 +1404,7 @@ static bool HWPresentDMABuf()
 	glDisable(GL_CULL_FACE);
 	glUseProgram(s_blit_prog);
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, s_blit_tex);
+	glBindTexture(GL_TEXTURE_2D, s_blit_tex[present_slot]);
 	const GLint loc = glGetUniformLocation(s_blit_prog, "u_tex");
 	if (loc >= 0)
 		glUniform1i(loc, 0);

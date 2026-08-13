@@ -181,14 +181,17 @@ private:
 	// Zero-copy HW render: linear dmabuf the composited RT is blitted into each frame (the texture
 	// itself + bo/fd live in the GLContext). Tracked here to detect a resize -> recreate and to
 	// re-emit the layout to the frontend. (Fields kept flat to avoid pulling GLContext.h here.)
-	GLuint m_dmabuf_lin_tex = 0;
+	static constexpr u32 kDmaBufRing = 2; // == GLContext::kDmaBufRingSize (static_assert in the .cpp)
+	GLuint m_dmabuf_lin_tex[kDmaBufRing] = {};
 	u32 m_dmabuf_lin_w = 0;
 	u32 m_dmabuf_lin_h = 0;
-	int m_dmabuf_fd = -1;
-	u32 m_dmabuf_stride = 0;
-	u32 m_dmabuf_offset = 0;
-	u32 m_dmabuf_fourcc = 0;
-	u64 m_dmabuf_modifier = 0;
+	int m_dmabuf_fd[kDmaBufRing] = {-1, -1};
+	u32 m_dmabuf_stride[kDmaBufRing] = {};
+	u32 m_dmabuf_offset[kDmaBufRing] = {};
+	u32 m_dmabuf_fourcc[kDmaBufRing] = {};
+	u64 m_dmabuf_modifier[kDmaBufRing] = {};
+	bool m_dmabuf_exported[kDmaBufRing] = {};
+	u32 m_dmabuf_slot = 0;
 
 	std::unique_ptr<GLStreamBuffer> m_texture_upload_buffer;
 
@@ -377,7 +380,8 @@ public:
 
 	std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) override;
 
-	bool ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) override;
+	bool ExportFrameDMABUF(GSTexture* tex, bool force_export, u32* out_slot, int* fd, u32* stride, u32* offset,
+		u32* fourcc, u64* modifier, int* out_fence_fd) override;
 	u32 GetFrameTextureGLID(GSTexture* tex) override;
 	void* CreateFrameFenceShared() override;
 	void FlushRenderingCommands() override;

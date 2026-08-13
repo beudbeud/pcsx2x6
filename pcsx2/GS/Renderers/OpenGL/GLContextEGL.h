@@ -29,8 +29,9 @@ public:
 	virtual std::unique_ptr<GLContext> CreateSharedContext(const WindowInfo& wi, Error* error) override;
 
 	bool ExportTextureDMABUF(u32 texture_id, DmaBufFrame* out) override;
-	bool CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture) override;
-	void DestroyLinearDmaBufTexture() override;
+	bool CreateLinearDmaBufTexture(u32 width, u32 height, u32 slot, DmaBufFrame* out, u32* out_texture) override;
+	void DestroyLinearDmaBufTextures() override;
+	int DupNativeFenceFd() override;
 
 protected:
 	virtual EGLDisplay GetPlatformDisplay(Error* error);
@@ -75,10 +76,14 @@ protected:
 	// selection avoids the EGL_WINDOW_BIT default (no window configs exist there).
 	bool m_surfaceless_platform = false;
 
-	// Linear dmabuf render target (zero-copy HW render): a GBM bo + EGLImage + GL texture the GS
-	// blits each frame into, exported to the libretro frontend. Owned here; freed on destroy/resize.
-	void* m_lin_bo = nullptr;
-	void* m_lin_image = nullptr; // EGLImageKHR
-	u32 m_lin_tex = 0;
-	int m_lin_fd = -1;
+	// Linear dmabuf render targets (zero-copy HW render): a ring of GBM bo + EGLImage + GL texture
+	// the GS blits each frame into, exported to the libretro frontend. Owned here; freed on
+	// destroy/resize.
+	void* m_lin_bo[kDmaBufRingSize] = {};
+	void* m_lin_image[kDmaBufRingSize] = {}; // EGLImageKHR
+	u32 m_lin_tex[kDmaBufRingSize] = {};
+	int m_lin_fd[kDmaBufRingSize] = {-1, -1};
+
+	// EGL_ANDROID_native_fence_sync support, resolved lazily on first DupNativeFenceFd call.
+	int m_native_fence_support = -1; // -1 unknown, 0 no, 1 yes
 };

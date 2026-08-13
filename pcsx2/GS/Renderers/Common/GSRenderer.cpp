@@ -201,20 +201,22 @@ static void PerformFramebufferReadback(GSTexture* current, const GSVector4& src_
 		// The blit happens every frame; the fd is re-exported only when the buffer is (re)created
 		// (first frame / resize) or forced after a frontend context reset (last_rt cleared).
 		const bool force = (s_fb_readback_rt != s_fb_dmabuf_last_rt);
-		int fd = -1;
+		u32 slot = 0;
+		int fd = -1, fence_fd = -1;
 		u32 stride = 0, offset = 0, fourcc = 0;
 		u64 modifier = 0;
-		if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, force, &fd, &stride, &offset, &fourcc, &modifier))
+		if (g_gs_device->ExportFrameDMABUF(s_fb_readback_rt, force, &slot, &fd, &stride, &offset, &fourcc,
+				&modifier, &fence_fd))
 		{
 			if (fd >= 0)
 			{
-				Console.WriteLnFmt("dmabuf (linear) export OK: {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
-					width, height, fd, stride, offset, fourcc, modifier);
-				s_fb_dmabuf_cb(fd, width, height, stride, offset, fourcc, modifier);
+				Console.WriteLnFmt("dmabuf (linear) export OK: slot={} {}x{} fd={} stride={} offset={} fourcc=0x{:08x} modifier=0x{:x}",
+					slot, width, height, fd, stride, offset, fourcc, modifier);
 			}
+			// Every frame: which ring slot to sample + a native fence ordering the frontend's GPU
+			// read after our blit (fence_fd -1 = the device already glFinish'd — old behavior).
+			s_fb_dmabuf_cb(slot, fd, width, height, stride, offset, fourcc, modifier, fence_fd);
 			s_fb_dmabuf_last_rt = s_fb_readback_rt;
-			// Finish this frame's blit so the frontend samples a complete, stable buffer.
-			g_gs_device->FlushRenderingCommands();
 			return;
 		}
 
