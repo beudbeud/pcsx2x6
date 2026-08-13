@@ -1373,7 +1373,9 @@ void GSDeviceOGL::CommitClear(GSTexture* t, bool use_write_fbo)
 
 	if (T->GetState() == GSTexture::State::Invalidated)
 	{
-		if (GLAD_GL_VERSION_4_3)
+		// glInvalidateFramebuffer is core in GLES 3.0 (we require 3.1); without it a
+		// tiler like V3D pays a full-screen clear (tile store) instead of a free discard.
+		if (GLAD_GL_VERSION_4_3 || m_is_gles)
 		{
 			if (T->GetType() == GSTexture::Type::DepthStencil)
 			{
