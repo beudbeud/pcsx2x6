@@ -30,6 +30,8 @@
 
 #include "fmt/format.h"
 
+#include <cstdlib>
+
 using namespace R5900;	// for R5900 disasm tools
 
 s32 EEsCycle;		// used to sync the IOP to the EE
@@ -502,8 +504,14 @@ __fi void _cpuEventTest_Shared()
 	{
 		// EE's running way ahead of the IOP still, so we should branch quickly to give the
 		// IOP extra timeslices in short order.
-
-		cpuSetNextEventDelta(48);
+		// Each rapid event is a block exit + recEventTest round-trip on the EE, so this
+		// delta directly sets housekeeping overhead when the EE outruns the IOP.
+		// Env-overridable for A/B benching on target hardware (PCSX2_EE_RAPID_EVENT).
+		static const s32 s_rapidEventDelta = []() {
+			const char* v = std::getenv("PCSX2_EE_RAPID_EVENT");
+			return (v && *v) ? std::atoi(v) : 128;
+		}();
+		cpuSetNextEventDelta(s_rapidEventDelta);
 		//Console.Warning( "EE ahead of the IOP -- Rapid Event!  %d", EEsCycle );
 	}
 	else
