@@ -1660,7 +1660,15 @@ public:
 	// every frame, and — when `force_export` or the buffer was just (re)allocated — return a fresh
 	// fd + layout for the frontend to (re)import (*fd = -1 otherwise). Out-params avoid coupling
 	// this common header to the GL backend. Returns false if unsupported (all non-OGL backends).
-	virtual bool ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier) { return false; }
+	// Blits `tex` into one of a small ring of linear dmabuf buffers. out_slot identifies the
+	// buffer written; *fd is a fresh dup'd fd the first time a slot is handed out (else -1).
+	// *out_fence_fd is a native fence fd tracking the blit for a GPU-side consumer wait
+	// (-1 when unsupported — the device then already did a blocking glFinish instead).
+	virtual bool ExportFrameDMABUF(GSTexture* tex, bool force_export, u32* out_slot, int* fd, u32* stride,
+		u32* offset, u32* fourcc, u64* modifier, int* out_fence_fd)
+	{
+		return false;
+	}
 
 	// Zero-copy shared-context HW render: return the native GL texture id of a GSTexture, so a
 	// frontend GL context sharing this device's context can sample it directly. 0 if unsupported.

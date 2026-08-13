@@ -82,7 +82,7 @@ GLContextEGL::GLContextEGL(const WindowInfo& wi)
 
 GLContextEGL::~GLContextEGL()
 {
-	DestroyLinearDmaBufTexture(); // before the context/GBM teardown below
+	DestroyLinearDmaBufTextures(); // before the context/GBM teardown below
 	DestroySurface();
 	DestroyContext();
 
@@ -328,9 +328,11 @@ typedef void (*PFN_gbm_bo_destroy)(void*);
 typedef void (*PFN_glEGLImageTargetTexture2DOES_local)(GLenum, void*); // GL_APIENTRY is empty on Linux
 #endif
 
-bool GLContextEGL::CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture)
+bool GLContextEGL::CreateLinearDmaBufTexture(u32 width, u32 height, u32 slot, DmaBufFrame* out, u32* out_texture)
 {
 #ifndef _WIN32
+	if (slot >= kDmaBufRingSize)
+		return false;
 	if (!m_gbm_device || !m_gbm_lib)
 	{
 		Console.Warning("dmabuf linear: no GBM device (export needs the GBM platform).");
@@ -409,10 +411,10 @@ bool GLContextEGL::CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame*
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glBindTexture(GL_TEXTURE_2D, 0); // classic binding only; GS uses DSA, so GLState stays consistent
 
-	m_lin_bo = bo;
-	m_lin_image = image;
-	m_lin_tex = tex;
-	m_lin_fd = fd;
+	m_lin_bo[slot] = bo;
+	m_lin_image[slot] = image;
+	m_lin_tex[slot] = tex;
+	m_lin_fd[slot] = fd;
 
 	out->fd = fd;
 	out->width = width;
@@ -428,34 +430,76 @@ bool GLContextEGL::CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame*
 #endif
 }
 
-void GLContextEGL::DestroyLinearDmaBufTexture()
+void GLContextEGL::DestroyLinearDmaBufTextures()
 {
 #ifndef _WIN32
-	if (m_lin_tex)
+	for (u32 slot = 0; slot < kDmaBufRingSize; slot++)
 	{
-		glDeleteTextures(1, &m_lin_tex);
-		m_lin_tex = 0;
+		if (m_lin_tex[slot])
+		{
+			glDeleteTextures(1, &m_lin_tex[slot]);
+			m_lin_tex[slot] = 0;
+		}
+		if (m_lin_image[slot])
+		{
+			static const auto s_eglDestroyImageKHR =
+				reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+			if (s_eglDestroyImageKHR)
+				s_eglDestroyImageKHR(m_display, m_lin_image[slot]);
+			m_lin_image[slot] = nullptr;
+		}
+		if (m_lin_bo[slot] && m_gbm_lib)
+		{
+			auto destroy = reinterpret_cast<PFN_gbm_bo_destroy>(dlsym(m_gbm_lib, "gbm_bo_destroy"));
+			if (destroy)
+				destroy(m_lin_bo[slot]);
+			m_lin_bo[slot] = nullptr;
+		}
+		if (m_lin_fd[slot] >= 0)
+		{
+			close(m_lin_fd[slot]);
+			m_lin_fd[slot] = -1;
+		}
 	}
-	if (m_lin_image)
+#endif
+}
+
+int GLContextEGL::DupNativeFenceFd()
+{
+#ifndef _WIN32
+	if (m_native_fence_support == 0)
+		return -1;
+
+	static const auto s_eglCreateSyncKHR =
+		reinterpret_cast<PFNEGLCREATESYNCKHRPROC>(eglGetProcAddress("eglCreateSyncKHR"));
+	static const auto s_eglDestroySyncKHR =
+		reinterpret_cast<PFNEGLDESTROYSYNCKHRPROC>(eglGetProcAddress("eglDestroySyncKHR"));
+	static const auto s_eglDupNativeFenceFDANDROID =
+		reinterpret_cast<PFNEGLDUPNATIVEFENCEFDANDROIDPROC>(eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+
+	if (m_native_fence_support < 0)
 	{
-		static const auto s_eglDestroyImageKHR =
-			reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
-		if (s_eglDestroyImageKHR)
-			s_eglDestroyImageKHR(m_display, m_lin_image);
-		m_lin_image = nullptr;
+		const char* exts = eglQueryString(m_display, EGL_EXTENSIONS);
+		m_native_fence_support = (exts && std::strstr(exts, "EGL_ANDROID_native_fence_sync") &&
+									 s_eglCreateSyncKHR && s_eglDestroySyncKHR && s_eglDupNativeFenceFDANDROID) ?
+									 1 :
+									 0;
+		if (!m_native_fence_support)
+			Console.Warning("EGL_ANDROID_native_fence_sync unavailable; dmabuf present falls back to glFinish.");
 	}
-	if (m_lin_bo && m_gbm_lib)
-	{
-		auto destroy = reinterpret_cast<PFN_gbm_bo_destroy>(dlsym(m_gbm_lib, "gbm_bo_destroy"));
-		if (destroy)
-			destroy(m_lin_bo);
-		m_lin_bo = nullptr;
-	}
-	if (m_lin_fd >= 0)
-	{
-		close(m_lin_fd);
-		m_lin_fd = -1;
-	}
+	if (!m_native_fence_support)
+		return -1;
+
+	const EGLSyncKHR sync = s_eglCreateSyncKHR(m_display, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
+	if (sync == EGL_NO_SYNC_KHR)
+		return -1;
+	// The native fd only materializes once the commands are submitted.
+	glFlush();
+	const EGLint fd = s_eglDupNativeFenceFDANDROID(m_display, sync);
+	s_eglDestroySyncKHR(m_display, sync);
+	return (fd != EGL_NO_NATIVE_FENCE_FD_ANDROID) ? fd : -1;
+#else
+	return -1;
 #endif
 }
 

@@ -45,9 +45,16 @@ public:
 	// Allocate a LINEAR dmabuf (via GBM) and import it as a GL 2D texture in this context, to
 	// render into. Linear so a consumer on another EGLDisplay can sample it without GPU-tiling
 	// (UIF) ambiguity. Fills `out` (out->fd owned by this context) + the GL texture id. Returns
-	// false if unsupported. Called on the GS thread (its context current).
-	virtual bool CreateLinearDmaBufTexture(u32 width, u32 height, DmaBufFrame* out, u32* out_texture) { return false; }
-	virtual void DestroyLinearDmaBufTexture() {}
+	// false if unsupported. Called on the GS thread (its context current). `slot` selects one of
+	// kDmaBufRingSize independent buffers (the present path double-buffers them).
+	static constexpr u32 kDmaBufRingSize = 2;
+	virtual bool CreateLinearDmaBufTexture(u32 width, u32 height, u32 slot, DmaBufFrame* out, u32* out_texture) { return false; }
+	virtual void DestroyLinearDmaBufTextures() {}
+
+	// EGL_ANDROID_native_fence_sync: submit pending GL commands and return a native fence fd
+	// tracking their completion, for a consumer on ANOTHER EGLDisplay to wait on GPU-side.
+	// Returns -1 if unsupported (caller must fall back to glFinish).
+	virtual int DupNativeFenceFd() { return -1; }
 
 	__fi const WindowInfo& GetWindowInfo() const { return m_wi; }
 

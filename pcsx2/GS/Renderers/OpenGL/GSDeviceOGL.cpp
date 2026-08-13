@@ -1450,36 +1450,59 @@ std::unique_ptr<GSDownloadTexture> GSDeviceOGL::CreateDownloadTexture(u32 width,
 	return GSDownloadTextureOGL::Create(width, height, format);
 }
 
-bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, u32* stride, u32* offset, u32* fourcc, u64* modifier)
+bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, bool force_export, u32* out_slot, int* fd, u32* stride,
+	u32* offset, u32* fourcc, u64* modifier, int* out_fence_fd)
 {
+	static_assert(kDmaBufRing == GLContext::kDmaBufRingSize);
 	*fd = -1;
+	*out_fence_fd = -1;
 	if (!tex || !m_gl_context)
 		return false;
 
 	const u32 w = static_cast<u32>(tex->GetWidth());
 	const u32 h = static_cast<u32>(tex->GetHeight());
 
-	// (Re)allocate the linear dmabuf target on first use / resize. We render (composite) into the
-	// GS's own tiled RT, then blit it into this LINEAR buffer so the frontend — which imports the
+	// (Re)allocate the linear dmabuf ring on first use / resize. We render (composite) into the
+	// GS's own tiled RT, then blit it into a LINEAR buffer so the frontend — which imports the
 	// dmabuf on a separate EGLDisplay — samples it without UIF tile-format ambiguity (the artifact
-	// that showed as a static garbage band over the lower quarter of the frame).
-	bool recreated = false;
-	if (m_dmabuf_lin_tex == 0 || m_dmabuf_lin_w != w || m_dmabuf_lin_h != h)
+	// that showed as a static garbage band over the lower quarter of the frame). A ring of two
+	// buffers lets the frontend sample frame N-1 while the GPU still renders frame N, so the GS
+	// thread doesn't have to drain the GPU every frame (GE-24).
+	if (m_dmabuf_lin_tex[0] == 0 || m_dmabuf_lin_w != w || m_dmabuf_lin_h != h)
 	{
-		m_gl_context->DestroyLinearDmaBufTexture();
-		m_dmabuf_lin_tex = 0;
-		GLContext::DmaBufFrame frame;
-		if (!m_gl_context->CreateLinearDmaBufTexture(w, h, &frame, &m_dmabuf_lin_tex))
-			return false;
+		m_gl_context->DestroyLinearDmaBufTextures();
+		for (u32 i = 0; i < kDmaBufRing; i++)
+		{
+			m_dmabuf_lin_tex[i] = 0;
+			GLContext::DmaBufFrame frame;
+			if (!m_gl_context->CreateLinearDmaBufTexture(w, h, i, &frame, &m_dmabuf_lin_tex[i]))
+			{
+				m_gl_context->DestroyLinearDmaBufTextures();
+				for (u32 j = 0; j < kDmaBufRing; j++)
+					m_dmabuf_lin_tex[j] = 0;
+				return false;
+			}
+			m_dmabuf_fd[i] = frame.fd;
+			m_dmabuf_stride[i] = frame.stride;
+			m_dmabuf_offset[i] = frame.offset;
+			m_dmabuf_fourcc[i] = frame.fourcc;
+			m_dmabuf_modifier[i] = frame.modifier;
+			m_dmabuf_exported[i] = false;
+		}
 		m_dmabuf_lin_w = w;
 		m_dmabuf_lin_h = h;
-		m_dmabuf_fd = frame.fd;
-		m_dmabuf_stride = frame.stride;
-		m_dmabuf_offset = frame.offset;
-		m_dmabuf_fourcc = frame.fourcc;
-		m_dmabuf_modifier = frame.modifier;
-		recreated = true;
+		m_dmabuf_slot = 0;
 	}
+
+	if (force_export)
+	{
+		// Frontend context reset: it lost its imports, re-hand every slot's fd as it comes up.
+		for (u32 i = 0; i < kDmaBufRing; i++)
+			m_dmabuf_exported[i] = false;
+	}
+
+	const u32 slot = m_dmabuf_slot;
+	m_dmabuf_slot = (m_dmabuf_slot + 1) % kDmaBufRing;
 
 	// GPU-side blit tiled RT -> linear dmabuf texture. Mirror RenderBlankFrame's scissor/FBO
 	// dance so GLState stays consistent (scissor test is normally on; the scratch FBOs' draw/read
@@ -1489,24 +1512,33 @@ bool GSDeviceOGL::ExportFrameDMABUF(GSTexture* tex, bool force_export, int* fd, 
 	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src_id, 0);
 	glReadBuffer(GL_COLOR_ATTACHMENT0);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_fbo_write);
-	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_dmabuf_lin_tex, 0);
+	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_dmabuf_lin_tex[slot], 0);
 	glDisable(GL_SCISSOR_TEST);
 	glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 	glEnable(GL_SCISSOR_TEST);
 	// Restore both read+draw to the tracked FBO (GS always binds GL_FRAMEBUFFER, so keep them equal).
 	glBindFramebuffer(GL_FRAMEBUFFER, GLState::fbo);
 
-	if (recreated || force_export)
+	*out_slot = slot;
+	if (!m_dmabuf_exported[slot])
 	{
 		// Hand the frontend its own fd (it imports + closes it); the context keeps its own for the bo.
 #ifndef _WIN32
-		*fd = dup(m_dmabuf_fd);
+		*fd = dup(m_dmabuf_fd[slot]);
 #endif
-		*stride = m_dmabuf_stride;
-		*offset = m_dmabuf_offset;
-		*fourcc = m_dmabuf_fourcc;
-		*modifier = m_dmabuf_modifier;
+		*stride = m_dmabuf_stride[slot];
+		*offset = m_dmabuf_offset[slot];
+		*fourcc = m_dmabuf_fourcc[slot];
+		*modifier = m_dmabuf_modifier[slot];
+		m_dmabuf_exported[slot] = true;
 	}
+
+	// Per-frame native fence: the frontend makes ITS GPU work wait on our blit, so this thread
+	// never stalls for the GPU. Without the extension, fall back to the old blocking glFinish
+	// (single-EGLDisplay implicit fencing isn't reliable across displays — tearing).
+	*out_fence_fd = m_gl_context->DupNativeFenceFd();
+	if (*out_fence_fd < 0)
+		FlushRenderingCommands();
 	return true;
 }
 
