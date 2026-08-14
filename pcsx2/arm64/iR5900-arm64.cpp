@@ -1473,7 +1473,9 @@ void SetBranchImm(u32 imm)
 
 	const Cop2VfCacheScope vfCacheScope; // fork tail: preserve compile-time cache state
 	g_branch = 1;
-	pxAssert(imm);
+	// A zero target is legal: PS2SDK links unresolved weak calls as `jal 0`
+	// behind a null test, and SL-03 continuation compiles that skipped path.
+	// Address 0 resolves like any other (RAM page 0 or the unmapped handler).
 
 	// WaitLoop speedhack: when the block scanner detected this block as a
 	// pure-nop spin branching back to itself (s_nBlockFF), fast-forward the
@@ -1540,7 +1542,9 @@ void SetBranchImmCall(u32 imm, u32 return_pc)
 
 	const Cop2VfCacheScope vfCacheScope; // fork tail: preserve compile-time cache state
 	g_branch = 1;
-	pxAssert(imm);
+	// A zero target is legal: PS2SDK links unresolved weak calls as `jal 0`
+	// behind a null test, and SL-03 continuation compiles that skipped path.
+	// Address 0 resolves like any other (RAM page 0 or the unmapped handler).
 
 	iFlushCall(FLUSH_EVERYTHING);
 
@@ -1740,7 +1744,9 @@ static void recEmitSideExitTail(u32 imm)
 
 	const Cop2VfCacheScope vfCacheScope; // fork tail: preserve compile-time cache state
 	g_branch = 1;
-	pxAssert(imm);
+	// A zero target is legal: PS2SDK links unresolved weak calls as `jal 0`
+	// behind a null test, and SL-03 continuation compiles that skipped path.
+	// Address 0 resolves like any other (RAM page 0 or the unmapped handler).
 
 	iFlushCall(FLUSH_EVERYTHING);
 
