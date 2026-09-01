@@ -675,10 +675,17 @@ void LibretroHost::RegisterCoreOptions()
 			"(zero-copy) instead of the GPU->CPU readback path. On desktop this also decouples emulation "
 			"from the present for stable 60fps pacing; on RPi5/V3D it drops the per-frame readback + CPU "
 			"swizzle + re-upload (~13% of the GS thread, measured worth +5-8 fps on GS-bound games). "
-			"Requires a restart. OpenGL renderer only; falls back to readback if the frontend has no HW context.",
+			"Default: enabled on arm64 (validated on RPi5/V3D); disabled on desktop, where the zero-copy "
+			"path is only validated on NVIDIA/X11 (AMD/Intel/Wayland untested). Requires a restart. "
+			"OpenGL renderer only; falls back to readback if the frontend has no HW context.",
 			nullptr, "performance",
+#if defined(__aarch64__)
 			{{"enabled", "Enabled (Default)"}, {"disabled", "Disabled (readback)"}, {nullptr, nullptr}},
 			"enabled"},
+#else
+			{{"disabled", "Disabled (Default)"}, {"enabled", "Enabled (zero-copy)"}, {nullptr, nullptr}},
+			"disabled"},
+#endif
 		{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr, nullptr}}, nullptr},
 	};
 
@@ -1542,7 +1549,11 @@ static bool HWPresentSharedTexture(u32 tex, u32 w, u32 h, void* fence)
 // sampled directly (zero-copy, no dmabuf which NVIDIA's GLX can't export).
 static void TryInitHWRender()
 {
+	#if defined(__aarch64__)
 	s_hw_render_requested = (std::strcmp(GetCoreOption("pcsx2_hw_render", "enabled"), "enabled") == 0);
+#else
+	s_hw_render_requested = (std::strcmp(GetCoreOption("pcsx2_hw_render", "disabled"), "enabled") == 0);
+#endif
 	if (!s_hw_render_requested)
 		return;
 
