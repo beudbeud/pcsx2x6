@@ -1231,6 +1231,39 @@ bool GSHwHack::OI_BurnoutGames(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GS
 	return false;
 }
 
+bool GSHwHack::OI_SmashCourt(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GSTextureCache::Source* t)
+{
+	// During rallies the game runs a full-screen feedback effect one GS page at
+	// a time: a 2-vert sprite copies a 64x32 block of the framebuffer into a
+	// scratch page, then a blended sprite writes it back — ~140 iterations that
+	// alternate the bound render target on every draw (~280 render passes per
+	// frame), which collapses tile-based GPUs. Emulating it faithfully needs a
+	// per-page copy chain that costs as much as the passes it saves, so drop
+	// the effect instead: skip both halves of every page round-trip.
+	// ponytail: effect dropped; revisit with a batched full-screen path if its
+	// absence is ever visible.
+	if (!RPRIM->TME || r.m_vt.m_primclass != GS_SPRITE_CLASS || r.m_index->tail != 2 || !t || !t->m_from_target)
+		return true;
+
+	// Half A: framebuffer page -> scratch page (no blend, page-sized dest).
+	if (!RPRIM->ABE && RFRAME.FBW <= 2 && RTEX0.TBW >= 8 &&
+		r.m_r.width() <= 64 && r.m_r.height() <= 32)
+	{
+		GL_INS("OI_SmashCourt: skip page capture (%lld)", r.s_n);
+		return false;
+	}
+
+	// Half B: scratch page blended back over the framebuffer.
+	if (RPRIM->ABE && RFRAME.FBW >= 8 && RTEX0.TBW <= 2 &&
+		r.m_r.width() <= 64 && r.m_r.height() <= 32)
+	{
+		GL_INS("OI_SmashCourt: skip page blend-back (%lld)", r.s_n);
+		return false;
+	}
+
+	return true;
+}
+
 #undef RPRIM
 #undef RCONTEXT
 
@@ -1480,6 +1513,7 @@ const GSHwHack::Entry<GSRendererHW::OI_Ptr> GSHwHack::s_before_draw_functions[] 
 	CRC_F(OI_SonicUnleashed),
 	CRC_F(OI_ArTonelico2),
 	CRC_F(OI_BurnoutGames),
+	CRC_F(OI_SmashCourt),
 };
 
 const GSHwHack::Entry<GSRendererHW::MV_Ptr> GSHwHack::s_move_handler_functions[] = {
