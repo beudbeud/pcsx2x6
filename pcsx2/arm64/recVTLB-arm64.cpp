@@ -599,7 +599,7 @@ static void recLoad(u32 bits, bool sign)
 	if (recLoadConstPaddrMMIOShortcut(bits, sign, forceEventTest))
 	{
 		if (forceEventTest)
-			g_branch = 2;
+			g_branch = 4; // event-test end with STATIC continuation (see recRecompile)
 		return;
 	}
 
@@ -734,7 +734,7 @@ static void recLoad(u32 bits, bool sign)
 	}
 
 	if (forceEventTest)
-		g_branch = 2;
+		g_branch = 4; // event-test end with STATIC continuation (see recRecompile)
 }
 
 void recLB()  { recLoad(8,  true);  }

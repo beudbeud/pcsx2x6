@@ -4171,6 +4171,17 @@ StartRecomp:
 
 		emitEventIsland(&event_island); // pc stored by the branch's C helper
 	}
+	else if (g_branch == 4)
+	{
+		// Forced event test after an EE-counter access. Unlike g_branch=2 the
+		// continuation is STATIC (the pc right after the access), so take
+		// SetBranchImm's tail — cycle update + event island + statically
+		// linked B — instead of a DispatcherReg hash round trip. Arcade poll
+		// loops hit this exit thousands of times per frame; the linked exit
+		// removes the indirect dispatch from every no-event iteration, and
+		// the island publishes pc itself before entering the dispatcher.
+		SetBranchImm(pc);
+	}
 	else
 	{
 		if (g_branch)
