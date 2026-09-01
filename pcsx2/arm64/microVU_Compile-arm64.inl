@@ -533,7 +533,8 @@ static void mVUtestCycles(mV, microFlagCycles& mFC)
 	// state saved here IS this block's entry state), so the next dispatch
 	// can skip mVUlookupProg (VE-07).
 	armMoveAddressToReg(a64::x0, &mVUpBlock->pState);
-	armEmitCall(mVU.copyPLStateResume);
+	armEmitCall(mVU.copyPLStateResume); // AAPCS call: clobbers q25/q26
+	mVU.clampConstsValid = false;
 	if (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
 	{
 		armAsm->Mov(a64::w9, mVUcycles);
@@ -949,6 +950,7 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 	iPC = startPC / 4;
 	mVUsetupRange(mVU, startPC, 1);
 	mVU.regAlloc->reset(false);
+	mVU.clampConstsValid = false; // q25/q26 unknown at block entry
 	mVUclearBranchCondCarry(mVU);
 	mVUinitFirstPass(mVU, pState, thisPtr);
 	mVUbranch = 0;

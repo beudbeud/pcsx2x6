@@ -490,6 +490,11 @@ struct microVU
 
 	u32 index;
 	u32 cop2;
+	// Compile-time validity of the q25/q26 clamp-constant broadcasts in MICRO
+	// mode (mirrors SL-13's cop2ClampConstsValid for macro mode). Reset at
+	// every block compile and at C-call seams that are not wrapped by
+	// mVUbackupRegs; mVUensureClampConsts() re-materializes lazily.
+	bool clampConstsValid;
 	u32 vuMemSize;
 	u32 microMemSize;
 	u32 progSize;
