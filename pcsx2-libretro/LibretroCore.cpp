@@ -74,6 +74,7 @@
 #include "pcsx2/MTGS.h"
 #include "pcsx2/MemoryTypes.h"
 #include "pcsx2/PerformanceMetrics.h"
+#include "pcsx2/GS/GSPerfMon.h"
 #if defined(__aarch64__)
 #include "pcsx2/arm64/iR5900-arm64.h" // EEInterpProfileDump
 #endif
@@ -2340,10 +2341,13 @@ void Host::OnPerformanceMetricsUpdated()
 #endif
 	if (perf_log)
 	{
-		INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}%",
+		INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}% | draws {:.0f} calls {:.0f} barriers {:.0f} passes {:.0f} uploads {:.0f}",
 			PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 			PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
-			PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage());
+			PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage(),
+			g_perfmon.Get(GSPerfMon::Draw), g_perfmon.Get(GSPerfMon::DrawCalls),
+			g_perfmon.Get(GSPerfMon::Barriers), g_perfmon.Get(GSPerfMon::RenderPasses),
+			g_perfmon.Get(GSPerfMon::TextureUploads));
 	}
 
 #if defined(__aarch64__)
