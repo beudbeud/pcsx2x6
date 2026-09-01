@@ -402,6 +402,7 @@ static const char* s_gs_hw_fix_names[] = {
 	"getSkipCount",
 	"beforeDraw",
 	"moveHandler",
+	"targetPingPongDefer",
 };
 static_assert(std::size(s_gs_hw_fix_names) == static_cast<u32>(GameDatabaseSchema::GSHWFixId::Count), "HW fix name lookup is correct size");
 
@@ -626,6 +627,9 @@ bool GameDatabaseSchema::GameEntry::configMatchesHWFix(const Pcsx2Config::GSOpti
 		case GSHWFixId::DrawBuffering:
 			return (static_cast<int>(config.UserHacks_DrawBuffering) == value);
 
+		case GSHWFixId::TargetPingPongDefer:
+			return (static_cast<int>(config.UserHacks_TargetPingPongDefer) == value);
+
 		case GSHWFixId::PCRTCOffsets:
 			return (static_cast<int>(config.PCRTCOffsets) == value);
 
@@ -794,6 +798,10 @@ void GameDatabaseSchema::GameEntry::applyGSHardwareFixes(Pcsx2Config::GSOptions&
 
 			case GSHWFixId::DrawBuffering:
 				config.UserHacks_DrawBuffering = (value > 0);
+				break;
+
+			case GSHWFixId::TargetPingPongDefer:
+				config.UserHacks_TargetPingPongDefer = (value > 0);
 				break;
 
 			case GSHWFixId::PCRTCOffsets:

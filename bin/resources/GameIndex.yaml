@@ -12,6 +12,7 @@ NM00001:
     halfPixelOffset: 2
     roundSprite: 1
     gpuPaletteConversion: 2
+    targetPingPongDefer: 1 # Per-tile post-process alternates render targets ~156x/frame; defer+replay the compositions (tiler perf).
     cpuSpriteRenderBW: 1
     cpuSpriteRenderLevel: 1
 NM00002:
