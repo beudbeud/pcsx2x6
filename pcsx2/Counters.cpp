@@ -29,6 +29,33 @@ uint g_FrameCount = 0;
 // Counter 4 takes care of scanlines - hSync/hBlanks
 // Counter 5 takes care of vSync/vBlanks
 Counter counters[4];
+
+// Fast-read state for the EE JIT's inline RCNTn_COUNT loads. guard==0 routes
+// the read to the C++ handler; below the guard the inline arithmetic is
+// value-exact (no clamp, no gate, no hblank clock, no pending-flag hold).
+RcntJitReadState g_rcntJitRead[4];
+
+void rcntUpdateJitReadState(int index)
+{
+	const Counter& c = counters[index];
+	u32 guard = 0;
+	u32 shift = 1;
+	switch (c.rate)
+	{
+		case 2:   shift = 1; break;
+		case 32:  shift = 5; break;
+		case 512: shift = 9; break;
+		default:  shift = 0; break; // hblank rate; ClockSource==3 keeps guard at 0
+	}
+	if (c.mode.ClockSource != 0x3 && c.mode.IsCounting && !c.mode.EnableGate &&
+		!c.mode.TargetReached && !c.mode.OverflowReached)
+	{
+		const u32 target = c.target & 0xffff;
+		guard = (c.mode.ZeroReturn && target != 0) ? target : 0x10000;
+	}
+	g_rcntJitRead[index].guard = guard;
+	g_rcntJitRead[index].shift = shift;
+}
 SyncCounter hsyncCounter;
 SyncCounter vsyncCounter;
 bool s_sys256_mode = false;
@@ -71,6 +98,11 @@ static __fi void _rcntSet(int cntidx)
 {
 	s32 c;
 	pxAssume(cntidx <= 4); // rcntSet isn't valid for h/vsync counters.
+
+	// Every mutation of counter state (mode/count/target writes, rcntUpdate's
+	// flag processing, savestate load) funnels through here — keep the JIT's
+	// inline-read guard in sync at the same choke point.
+	rcntUpdateJitReadState(cntidx);
 
 	const Counter& counter = counters[cntidx];
 
@@ -179,6 +211,7 @@ void rcntInit()
 	{
 		counters[i].rate = 2;
 		counters[i].target = 0xffff;
+		rcntUpdateJitReadState(i);
 	}
 	counters[0].interrupt = 9;
 	counters[1].interrupt = 10;
