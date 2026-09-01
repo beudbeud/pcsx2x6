@@ -1177,7 +1177,16 @@ std::string GSDeviceOGL::GetDriverInfo() const
 GSDevice::PresentResult GSDeviceOGL::BeginPresent(bool frame_skip)
 {
 	if (frame_skip || m_window_info.type == WindowInfo::Type::Surfaceless)
+	{
+		// Headless present (libretro): EndPresent never runs, so rotate the GPU
+		// timing queries here or the accumulated GPU time stays at zero forever.
+		if (m_gpu_timing_enabled)
+		{
+			PopTimestampQuery();
+			KickTimestampQuery();
+		}
 		return PresentResult::FrameSkipped;
+	}
 
 	OMSetFBO(0);
 	OMSetColorMaskState();
@@ -1267,6 +1276,14 @@ void GSDeviceOGL::KickTimestampQuery()
 
 bool GSDeviceOGL::SetGPUTimingEnabled(bool enabled)
 {
+	// GL_TIME_ELAPSED needs EXT_disjoint_timer_query on GLES; without it the
+	// queries fail silently and the GPU time reads as a bogus zero.
+	if (enabled && m_is_gles && !GLAD_GL_EXT_disjoint_timer_query)
+	{
+		Console.Warning("GLES: GL_EXT_disjoint_timer_query not available, GPU timing disabled.");
+		return false;
+	}
+
 	if (m_gpu_timing_enabled == enabled)
 		return true;
 

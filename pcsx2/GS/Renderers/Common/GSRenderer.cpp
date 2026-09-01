@@ -936,6 +936,12 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			if (GSConfig.OsdShowGPU || GSDumpReplayer::IsReplayingDump())
 				PerformanceMetrics::OnGPUPresent(g_gs_device->GetAndResetAccumulatedGPUTime());
 		}
+		else if (GSConfig.OsdShowGPU)
+		{
+			// Headless present (libretro): the frame still rendered, drain the GPU
+			// time into the metrics or GetGPUUsage() reads a bogus zero.
+			PerformanceMetrics::OnGPUPresent(g_gs_device->GetAndResetAccumulatedGPUTime());
+		}
 
 		if (s_fb_readback_cb && current && !blank_frame)
 			PerformFramebufferReadback(current, src_uv);

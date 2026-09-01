@@ -834,8 +834,13 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		std::strcmp(get_option("pcsx2_mtvu", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "fpuGuardedAddSub",
 		std::strcmp(get_option("pcsx2_fpu_guarded_addsub", "enabled"), "enabled") == 0);
-	s_perf_log_option.store(
-		std::strcmp(get_option("pcsx2_perf_log", "disabled"), "enabled") == 0, std::memory_order_relaxed);
+	const bool perf_log_on = std::strcmp(get_option("pcsx2_perf_log", "disabled"), "enabled") == 0;
+	s_perf_log_option.store(perf_log_on, std::memory_order_relaxed);
+	// The GPU% column of the perf log needs the device's timing queries, which
+	// are gated on OsdShowGPU (GS.cpp couples the two at init).
+	const char* perf_log_env = std::getenv("PCSX2_PERF_LOG");
+	s_settings_interface.SetBoolValue("EmuCore/GS", "OsdShowGPU",
+		perf_log_on || (perf_log_env && perf_log_env[0] == '1' && perf_log_env[1] == '\0'));
 	s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "fastCDVD",
 		std::strcmp(get_option("pcsx2_fast_cdvd", "disabled"), "enabled") == 0);
 	s_settings_interface.SetIntValue("EmuCore/GS", "texture_preloading",
