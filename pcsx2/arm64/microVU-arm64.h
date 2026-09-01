@@ -405,6 +405,14 @@ struct microProgManager
 	microIR<mProgSize> IRinfo;
 	microProgramList*  prog [mProgSize/2];
 	microProgramQuick  quick[mProgSize/2];
+	// Occupancy list for quick[]: mVUclear's range-aware invalidation walks
+	// only these indices (a handful of live programs) instead of scanning all
+	// mProgSize/2 slots on every micro-mem write. Overflow (> max entries)
+	// falls back to the full scan. Zeroed with the enclosing struct.
+	static constexpr u32 kQuickListMax = 16;
+	u16 quickList[kQuickListMax];
+	u32 quickListCount;
+	u32 quickListOverflow;
 	microProgram*      cur;
 	int                total;
 	int                isSame;
