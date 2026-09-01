@@ -52,6 +52,8 @@ NM00006:
   bootprog: SCPTLOAD
   media: CD
   input: button
+  gsHWFixes:
+    beforeDraw: OI_SmashCourt # Page-by-page framebuffer feedback: serve the page copies from a snapshot (tiler render-pass explosion).
 NM00007:
   name: Soul Calibur II
   region: System246
