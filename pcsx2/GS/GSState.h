@@ -164,6 +164,9 @@ protected:
 	float m_q = 1.0f;
 	GSVector4i m_xyof = {};
 	int  m_used_buffers_idx = 0;
+	// Uniform capacity across all draw buffers (mirrored into each VertexBuff::maxcount);
+	// buffers always grow together so spare-vert copies between buffers can never overflow.
+	u32 m_max_vertex_count = 0;
 	int m_current_buffer_idx = 0;
 	bool m_recent_buffer_switch = false;
 
