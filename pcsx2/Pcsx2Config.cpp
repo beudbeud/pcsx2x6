@@ -1165,7 +1165,11 @@ void Pcsx2Config::GSOptions::MaskUserHacks()
 	UserHacks_RoundSprite = 0;
 	UserHacks_NativeScaling = GSNativeScaling::Off;
 	UserHacks_AutoFlush = GSHWAutoFlushLevel::Disabled;
-	GPUPaletteConversion = false;
+	// GPUPaletteConversion and DrawBuffering are deliberately NOT masked on
+	// this fork: they are standard performance settings for the Pi target,
+	// and forcing ManualUserHacks just to keep them alive silently disables
+	// every per-game gsHWFixes entry from the GameDB (which is how RRV lost
+	// its textureInsideRT and rendered a repeating garbage tile).
 	PreloadFrameWithGSData = false;
 	UserHacks_DisablePartialInvalidation = false;
 	UserHacks_DisableDepthSupport = false;
@@ -1174,7 +1178,7 @@ void Pcsx2Config::GSOptions::MaskUserHacks()
 	UserHacks_TextureInsideRt = GSTextureInRtMode::Disabled;
 	UserHacks_Limit24BitDepth = GSLimit24BitDepth::Disabled;
 	UserHacks_EstimateTextureRegion = false;
-	UserHacks_DrawBuffering = false;
+	// UserHacks_DrawBuffering: not masked, see GPUPaletteConversion above.
 	UserHacks_TCOffsetX = 0;
 	UserHacks_TCOffsetY = 0;
 	UserHacks_CPUSpriteRenderBW = 0;
