@@ -3172,9 +3172,12 @@ void GSState::DrawRecordTail(u64 draw_serial)
 		Console.Warning("GS: Possible invalid draw, Frame PSM %x ZPSM %x", m_context->FRAME.PSM, m_context->ZBUF.PSM);
 	}
 #endif
+	GSVertexBuff& vtx_buff = *m_vertex;
+	GSIndexBuff& idx_buff = *m_index;
+
 	// Update scissor, it may have been modified by a previous draw
 	m_env.CTXT[PRIM->CTXT].UpdateScissor();
-	m_vt.Update(m_vertex->buff, m_index->buff, m_vertex->tail, m_index->tail, GSUtil::GetPrimClass(PRIM->PRIM));
+	m_vt.Update(vtx_buff.buff, idx_buff.buff, vtx_buff.tail, idx_buff.tail, GSUtil::GetPrimClass(PRIM->PRIM));
 
 	// Texel coordinate rounding
 	// Helps Manhunt (lights shining through objects).
@@ -3186,13 +3189,13 @@ void GSState::DrawRecordTail(u64 draw_serial)
 		{
 			const bool is_sprite = GSUtil::GetPrimClass(PRIM->PRIM) == GS_PRIM_CLASS::GS_SPRITE_CLASS;
 			// ST's have the lowest 9 bits (or greater depending on exponent difference) rounding down (from hardware tests).
-			for (int i = m_index->tail - 1; i >= 0; i--)
+			for (int i = idx_buff.tail - 1; i >= 0; i--)
 			{
-				GSVertex* v = &m_vertex->buff[m_index->buff[i]];
+				GSVertex* v = &vtx_buff.buff[idx_buff.buff[i]];
 
 				// Only Q on the second vertex is valid
 				if (!(i & 1) && is_sprite)
-					v->RGBAQ.Q = m_vertex->buff[m_index->buff[i + 1]].RGBAQ.Q;
+					v->RGBAQ.Q = vtx_buff.buff[idx_buff.buff[i + 1]].RGBAQ.Q;
 
 				int T = std::bit_cast<int>(v->ST.T);
 				int Q = std::bit_cast<int>(v->RGBAQ.Q);
