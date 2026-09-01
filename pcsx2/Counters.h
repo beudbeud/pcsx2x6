@@ -114,6 +114,19 @@ struct SyncCounter
 extern const char* ReportVideoMode();
 extern const char* ReportInterlaceMode();
 extern Counter counters[4];
+
+// Precomputed fast-read state for the EE JIT's inline RCNTn_COUNT loads.
+// guard == 0 forces the C++ handler (hblank clock, gates, stopped counter,
+// pending target/overflow clamps). Otherwise the JIT computes
+//   (u16)(count + ((cpuRegs.cycle - (u32)startCycle) >> shift))
+// which is value-exact below `guard` (no clamp can engage there).
+struct RcntJitReadState
+{
+	u32 guard;
+	u32 shift;
+};
+extern RcntJitReadState g_rcntJitRead[4];
+extern void rcntUpdateJitReadState(int index);
 extern SyncCounter hsyncCounter;
 extern SyncCounter vsyncCounter;
 
