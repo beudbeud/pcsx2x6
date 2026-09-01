@@ -2790,7 +2790,18 @@ void GSRendererHW::Draw()
 	{
 		static int s_pt_budget = 150;
 		static bool s_pt_armed = false;
-		if (!s_pt_armed && m_cached_ctx.FRAME.FBW <= 1)
+		static int s_pt_frame = -1, s_pt_draws = 0;
+		if (g_perfmon.GetFrame() != s_pt_frame)
+		{
+			s_pt_frame = g_perfmon.GetFrame();
+			s_pt_draws = 0;
+		}
+		s_pt_draws++;
+		// Arm on a busy frame (real gameplay, not menus) once a small textured
+		// draw shows up — the page-loop signature; then log the interleave.
+		const GSVector4i pt_extent(m_vt.m_min.p.xyxy(m_vt.m_max.p));
+		if (!s_pt_armed && s_pt_draws > 50 && PRIM->TME &&
+			(pt_extent.z - pt_extent.x) <= 64 && (pt_extent.w - pt_extent.y) <= 32)
 			s_pt_armed = true;
 		if (s_pt_armed && s_pt_budget > 0)
 		{
