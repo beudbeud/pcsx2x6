@@ -10600,6 +10600,7 @@ void GSRendererHW::ClearGSLocalMemory(const GSOffset& off, const GSVector4i& r, 
 			const u32 iterations_per_page = (pages_wide * pixels_per_page) / 4;
 			const GSVector4i mask = GSVector4i(drawing_mask);
 			pxAssert((off.bp() & (GS_BLOCKS_PER_PAGE - 1)) == 0);
+			const bool zero_fill = !drawing_mask && vert_color == 0;
 			for (u32 current_page = off.bp() >> 5; top < page_aligned_bottom; top += pgs.y, current_page += fbw)
 			{
 				current_page &= (GS_MAX_PAGES - 1);
@@ -10612,6 +10613,12 @@ void GSRendererHW::ClearGSLocalMemory(const GSOffset& off, const GSVector4i& r, 
 						*ptr = (*ptr & mask) | vcolor;
 						ptr++;
 					}
+				}
+				else if (zero_fill)
+				{
+					// glibc memset zero-fills with DC ZVA (64B/insn) — 4x the
+					// 16B vector stores for the common clear-to-black/zero-Z.
+					std::memset(ptr, 0, iterations_per_page * sizeof(GSVector4i));
 				}
 				else
 				{
