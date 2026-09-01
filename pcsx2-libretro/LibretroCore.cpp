@@ -2341,12 +2341,13 @@ void Host::OnPerformanceMetricsUpdated()
 #endif
 	if (perf_log)
 	{
-		INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}% | draws {:.0f} calls {:.0f} barriers {:.0f} passes {:.0f} uploads {:.0f}",
+		INFO_LOG("perf: {:.1f} fps | EE {:.0f}% GS {:.0f}% GSB {:.0f}% VU {:.0f}% | GPU {:.0f}% | draws {:.0f} calls {:.0f} barriers {:.0f} passes {:.0f} (rt {:.0f} dsrt {:.0f}) uploads {:.0f}",
 			PerformanceMetrics::GetFPS(), PerformanceMetrics::GetCPUThreadUsage(),
 			PerformanceMetrics::GetGSThreadUsage(), PerformanceMetrics::GetGSBackThreadUsage(),
 			PerformanceMetrics::GetVUThreadUsage(), PerformanceMetrics::GetGPUUsage(),
 			g_perfmon.Get(GSPerfMon::Draw), g_perfmon.Get(GSPerfMon::DrawCalls),
 			g_perfmon.Get(GSPerfMon::Barriers), g_perfmon.Get(GSPerfMon::RenderPasses),
+			g_perfmon.Get(GSPerfMon::DrawCallsROV), g_perfmon.Get(GSPerfMon::BarriersROV),
 			g_perfmon.Get(GSPerfMon::TextureUploads));
 	}
 
