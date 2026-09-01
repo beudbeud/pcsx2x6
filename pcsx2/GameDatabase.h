@@ -84,6 +84,7 @@ namespace GameDatabaseSchema
 		GetSkipCount,
 		BeforeDraw,
 		MoveHandler,
+		TargetPingPongDefer,
 
 		Count
 	};
