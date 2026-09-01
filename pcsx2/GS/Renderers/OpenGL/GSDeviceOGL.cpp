@@ -1242,14 +1242,21 @@ void GSDeviceOGL::PopTimestampQuery()
 {
 	while (m_waiting_timestamp_queries > 0)
 	{
+		// GLES only ships the result reads as the EXT entry points.
 		GLint available = 0;
-		glGetQueryObjectiv(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT_AVAILABLE, &available);
+		if (m_is_gles)
+			glGetQueryObjectivEXT(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT_AVAILABLE, &available);
+		else
+			glGetQueryObjectiv(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT_AVAILABLE, &available);
 
 		if (!available)
 			break;
 
 		u64 result = 0;
-		glGetQueryObjectui64v(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT, &result);
+		if (m_is_gles)
+			glGetQueryObjectui64vEXT(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT, &result);
+		else
+			glGetQueryObjectui64v(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT, &result);
 		m_accumulated_gpu_time += static_cast<float>(static_cast<double>(result) / 1000000.0);
 		m_read_timestamp_query = (m_read_timestamp_query + 1) % NUM_TIMESTAMP_QUERIES;
 		m_waiting_timestamp_queries--;
@@ -1277,8 +1284,10 @@ void GSDeviceOGL::KickTimestampQuery()
 bool GSDeviceOGL::SetGPUTimingEnabled(bool enabled)
 {
 	// GL_TIME_ELAPSED needs EXT_disjoint_timer_query on GLES; without it the
-	// queries fail silently and the GPU time reads as a bogus zero.
-	if (enabled && m_is_gles && !GLAD_GL_EXT_disjoint_timer_query)
+	// queries fail silently and the GPU time reads as a bogus zero. Check the
+	// loaded entry point too — the 64-bit result read only exists as the EXT
+	// symbol on GLES, the core pointer stays null.
+	if (enabled && m_is_gles && (!GLAD_GL_EXT_disjoint_timer_query || !glad_glGetQueryObjectui64vEXT))
 	{
 		Console.Warning("GLES: GL_EXT_disjoint_timer_query not available, GPU timing disabled.");
 		return false;
