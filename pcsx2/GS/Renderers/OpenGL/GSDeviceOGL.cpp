@@ -146,6 +146,9 @@ namespace Emulate_DSA
 	}
 } // namespace Emulate_DSA
 
+// Diagnostic (see PCSX2_PAGE_TRACE): color-target switches seen this frame.
+int g_rt_switches_this_frame = 0;
+
 GSDeviceOGL::GSDeviceOGL() = default;
 
 GSDeviceOGL::~GSDeviceOGL()
@@ -2957,6 +2960,18 @@ void GSDeviceOGL::OMSetRenderTargets(GSTexture* rt, GSTexture* ds_as_rt, GSTextu
 	// Pass-cause breakdown for the perf log; the ROV counters are dead on GL.
 	g_perfmon.Put(GSPerfMon::DrawCallsROV, static_cast<double>(rt_changed));
 	g_perfmon.Put(GSPerfMon::BarriersROV, static_cast<double>(ds_as_rt_changed));
+
+	// Shared diagnostic: color-target switches in the current frame, read by the
+	// PCSX2_PAGE_TRACE arming logic in GSRendererHW::Draw.
+	{
+		static int s_sw_frame = -1;
+		if (g_perfmon.GetFrame() != s_sw_frame)
+		{
+			s_sw_frame = g_perfmon.GetFrame();
+			g_rt_switches_this_frame = 0;
+		}
+		g_rt_switches_this_frame += static_cast<int>(rt_changed);
+	}
 
 	// PCSX2_RT_TRACE=1: log the first color-target switches to identify a
 	// render-pass ping-pong (which textures alternate, at what size).
