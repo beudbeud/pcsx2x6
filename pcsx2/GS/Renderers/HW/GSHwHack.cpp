@@ -1284,7 +1284,7 @@ bool GSHwHack::OI_SmashCourt(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GSTe
 
 	// Source rect in texels from the sprite's UVs, destination from the draw rect.
 	const float src_scale = t->m_from_target->GetScale();
-	const float dst_scale = rt->GetScale();
+	const float dst_scale = r.GetTextureScaleFactor();
 	const GSVector4 st = GSVector4(r.m_vt.m_min.t.x, r.m_vt.m_min.t.y, r.m_vt.m_max.t.x, r.m_vt.m_max.t.y);
 	const GSVector4i src_r = GSVector4i(st * src_scale);
 	const GSVector4i dst_r = GSVector4i(GSVector4(r.m_r) * dst_scale);
@@ -1297,7 +1297,7 @@ bool GSHwHack::OI_SmashCourt(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GSTe
 	else
 	{
 		const GSVector4 s_size = GSVector4(s_fb_copy->GetSize()).xyxy();
-		g_gs_device->StretchRect(s_fb_copy, GSVector4(src_r) / s_size, rt, GSVector4(dst_r), ShaderConvert::COPY, false);
+		g_gs_device->StretchRect(s_fb_copy, GSVector4(src_r) / s_size, rt, GSVector4(dst_r), ShaderConvert::COPY, Filter::Nearest);
 	}
 
 	GL_INS("OI_SmashCourt: page copy served from snapshot (%lld)", r.s_n);
