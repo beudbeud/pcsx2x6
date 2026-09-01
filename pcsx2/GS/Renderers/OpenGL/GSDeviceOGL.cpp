@@ -2954,6 +2954,9 @@ void GSDeviceOGL::OMSetRenderTargets(GSTexture* rt, GSTexture* ds_as_rt, GSTextu
 	const u32 draw_buffers = GLState::draw_buffers;
 
 	g_perfmon.Put(GSPerfMon::RenderPasses, static_cast<double>(rt_changed || ds_as_rt_changed || ds_changed));
+	// Pass-cause breakdown for the perf log; the ROV counters are dead on GL.
+	g_perfmon.Put(GSPerfMon::DrawCallsROV, static_cast<double>(rt_changed));
+	g_perfmon.Put(GSPerfMon::BarriersROV, static_cast<double>(ds_as_rt_changed));
 	// Split up to avoid unbind/bind calls when clearing.
 
 	OMSetFBO(m_fbo);
