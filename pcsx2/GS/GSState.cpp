@@ -4597,8 +4597,8 @@ void GSState::GrowVertexBuffer()
 	}
 	for (GSIndexBuff& buf : m_index_buffers)
 		GrowBuffer(&buf.buff, buf.tail, new_index_count);
-	GrowBuffer(&m_draw_vertex.buff, m_vertex ? m_vertex->tail : 0, new_vertex_count);
-	GrowBuffer(&m_draw_index.buff, m_index ? m_index->tail : 0, new_index_count);
+	GrowBuffer(&m_draw_vertex.buff, m_draw_vertex.tail, new_vertex_count);
+	GrowBuffer(&m_draw_index.buff, m_draw_index.tail, new_index_count);
 
 	m_max_vertex_count = maxcount - 3; // -3 to have some space at the end of the buffer before DrawingKick can grow it
 	for (GSVertexBuff& buf : m_vertex_buffers)
