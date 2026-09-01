@@ -61,7 +61,7 @@ NM00007:
   media: DVD
   input: button
   clampModes:
-    vuClampMode: 2 # Instant ring-outs at round start (corrupted positions) — same engine family as SC3.
+    vuClampMode: 2 # Same engine family as SC3.
   gsHWFixes:
     alignSprite: 1
 NM00008:
