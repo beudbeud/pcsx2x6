@@ -1033,7 +1033,6 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapIntEnumEx(UserHacks_Limit24BitDepth, "UserHacks_Limit24BitDepth");
 	SettingsWrapBitBoolEx(UserHacks_EstimateTextureRegion, "UserHacks_EstimateTextureRegion");
 	SettingsWrapBitBoolEx(UserHacks_DrawBuffering, "UserHacks_DrawBuffering");
-	SettingsWrapBitBoolEx(UserHacks_TargetPingPongDefer, "UserHacks_TargetPingPongDefer");
 	SettingsWrapBitBoolEx(FXAA, "fxaa");
 	SettingsWrapBitBoolEx(GLESReducedPrecision, "GLESReducedPrecision");
 	SettingsWrapBitBool(ShadeBoost);
@@ -1180,7 +1179,6 @@ void Pcsx2Config::GSOptions::MaskUserHacks()
 	UserHacks_Limit24BitDepth = GSLimit24BitDepth::Disabled;
 	UserHacks_EstimateTextureRegion = false;
 	// UserHacks_DrawBuffering: not masked, see GPUPaletteConversion above.
-	UserHacks_TargetPingPongDefer = false;
 	UserHacks_TCOffsetX = 0;
 	UserHacks_TCOffsetY = 0;
 	UserHacks_CPUSpriteRenderBW = 0;

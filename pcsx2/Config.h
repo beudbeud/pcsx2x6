@@ -839,7 +839,6 @@ struct Pcsx2Config
 					UserHacks_NativePaletteDraw : 1,
 					UserHacks_EstimateTextureRegion : 1,
 					UserHacks_DrawBuffering : 1,
-					UserHacks_TargetPingPongDefer : 1,
 					FXAA : 1,
 					GLESReducedPrecision : 1, // GLES (V3D/RPi5): mediump fragment float for speed
 					ShadeBoost : 1,
