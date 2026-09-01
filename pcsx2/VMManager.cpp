@@ -1418,27 +1418,60 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 					Console.WriteLnFmt(Color_Green, "ACGAME: System {} requested — overclock will be applied", platform);
 
 				// When subdir= is set, basedir points to the subdir (e.g. roms/tekken4/).
-				// Dongle/card files may live elsewhere, so fall back to acgame dir and memcards/.
+				// Dongle/card files may live elsewhere, so fall back to the game dir,
+				// the .acgame's dir, and their memcards/ subdirs (the layouts games
+				// actually ship with). The memcard system only reads from
+				// EmuFolders::MemoryCards, so a source found elsewhere is copied in.
 				std::string acgamedir = Path::ToNativePath(Path::GetDirectory(filename))+FS_OSPATH_SEPARATOR_CHARACTER;
+				const auto findCardSource = [&](const std::string& name) -> std::string {
+					const std::string candidates[] = {
+						Path::Combine(EmuFolders::MemoryCards, name),
+						Path::Combine(basedir, name),
+						Path::Combine(basedir, Path::Combine("memcards", name)),
+						Path::Combine(acgamedir, name),
+						Path::Combine(acgamedir, Path::Combine("memcards", name)),
+					};
+					for (const std::string& c : candidates)
+					{
+						if (FileSystem::FileExists(c.c_str()))
+							return c;
+					}
+					return {};
+				};
 				std::string card;
 				// Slot 1 (mc0:) = dongle (boot modules only, no save data).
-				// Always overwrite — DONGLEMAN corrupts this file at runtime.
+				// Always overwrite — DONGLEMAN corrupts this file at runtime, so a
+				// pristine copy found next to the game refreshes the working file.
 				if ((card = INI.GetStringValue("data", "dongle", fmt::format("{}.ps2", s_serial).c_str())) != "") {
-					std::string src = Path::Combine(EmuFolders::MemoryCards, card);
-					if (!FileSystem::FileExists(src.c_str())) {
+					const std::string src = findCardSource(card);
+					if (src.empty()) {
 						Error::SetStringFmt(error, "requested dongle image does not exist! '{}'", card);
-						Console.ErrorFmt("ACGAME: cannot open a dongle file at location '{}'", src);
+						Console.ErrorFmt("ACGAME: cannot open a dongle file '{}' (searched memcards dir, game dir and their memcards/ subdirs)", card);
+						return false;
+					}
+					const std::string dst = Path::Combine(EmuFolders::MemoryCards, card);
+					if (src != dst && !FileSystem::CopyFilePath(src.c_str(), dst.c_str(), true)) {
+						Error::SetStringFmt(error, "failed to copy dongle image '{}' into the memcards directory", card);
+						Console.ErrorFmt("ACGAME: failed to copy dongle '{}' -> '{}'", src, dst);
 						return false;
 					}
 					Host::SetBaseStringSettingValue("MemoryCards", "Slot1_Filename", card.c_str());
 				}
-				// Slot 2 (mc1:) = save card (e.g. SC2 conquest). Never overwrite existing saves.
+				// Slot 2 (mc1:) = save card (e.g. SC2 conquest). Never overwrite an
+				// existing working copy (it holds save data); only seed it when absent.
 				if ((card = INI.GetStringValue("data", "card", "")) != "") {
-					std::string src = Path::Combine(EmuFolders::MemoryCards, card);
-					if (!FileSystem::FileExists(src.c_str())) {
-						Error::SetStringFmt(error, "requested memcard image does not exist! '{}'", card);
-						Console.ErrorFmt("ACGAME: cannot open a card file at location '{}'", src);
-						return false;
+					const std::string dst = Path::Combine(EmuFolders::MemoryCards, card);
+					if (!FileSystem::FileExists(dst.c_str())) {
+						const std::string src = findCardSource(card);
+						if (src.empty()) {
+							Error::SetStringFmt(error, "requested memcard image does not exist! '{}'", card);
+							Console.ErrorFmt("ACGAME: cannot open a card file '{}' (searched memcards dir, game dir and their memcards/ subdirs)", card);
+							return false;
+						}
+						if (src != dst && !FileSystem::CopyFilePath(src.c_str(), dst.c_str(), false)) {
+							Error::SetStringFmt(error, "failed to copy memcard image '{}' into the memcards directory", card);
+							return false;
+						}
 					}
 					Host::SetBaseStringSettingValue("MemoryCards", "Slot2_Filename", card.c_str());
 				} else Host::SetBaseStringSettingValue("MemoryCards", "Slot2_Filename", "");
