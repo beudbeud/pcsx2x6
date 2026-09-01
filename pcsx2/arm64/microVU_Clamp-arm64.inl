@@ -7,6 +7,32 @@
 // Micro VU - ARM64 NEON Clamp Functions
 //------------------------------------------------------------------
 
+// Ensure the clamp-constant broadcasts live in q25/q26 (q25 = maxvals,
+// q26 = minvals). Both allocator pools exclude them; validity is compile-time
+// and lazy. Macro mode (cop2) rides the SL-13 discipline — its consts come
+// from the pinned s8/s9 scalars and its validity flag is invalidated by
+// iFlushCall/branch forks. Micro mode loads them from mVUglob once per block
+// (mVU.clampConstsValid, reset in mVUcompile and at unwrapped C-call seams;
+// the mVUbackupRegs-wrapped calls preserve q0-q28 and need no reset).
+static __fi void mVUensureClampConsts(microVU& mVU)
+{
+	if (mVU.cop2)
+	{
+		if (!cop2ClampConstsValid())
+		{
+			armAsm->Dup(a64::v25.V4S(), a64::v8.V4S(), 0); // +FLT_MAX broadcast
+			armAsm->Dup(a64::v26.V4S(), a64::v9.V4S(), 0); // -FLT_MAX broadcast
+			cop2ClampConstsSetValid(true);
+		}
+		return;
+	}
+	if (mVU.clampConstsValid)
+		return;
+	armAsm->Ldr(a64::q25, mVUglobMem(&mVUglob.maxvals[0]));
+	armAsm->Ldr(a64::q26, mVUglobMem(&mVUglob.minvals[0]));
+	mVU.clampConstsValid = true;
+}
+
 // Result clamping: clamp to [minFloat, maxFloat].
 // Uses FMINNM/FMAXNM (number-preserving) so NaN inputs clamp to ±maxfloat,
 // matching x86 SSE MINPS/MAXPS NaN-eating semantics. Plain FMIN/FMAX are
@@ -16,6 +42,7 @@ void mVUclamp1(microVU& mVU, const a64::VRegister& reg, const a64::VRegister& re
 {
 	if (((!clampE && CHECK_VU_OVERFLOW(mVU.index)) || (clampE && bClampE)) && mVU.regAlloc->checkVFClamp(reg.GetCode()))
 	{
+		mVUensureClampConsts(mVU);
 		switch (xyzw)
 		{
 			case 1: case 2: case 4: case 8:
@@ -31,22 +58,18 @@ void mVUclamp1(microVU& mVU, const a64::VRegister& reg, const a64::VRegister& re
 				// vuClampMode:2 SPS / trembling geometry. Compute the clamped
 				// scalar in RQSCRATCH3 and INS it back into lane 0 only, mirroring
 				// the x86 mVUclamp1 SS path.
-				armAsm->Ldr(a64::VRegister(RQSCRATCH3.GetCode(), 32), mVUglobMem(&mVUglob.maxvals[0]));
 				armAsm->Fminnm(a64::VRegister(RQSCRATCH3.GetCode(), 32), a64::VRegister(reg.GetCode(), 32),
-				               a64::VRegister(RQSCRATCH3.GetCode(), 32));
+				               a64::s25);
 				armAsm->Ins(reg.V4S(), 0, RQSCRATCH3.V4S(), 0);
-				armAsm->Ldr(a64::VRegister(RQSCRATCH3.GetCode(), 32), mVUglobMem(&mVUglob.minvals[0]));
 				armAsm->Fmaxnm(a64::VRegister(RQSCRATCH3.GetCode(), 32), a64::VRegister(reg.GetCode(), 32),
-				               a64::VRegister(RQSCRATCH3.GetCode(), 32));
+				               a64::s26);
 				armAsm->Ins(reg.V4S(), 0, RQSCRATCH3.V4S(), 0);
 				break;
 			}
 			default:
 			{
-				armAsm->Ldr(RQSCRATCH3, mVUglobMem(&mVUglob.maxvals[0]));
-				armAsm->Fminnm(reg.V4S(), reg.V4S(), RQSCRATCH3.V4S());
-				armAsm->Ldr(RQSCRATCH3, mVUglobMem(&mVUglob.minvals[0]));
-				armAsm->Fmaxnm(reg.V4S(), reg.V4S(), RQSCRATCH3.V4S());
+				armAsm->Fminnm(reg.V4S(), reg.V4S(), a64::v25.V4S());
+				armAsm->Fmaxnm(reg.V4S(), reg.V4S(), a64::v26.V4S());
 				break;
 			}
 		}
