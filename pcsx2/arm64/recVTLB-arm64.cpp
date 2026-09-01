@@ -483,25 +483,22 @@ static bool recLoadConstPaddrMMIOShortcut(u32 bits, bool sign, bool forceEventTe
 	const bool rcnt_inline = (bits == 16 || bits == 32) &&
 		(paddr == RCNT0_COUNT || paddr == RCNT1_COUNT || paddr == RCNT2_COUNT || paddr == RCNT3_COUNT);
 
-	// Spill/reload RECCYCLE around the registered handler: the const-paddr
-	// MMIO shortcut targets the same handler set as vtlbSoftmemRead's slow
-	// path, including page-0F INTC_STAT → IntCHackCheck which mutates
-	// cpuRegs.cycle. See vtlbSoftmemRead for full rationale. The rcnt fast
-	// path needs the cycle flush anyway (it reads cpuRegs.cycle from memory),
-	// and the pin flush keeps one seam shared with its cold half.
-	armFlushCycleDelta();
-	armFlushEEClobberedPins(); // lazy-dirty seam: pairs with the reload below
-
 	if (rcnt_inline)
 	{
+		// Flush-free fast path: no C call happens on it, so the pins stay live
+		// in their registers, RECCYCLE stays the live delta, and the absolute
+		// cycle for the formula is rebuilt in registers (delta + nextEventCycle)
+		// instead of round-tripping cpuRegs.cycle through memory. The cold half
+		// carries the full seam the generic path uses (flush → call → reload).
 		const int cidx = (paddr >> 11) & 3;
 		a64::Label slow, done;
 
 		armMoveAddressToReg(a64::x1, &g_rcntJitRead[cidx]);
 		armAsm->Ldp(a64::w2, a64::w3, a64::MemOperand(a64::x1)); // guard, shift
 		armAsm->Cbz(a64::w2, &slow);
+		armAsm->Ldr(a64::w4, armCpuRegMem(&cpuRegs.nextEventCycle));
+		armAsm->Add(a64::w4, a64::w4, RECCYCLE.W()); // absolute cycle, low 32 bits
 		armMoveAddressToReg(a64::x1, &counters[cidx]);
-		armLoadPtr(a64::w4, &cpuRegs.cycle);
 		armAsm->Ldr(a64::w5, a64::MemOperand(a64::x1, offsetof(Counter, startCycle)));
 		armAsm->Sub(a64::w4, a64::w4, a64::w5);
 		armAsm->Lsr(a64::w4, a64::w4, a64::w3);
@@ -513,22 +510,30 @@ static bool recLoadConstPaddrMMIOShortcut(u32 bits, bool sign, bool forceEventTe
 		armAsm->B(&done);
 
 		armAsm->Bind(&slow);
+		armFlushCycleDelta();
+		armFlushEEClobberedPins();
 		armAsm->Mov(a64::w0, paddr);
 		armEmitCall(vmv.assumeHandlerGetRaw(szidx, false));
+		armReloadCycleDelta();
+		armReloadEEClobberedPins();
 		armAsm->Bind(&done);
 	}
 	else
 	{
+		// Spill/reload RECCYCLE around the registered handler: the const-paddr
+		// MMIO shortcut targets the same handler set as vtlbSoftmemRead's slow
+		// path, including page-0F INTC_STAT → IntCHackCheck which mutates
+		// cpuRegs.cycle. See vtlbSoftmemRead for full rationale.
+		armFlushCycleDelta();
+		armFlushEEClobberedPins(); // lazy-dirty seam: pairs with the reload below
 		armAsm->Mov(a64::w0, paddr);
 		armEmitCall(vmv.assumeHandlerGetRaw(szidx, false));
+		armReloadCycleDelta();
+		// Raw registered handlers are plain AAPCS (not preserve_most like the
+		// vtlb_memRead/Write dispatchers) and write no guest GPRs — restore the
+		// caller-saved pins they clobbered. x0 (the handler result) is untouched.
+		armReloadEEClobberedPins();
 	}
-
-	armReloadCycleDelta();
-	// Raw registered handlers are plain AAPCS (not preserve_most like the
-	// vtlb_memRead/Write dispatchers) and write no guest GPRs — restore the
-	// caller-saved pins they clobbered. x0 (the handler result) is untouched.
-	// (Harmless on the rcnt fast path: memory matches the pins it reloads.)
-	armReloadEEClobberedPins();
 
 	// Extend handler return value into x0 for the 64-bit cpuRegs.GPR store.
 	// AAPCS64 leaves the upper bits of x0 unspecified for sub-word returns.
