@@ -504,7 +504,6 @@ void GSState::ResetDrawBufferIdx()
 
 void GSState::ResetDrawBuffers()
 {
-	ClearDeferredDraws();
 	m_used_buffers_idx = 1;
 	m_max_vertex_count = 0;
 
@@ -2682,7 +2681,6 @@ void GSState::GIFRegHandlerHWREG(const GIFReg* RESTRICT r)
 
 void GSState::Flush(GSFlushReason reason)
 {
-	DrainDeferredDraws();
 	SetDrawBuffDirty();
 
 	FlushWrite();
@@ -2759,10 +2757,6 @@ void GSState::FlushWrite()
 
 	if (len <= 0)
 		return;
-
-	// A real HOST->LOCAL write is about to land — it may touch ranges the
-	// deferred draws read or write, so replay them first.
-	DrainDeferredDraws();
 
 	GSBackQueue::TransferRecord rec;
 	rec.blit = m_tr.m_blit;
@@ -3053,12 +3047,7 @@ void GSState::FlushPrim()
 		if (m_mem_target != this)
 			m_channel_shuffle_finish = false;
 
-		if (GSConfig.UserHacks_TargetPingPongDefer && !m_back_queued && TryDeferPingPongDraw(rec, node))
-		{
-			// Third consume path: the record sits in the deferral queue, the
-			// node keeps the vertex data alive until DrainDeferredDraws().
-		}
-		else if (m_back_queued)
+		if (m_back_queued)
 		{
 			// The consumer releases the node after the tail runs.
 			PushRecord(GSBackQueue::RecordType::Draw, rec);
@@ -3117,108 +3106,6 @@ void GSState::FlushPrim()
 		m_vertex->tail = 0;
 		m_vertex->next = 0;
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Target ping-pong deferral (GameDB targetPingPongDefer)
-// ---------------------------------------------------------------------------
-// Pattern (Ridge Racer V's per-tile post-process): the game alternates, per
-// 64x32 tile, a CONVERSION draw (aux CT32 target, sampling the display FB as
-// PSMT8) with COMPOSITION draws (display FB, sampling the aux target). Each
-// alternation is a render-target switch — ~156 passes/frame on a tiler.
-// Conversions run inline as they arrive (all into the aux target = one pass);
-// compositions are captured and replayed contiguously at the burst boundary
-// (all into the display FB = one pass). Per-tile data dependencies survive:
-// each composition still executes after the conversion that feeds it.
-bool GSState::TryDeferPingPongDraw(GSBackQueue::DrawRecord& rec, GSBackQueue::DrawNode* node)
-{
-	if (m_defer_draining)
-		return false;
-	const GSDrawingEnvironment& env = rec.draw_env;
-	const GSDrawingContext& ctx = env.CTXT[env.PRIM.CTXT];
-	const u32 fbp = ctx.FRAME.Block();
-	const bool on_display =
-		(m_regs->DISP[0].DISPFB.Block() == fbp && m_regs->PMODE.EN1) ||
-		(m_regs->DISP[1].DISPFB.Block() == fbp && m_regs->PMODE.EN2);
-
-	if (env.PRIM.TME && !on_display && ctx.TEX0.PSM == PSMT8 &&
-		GSLocalMemory::m_psm[ctx.FRAME.PSM].bpp == 32)
-	{
-		// Conversion draw: (re-)engage the burst on this aux target and let it
-		// execute inline. Track the aux block range the compositions will read.
-		const u32 end = GSLocalMemory::GetUnwrappedEndBlockAddress(
-			ctx.FRAME.Block(), ctx.FRAME.FBW, ctx.FRAME.PSM, rec.draw_rect) + 1;
-		if (m_defer_aux_end == 0 || fbp < m_defer_aux_start)
-			m_defer_aux_start = fbp;
-		m_defer_aux_end = std::max(m_defer_aux_end, end);
-		return false;
-	}
-
-	if (m_defer_aux_end != 0 && env.PRIM.TME && on_display &&
-		ctx.TEX0.TBP0 >= m_defer_aux_start && ctx.TEX0.TBP0 < m_defer_aux_end &&
-		m_defer_queue.size() < 2048)
-	{
-		// Composition draw: capture for the contiguous replay.
-		m_defer_queue.push_back({rec, node});
-		return true;
-	}
-
-	// Anything else ends the burst.
-	DrainDeferredDraws();
-	m_defer_aux_start = 0;
-	m_defer_aux_end = 0;
-	return false;
-}
-
-void GSState::DrainDeferredDraws()
-{
-	if (m_defer_queue.empty() || m_defer_draining)
-		return;
-	m_defer_draining = true;
-
-	// Replay against installed state, then restore the live front state —
-	// same aiming discipline as the split-back ExecDrawRecord path.
-	const u64 live_sn = s_n;
-	const int live_backed_up = m_backed_up_ctx;
-	const u32 live_dirty = m_dirty_gs_regs;
-
-	for (DeferredDraw& d : m_defer_queue)
-	{
-		// The record must exit the executor with the LIVE next-state, not the
-		// stale one captured at defer time.
-		std::memcpy(&d.rec.next_env, &m_env, sizeof(d.rec.next_env));
-		d.rec.next_v = m_v;
-		d.rec.backed_up_ctx = live_backed_up;
-		d.rec.dirty_gs_regs = live_dirty;
-
-		m_draw_env = &m_prev_env;
-		PRIM = &m_prev_env.PRIM;
-		ExecDrawRecord(d.rec);
-		UpdateContext();
-		m_draw_env = &m_env;
-		PRIM = &m_env.PRIM;
-		UpdateContext();
-
-		ReleaseDrawNode(d.node);
-	}
-	m_defer_queue.clear();
-	s_n = live_sn;
-
-	// The executor re-aimed the parse buffers at node storage — restore.
-	m_vertex = &m_vertex_buffers[m_current_buffer_idx];
-	m_index = &m_index_buffers[m_current_buffer_idx];
-	m_defer_aux_start = 0;
-	m_defer_aux_end = 0;
-	m_defer_draining = false;
-}
-
-void GSState::ClearDeferredDraws()
-{
-	for (DeferredDraw& d : m_defer_queue)
-		ReleaseDrawNode(d.node);
-	m_defer_queue.clear();
-	m_defer_aux_start = 0;
-	m_defer_aux_end = 0;
 }
 
 void GSState::ExecDrawRecord(const GSBackQueue::DrawRecord& rec)
@@ -3815,7 +3702,6 @@ void GSState::ExecClutLoadRecord(const GSBackQueue::ClutLoadRecord& rec)
 
 void GSState::SubmitPcrtcSync()
 {
-	DrainDeferredDraws();
 	GSBackQueue::PcrtcSyncRecord rec;
 	std::memcpy(&rec.displays, &PCRTCDisplays, sizeof(rec.displays));
 	rec.scanmask_used = m_scanmask_used;

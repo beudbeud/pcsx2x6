@@ -167,16 +167,6 @@ protected:
 	// Uniform capacity across all draw buffers (mirrored into each VertexBuff::maxcount);
 	// buffers always grow together so spare-vert copies between buffers can never overflow.
 	u32 m_max_vertex_count = 0;
-	struct DeferredDraw
-	{
-		GSBackQueue::DrawRecord rec;
-		GSBackQueue::DrawNode* node;
-	};
-	std::vector<DeferredDraw> m_defer_queue;
-	u32 m_defer_aux_start = 0; // aux target block range for the current burst
-	u32 m_defer_aux_end = 0;   // exclusive; 0/0 = no burst engaged
-	bool m_defer_draining = false; // reentrancy guard (drain -> Draw -> flush paths)
-
 	int m_current_buffer_idx = 0;
 	bool m_recent_buffer_switch = false;
 
@@ -494,18 +484,6 @@ public:
 	void ExecDrawRecord(const GSBackQueue::DrawRecord& rec);
 	void DrawRecordTail(u64 draw_serial);
 	void SubmitPcrtcSync();
-
-	// Target ping-pong deferral (GameDB targetPingPongDefer, e.g. Ridge Racer
-	// V's per-tile post-process): draws that write the display FB while
-	// reading the aux target are captured as DrawRecords and replayed in one
-	// contiguous run, collapsing the per-tile render-target alternation into
-	// two passes. Engaged per burst by the aux-side draws (non-display CT32
-	// frame sampling PSMT8); drained on any non-matching draw, transfers,
-	// pcrtc sync, or reset.
-	bool TryDeferPingPongDraw(GSBackQueue::DrawRecord& rec, GSBackQueue::DrawNode* node);
-	void DrainDeferredDraws();
-	void ClearDeferredDraws(); // release without executing (reset paths)
-
 	void ExecPcrtcSyncRecord(const GSBackQueue::PcrtcSyncRecord& rec);
 
 	// GV7-1: sampled from GSConfig.BackThreadMode at construction (the option is
