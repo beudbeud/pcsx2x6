@@ -2957,6 +2957,29 @@ void GSDeviceOGL::OMSetRenderTargets(GSTexture* rt, GSTexture* ds_as_rt, GSTextu
 	// Pass-cause breakdown for the perf log; the ROV counters are dead on GL.
 	g_perfmon.Put(GSPerfMon::DrawCallsROV, static_cast<double>(rt_changed));
 	g_perfmon.Put(GSPerfMon::BarriersROV, static_cast<double>(ds_as_rt_changed));
+
+	// PCSX2_RT_TRACE=1: log the first color-target switches to identify a
+	// render-pass ping-pong (which textures alternate, at what size).
+	static const bool s_rt_trace = []() { const char* v = std::getenv("PCSX2_RT_TRACE"); return v && *v == '1'; }();
+	if (s_rt_trace && rt_changed)
+	{
+		// Only trace pathological frames: skip the first 30 switches of each
+		// frame so boot/menu frames (a handful of passes) never log.
+		static int s_rt_trace_left = 300;
+		static int s_rt_frame = -1, s_rt_switches = 0;
+		if (g_perfmon.GetFrame() != s_rt_frame)
+		{
+			s_rt_frame = g_perfmon.GetFrame();
+			s_rt_switches = 0;
+		}
+		if (++s_rt_switches > 30 && s_rt_trace_left > 0)
+		{
+			s_rt_trace_left--;
+			const GSVector2i sz = rt ? rt->GetSize() : GSVector2i(0, 0);
+			Console.WriteLn("RTTRACE f%d n%d rt=%p %dx%d fmt=%d ds=%p", s_rt_frame, s_rt_switches, (void*)rt,
+				sz.x, sz.y, rt ? static_cast<int>(rt->GetFormat()) : -1, (void*)ds);
+		}
+	}
 	// Split up to avoid unbind/bind calls when clearing.
 
 	OMSetFBO(m_fbo);
