@@ -123,6 +123,7 @@ protected:
 	static u32 GetFrameCountForMS(u32 sample_rate, u32 milliseconds);
 
 	void ReadFrames(SampleType* samples, u32 num_frames);
+	u32 GetBufferedFramesRelaxed() const;
 
 	template <AudioExpansionMode mode, ReadChannel c0 = READ_CHANNEL_NONE, ReadChannel c1 = READ_CHANNEL_NONE,
 		ReadChannel c2 = READ_CHANNEL_NONE, ReadChannel c3 = READ_CHANNEL_NONE, ReadChannel c4 = READ_CHANNEL_NONE,
@@ -158,7 +159,6 @@ private:
 	void AllocateBuffer();
 	void DestroyBuffer();
 	static u32 GetAlignedBufferSize(u32 size);
-	u32 GetBufferedFramesRelaxed() const;
 
 	void InternalWriteFrames(const SampleType* samples, u32 num_frames);
 
