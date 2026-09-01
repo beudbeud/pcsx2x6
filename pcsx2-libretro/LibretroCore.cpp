@@ -246,7 +246,7 @@ namespace LibretroHost
 
 		void Initialize()
 		{
-			BaseInitialize(&StereoSampleReaderImpl, false);
+			BaseInitialize(&StereoSampleReaderImpl, AudioSynchronizationMode::Disabled);
 		}
 
 		u32 PullFrames(SampleType* dest, u32 max_frames)
