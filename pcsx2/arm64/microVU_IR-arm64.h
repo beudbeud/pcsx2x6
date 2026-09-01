@@ -288,6 +288,10 @@ public:
 	// every path back). Pinned by EeVu0Cop2ClampResidency.MacroModeNeonPool*.
 	void reset(bool cop2mode = false)
 	{
+		// AX-15: never let a clone-mov candidate cross a block boundary (the
+		// assembler buffer/cursor may have been re-targeted since).
+		cloneMovDst = -1;
+
 		// Clear x26/x27 unconditionally so no VI binding survives a
 		// usability flip (the usable-gated loop below skips them when
 		// cop2mode disables them).
@@ -338,6 +342,37 @@ public:
 		armAsm->Ext(dst.V16B(), dst.V16B(), dst.V16B(), srcLane * 4);
 	}
 
+	// AX-15: clone-mov fold. allocReg's full-register clone (Mov dst,src —
+	// the x86 2-operand heritage) is recorded here; a full-vector 3-operand
+	// consumer emitted IMMEDIATELY after (cursor still at pos+4, so at
+	// runtime the source register provably still holds the cloned value)
+	// rewinds the Mov and reads the source directly.
+	ptrdiff_t cloneMovPos = -1;
+	int cloneMovDst = -1;
+	int cloneMovSrc = -1;
+	__fi void noteCloneMov(ptrdiff_t pos, int dst, int src)
+	{
+		cloneMovPos = pos;
+		cloneMovDst = dst;
+		cloneMovSrc = src;
+	}
+	// First operand for an op that writes ALL 4 lanes of `to` from its
+	// operands: the clone source (rewinding the Mov) when the clone Mov is
+	// the last emitted instruction, else `to` itself.
+	__fi const a64::VRegister foldCloneMov(const a64::VRegister& to)
+	{
+		if (cloneMovDst == static_cast<int>(to.GetCode()) &&
+			armAsm->GetBuffer()->GetCursorOffset() == cloneMovPos + 4)
+		{
+			armAsm->GetBuffer()->Rewind(cloneMovPos);
+			const int src = cloneMovSrc;
+			cloneMovDst = -1;
+			return armQRegister(src);
+		}
+		cloneMovDst = -1;
+		return to;
+	}
+
 	// Allocate a NEON register for VF access. Ported from x86 allocReg —
 	// preserves cache-validity and clone-write SS-shuffle semantics.
 	//
@@ -383,7 +418,11 @@ public:
 							else if (xyzw == 1)
 								emitSSShuffle(qmmZ, qmmI, 3); // W to lane 0
 							else if (z != i)
+							{
+								const ptrdiff_t mov_pos = armAsm->GetBuffer()->GetCursorOffset();
 								armAsm->Mov(qmmZ.V16B(), qmmI.V16B());
+								noteCloneMov(mov_pos, static_cast<int>(qmmZ.GetCode()), static_cast<int>(qmmI.GetCode()));
+							}
 
 							mapI.count = counter; // Reg i was used, so update counter.
 						}
