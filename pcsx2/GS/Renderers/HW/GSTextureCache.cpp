@@ -7345,6 +7345,23 @@ void GSTextureCache::Read(Target* t, const GSVector4i& r)
 	if ((!t->m_dirty.empty() && !t->m_dirty.GetTotalRect(t->m_TEX0, t->m_unscaled_size).rintersect(r).rempty()) || r.width() == 0 || r.height() == 0)
 		return;
 
+	// PCSX2_RB_TRACE=1: log every target readback (bp/psm/rect) to find what
+	// forces GPU->CPU syncs on draw-heavy games.
+	static const bool s_rb_trace = []() { const char* v = std::getenv("PCSX2_RB_TRACE"); return v && *v == '1'; }();
+	if (s_rb_trace)
+	{
+		static int s_rb_budget = 400;
+		if (s_rb_budget > 0)
+		{
+			s_rb_budget--;
+			Console.WriteLn("RBTRACE f%llu bp=%x psm=%x bw=%d rect=%d,%d-%d,%d drawn=%d,%d-%d,%d age=%d",
+				(unsigned long long)g_perfmon.GetFrame(), t->m_TEX0.TBP0, t->m_TEX0.PSM, (int)t->m_TEX0.TBW,
+				r.x, r.y, r.z, r.w,
+				t->m_drawn_since_read.x, t->m_drawn_since_read.y, t->m_drawn_since_read.z, t->m_drawn_since_read.w,
+				t->m_age);
+		}
+	}
+
 	const GIFRegTEX0& TEX0 = t->m_TEX0;
 	const bool is_depth = (t->m_type == DepthStencil);
 
