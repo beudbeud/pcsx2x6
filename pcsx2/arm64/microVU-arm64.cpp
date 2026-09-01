@@ -1247,11 +1247,13 @@ __fi void mVUclear(mV, u32 addr, u32 size)
 		{
 			mVU.prog.cleared = 1;
 			std::memset(&mVU.prog.lpState, 0, sizeof(mVU.prog.lpState));
-			for (u32 i = 0; i < (mVU.progSize / 2); i++)
-			{
-				mVU.prog.quick[i].block = NULL;
-				mVU.prog.quick[i].prog  = NULL;
-			}
+			// One vectorized memset instead of a 2K-iteration pointer-NULLing
+			// loop: this runs on the first micro-mem write after every exec
+			// (VIF1 MPG uploads, every frame) and showed up at ~1.2% of the
+			// EE thread in SC3 combat.
+			std::memset(mVU.prog.quick, 0, sizeof(mVU.prog.quick));
+			mVU.prog.quickListCount = 0;
+			mVU.prog.quickListOverflow = 0;
 		}
 		return;
 	}
@@ -1259,16 +1261,43 @@ __fi void mVUclear(mV, u32 addr, u32 size)
 	// Range-aware path: only invalidate quick[i] whose cached program has a
 	// compiled range overlapping [addr, addr+size). Programs whose ranges are
 	// disjoint from the touched bytes stay quick-cached, skipping the per-PC
-	// deque walk on the next dispatch.
-	for (u32 i = 0; i < (mVU.progSize / 2); i++)
+	// deque walk on the next dispatch. The occupancy list keeps this walk at
+	// a handful of live slots instead of mProgSize/2 loads per micro-mem
+	// write (VIF MPG uploads call here every frame — ~1.2% of the EE thread
+	// in SC3 combat before this).
+	if (!mVU.prog.quickListOverflow)
 	{
-		const microProgram* p = mVU.prog.quick[i].prog;
-		if (!p)
-			continue;
-		if (mVUProgRangesOverlap(p, addr, size))
+		u32 n = mVU.prog.quickListCount;
+		for (u32 j = 0; j < n;)
 		{
-			mVU.prog.quick[i].block = NULL;
-			mVU.prog.quick[i].prog  = NULL;
+			const u32 i = mVU.prog.quickList[j];
+			const microProgram* p = mVU.prog.quick[i].prog;
+			if (p && !mVUProgRangesOverlap(p, addr, size))
+			{
+				j++;
+				continue;
+			}
+			if (p)
+			{
+				mVU.prog.quick[i].block = NULL;
+				mVU.prog.quick[i].prog  = NULL;
+			}
+			mVU.prog.quickList[j] = mVU.prog.quickList[--n]; // compact; also drops stale slots
+		}
+		mVU.prog.quickListCount = n;
+	}
+	else
+	{
+		for (u32 i = 0; i < (mVU.progSize / 2); i++)
+		{
+			const microProgram* p = mVU.prog.quick[i].prog;
+			if (!p)
+				continue;
+			if (mVUProgRangesOverlap(p, addr, size))
+			{
+				mVU.prog.quick[i].block = NULL;
+				mVU.prog.quick[i].prog  = NULL;
+			}
 		}
 	}
 
@@ -1475,6 +1504,21 @@ __fi bool mVUcmpProg(microVU& mVU, microProgram& prog)
 	return true;
 }
 
+// Record a quick[] slot as occupied for mVUclear's range-aware invalidation
+// (see microProgManager::quickList). Callers only set an EMPTY slot, so no
+// duplicate can enter the list.
+static __fi void mVUquickNote(microVU& mVU, u32 idx)
+{
+	if (mVU.prog.quickListOverflow)
+		return;
+	if (mVU.prog.quickListCount >= microProgManager::kQuickListMax)
+	{
+		mVU.prog.quickListOverflow = 1;
+		return;
+	}
+	mVU.prog.quickList[mVU.prog.quickListCount++] = static_cast<u16>(idx);
+}
+
 // Searches for Cached Micro Program and sets prog.cur to it
 _mVUt __fi void* mVUsearchProg(u32 startPC, uptr pState)
 {
@@ -1507,6 +1551,7 @@ _mVUt __fi void* mVUsearchProg(u32 startPC, uptr pState)
 #endif
 				quick.block = it[0]->block[startPC / 8];
 				quick.prog  = it[0];
+				mVUquickNote(mVU, mVU.regs().start_pc / 8);
 				list->erase(it);
 				list->push_front(quick.prog);
 				// Per-PC deque match resolved to this program;
@@ -1542,6 +1587,7 @@ _mVUt __fi void* mVUsearchProg(u32 startPC, uptr pState)
 			mVU.prog.cur     = shared;
 			quick.prog       = shared;
 			quick.block      = shared->block[startPC / 8];
+			mVUquickNote(mVU, mVU.regs().start_pc / 8);
 			// Record the dispatched entry on the resolved program.
 			// Idempotent on duplicates; bumps `observed.version` only
 			// when this PC is new for the program.
@@ -1571,6 +1617,7 @@ _mVUt __fi void* mVUsearchProg(u32 startPC, uptr pState)
 			mVU.prog.cur     = hydrated;
 			quick.prog       = hydrated;
 			quick.block      = hydrated->block[startPC / 8];
+			mVUquickNote(mVU, mVU.regs().start_pc / 8);
 			hydrated->observed.record(startPC);
 			if (quick.block == nullptr)
 			{
@@ -1593,6 +1640,7 @@ _mVUt __fi void* mVUsearchProg(u32 startPC, uptr pState)
 		void* entryPoint = mVUblockFetch(mVU,  startPC, pState);
 		quick.block      = mVU.prog.cur->block[startPC/8];
 		quick.prog       = mVU.prog.cur;
+		mVUquickNote(mVU, mVU.regs().start_pc / 8);
 		// Count this deque insertion in the program's refcount.
 		// contentMap owns the program; per-PC deques are non-owning refs.
 		list->push_front(mVU.prog.cur);
