@@ -2783,6 +2783,29 @@ void GSRendererHW::Draw()
 	m_cached_ctx.FRAME = context->FRAME;
 	m_cached_ctx.ZBUF = context->ZBUF;
 
+	// PCSX2_PAGE_TRACE=1: dump raw draw registers once a page-sized target draw
+	// (FBW<=1) is seen, to characterize small-target ping-pong loops.
+	static const bool s_page_trace = []() { const char* v = std::getenv("PCSX2_PAGE_TRACE"); return v && *v == '1'; }();
+	if (s_page_trace)
+	{
+		static int s_pt_budget = 150;
+		static bool s_pt_armed = false;
+		if (!s_pt_armed && m_cached_ctx.FRAME.FBW <= 1)
+			s_pt_armed = true;
+		if (s_pt_armed && s_pt_budget > 0)
+		{
+			s_pt_budget--;
+			Console.WriteLn("PAGETRACE n%llu FBP=%x FBW=%d FPSM=%x ZBP=%x ZMSK=%d | TME=%d TBP0=%x TBW=%d TPSM=%x TW=%d TH=%d | prim=%d verts=%d | r=%d,%d-%d,%d | ABE=%d TEST(ate=%d,zte=%d,ztst=%d)",
+				(unsigned long long)s_n, m_cached_ctx.FRAME.Block(), m_cached_ctx.FRAME.FBW, m_cached_ctx.FRAME.PSM,
+				m_cached_ctx.ZBUF.Block(), (int)m_cached_ctx.ZBUF.ZMSK,
+				(int)PRIM->TME, m_cached_ctx.TEX0.TBP0, (int)m_cached_ctx.TEX0.TBW, (int)m_cached_ctx.TEX0.PSM,
+				(int)m_cached_ctx.TEX0.TW, (int)m_cached_ctx.TEX0.TH,
+				(int)m_draw_env->PRIM.PRIM, (int)m_vertex->tail,
+				(int)m_vt.m_min.p.x, (int)m_vt.m_min.p.y, (int)m_vt.m_max.p.x, (int)m_vt.m_max.p.y,
+				(int)PRIM->ABE, (int)m_cached_ctx.TEST.ATE, (int)m_cached_ctx.TEST.ZTE, (int)m_cached_ctx.TEST.ZTST);
+		}
+	}
+
 	if (IsBadFrame())
 	{
 		GL_INS("HW: Warning skipping a draw call (%lld)", s_n);
