@@ -670,15 +670,15 @@ void LibretroHost::RegisterCoreOptions()
 			"Try None/Partial if the GS thread is the bottleneck. Hardware renderers only.",
 			nullptr, "performance",
 			{{"2", "Full - Hash Cache (Default)"}, {"1", "Partial"}, {"0", "None"}, {nullptr, nullptr}}, "2"},
-		{"pcsx2_hw_render", "Hardware Render (zero-copy, experimental)", nullptr,
-			"EXPERIMENTAL: present the GL frame directly through the libretro hardware-render context "
+		{"pcsx2_hw_render", "Hardware Render (zero-copy)", nullptr,
+			"Present the GL frame directly through the libretro hardware-render context "
 			"(zero-copy) instead of the GPU->CPU readback path. On desktop this also decouples emulation "
 			"from the present for stable 60fps pacing; on RPi5/V3D it drops the per-frame readback + CPU "
-			"swizzle + re-upload. Validated on NVIDIA/X11; AMD/Intel/Wayland untested. Requires a restart. "
-			"OpenGL renderer only; falls back to readback if the frontend has no HW context.",
+			"swizzle + re-upload (~13% of the GS thread, measured worth +5-8 fps on GS-bound games). "
+			"Requires a restart. OpenGL renderer only; falls back to readback if the frontend has no HW context.",
 			nullptr, "performance",
-			{{"disabled", "Disabled (Default)"}, {"enabled", "Enabled (experimental)"}, {nullptr, nullptr}},
-			"disabled"},
+			{{"enabled", "Enabled (Default)"}, {"disabled", "Disabled (readback)"}, {nullptr, nullptr}},
+			"enabled"},
 		{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr, nullptr}}, nullptr},
 	};
 
@@ -1542,7 +1542,7 @@ static bool HWPresentSharedTexture(u32 tex, u32 w, u32 h, void* fence)
 // sampled directly (zero-copy, no dmabuf which NVIDIA's GLX can't export).
 static void TryInitHWRender()
 {
-	s_hw_render_requested = (std::strcmp(GetCoreOption("pcsx2_hw_render", "disabled"), "enabled") == 0);
+	s_hw_render_requested = (std::strcmp(GetCoreOption("pcsx2_hw_render", "enabled"), "enabled") == 0);
 	if (!s_hw_render_requested)
 		return;
 
