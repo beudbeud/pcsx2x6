@@ -60,6 +60,8 @@ NM00007:
   bootprog: SCSLOAD
   media: DVD
   input: button
+  clampModes:
+    vuClampMode: 2 # Instant ring-outs at round start (corrupted positions) — same engine family as SC3.
   gsHWFixes:
     alignSprite: 1
 NM00008:

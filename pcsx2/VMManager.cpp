@@ -1463,12 +1463,14 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 					const std::string dst = Path::Combine(EmuFolders::MemoryCards, card);
 					if (!FileSystem::FileExists(dst.c_str())) {
 						const std::string src = findCardSource(card);
+						// A missing SAVE card is not fatal (unlike a dongle): the
+						// game should boot with a blank card, exactly like a real
+						// cabinet with a fresh conquest card. Point the slot at
+						// the name and let the memcard subsystem auto-create and
+						// format it. Only seed from a source copy when one exists.
 						if (src.empty()) {
-							Error::SetStringFmt(error, "requested memcard image does not exist! '{}'", card);
-							Console.ErrorFmt("ACGAME: cannot open a card file '{}' (searched memcards dir, game dir and their memcards/ subdirs)", card);
-							return false;
-						}
-						if (src != dst && !FileSystem::CopyFilePath(src.c_str(), dst.c_str(), false)) {
+							Console.WarningFmt("ACGAME: save card '{}' not found; starting with a blank card", card);
+						} else if (src != dst && !FileSystem::CopyFilePath(src.c_str(), dst.c_str(), false)) {
 							Error::SetStringFmt(error, "failed to copy memcard image '{}' into the memcards directory", card);
 							return false;
 						}
