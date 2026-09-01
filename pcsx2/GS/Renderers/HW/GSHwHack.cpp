@@ -1231,6 +1231,79 @@ bool GSHwHack::OI_BurnoutGames(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GS
 	return false;
 }
 
+bool GSHwHack::OI_SmashCourt(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GSTextureCache::Source* t)
+{
+	// During rallies the game runs a full-screen feedback effect one GS page at
+	// a time: sprite copy of a 64x32 block of the framebuffer into a scratch
+	// page (this draw), then a blended sprite from the scratch page back over
+	// the framebuffer — ~140 iterations, which alternates the bound render
+	// target on every draw and murders tile-based GPUs (~280 render passes per
+	// frame). Snapshot the framebuffer once per burst and serve every page copy
+	// from the snapshot instead: the copies stay off the framebuffer's FBO and
+	// the blend-back draws run in one continuous render pass.
+	static GSTexture* s_fb_copy = nullptr;
+	static u64 s_last_serial = 0;
+	static u32 s_last_src_tbp = ~0u;
+
+	const bool is_page_copy =
+		rt && t && t->m_from_target && t->m_from_target->m_texture &&
+		RPRIM->TME && !RPRIM->ABE &&
+		r.m_vt.m_primclass == GS_SPRITE_CLASS && r.m_index->tail == 2 &&
+		RFRAME.FBW <= 2 && RTEX0.TBW >= 8 &&
+		r.m_r.width() <= 64 && r.m_r.height() <= 32;
+
+	if (!is_page_copy)
+	{
+		// Burst over: drop the snapshot so it can't go stale.
+		if (s_fb_copy)
+		{
+			g_gs_device->Recycle(s_fb_copy);
+			s_fb_copy = nullptr;
+		}
+		return true;
+	}
+
+	GSTexture* src = t->m_from_target->m_texture;
+	const bool new_burst = (r.s_n != s_last_serial + 2) || (RTEX0.TBP0 != s_last_src_tbp) ||
+	                       !s_fb_copy || s_fb_copy->GetSize() != src->GetSize();
+	if (new_burst)
+	{
+		if (s_fb_copy && s_fb_copy->GetSize() != src->GetSize())
+		{
+			g_gs_device->Recycle(s_fb_copy);
+			s_fb_copy = nullptr;
+		}
+		if (!s_fb_copy)
+			s_fb_copy = g_gs_device->CreateRenderTarget(src->GetWidth(), src->GetHeight(), src->GetFormat(), false);
+		if (!s_fb_copy)
+			return true; // Allocation failed, run the draw normally.
+		g_gs_device->CopyRect(src, s_fb_copy, GSVector4i::loadh(src->GetSize()), 0, 0);
+	}
+	s_last_serial = r.s_n;
+	s_last_src_tbp = RTEX0.TBP0;
+
+	// Source rect in texels from the sprite's UVs, destination from the draw rect.
+	const float src_scale = t->m_from_target->GetScale();
+	const float dst_scale = rt->GetScale();
+	const GSVector4 st = GSVector4(r.m_vt.m_min.t.x, r.m_vt.m_min.t.y, r.m_vt.m_max.t.x, r.m_vt.m_max.t.y);
+	const GSVector4i src_r = GSVector4i(st * src_scale);
+	const GSVector4i dst_r = GSVector4i(GSVector4(r.m_r) * dst_scale);
+
+	if (src_r.width() == dst_r.width() && src_r.height() == dst_r.height())
+	{
+		g_gs_device->CopyRect(s_fb_copy, rt, src_r.rintersect(GSVector4i::loadh(s_fb_copy->GetSize())),
+			static_cast<u32>(dst_r.x), static_cast<u32>(dst_r.y));
+	}
+	else
+	{
+		const GSVector4 s_size = GSVector4(s_fb_copy->GetSize()).xyxy();
+		g_gs_device->StretchRect(s_fb_copy, GSVector4(src_r) / s_size, rt, GSVector4(dst_r), ShaderConvert::COPY, false);
+	}
+
+	GL_INS("OI_SmashCourt: page copy served from snapshot (%lld)", r.s_n);
+	return false; // Skip the draw.
+}
+
 #undef RPRIM
 #undef RCONTEXT
 
@@ -1480,6 +1553,7 @@ const GSHwHack::Entry<GSRendererHW::OI_Ptr> GSHwHack::s_before_draw_functions[] 
 	CRC_F(OI_SonicUnleashed),
 	CRC_F(OI_ArTonelico2),
 	CRC_F(OI_BurnoutGames),
+	CRC_F(OI_SmashCourt),
 };
 
 const GSHwHack::Entry<GSRendererHW::MV_Ptr> GSHwHack::s_move_handler_functions[] = {
