@@ -188,8 +188,9 @@ if(USE_VTUNE)
 	target_link_libraries(common PUBLIC Vtune::Vtune)
 endif()
 
-if (USE_GCC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
-	# GCC LTO doesn't work with asm statements
+if (USE_GCC)
+	# GCC LTO doesn't work with asm statements. Unconditional: -flto can also
+	# arrive through the toolchain flags (buildroot), not only through IPO.
 	set_source_files_properties(FastJmp.cpp PROPERTIES COMPILE_FLAGS -fno-lto)
 endif()
 
