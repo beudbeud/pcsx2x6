@@ -35,7 +35,12 @@ Adds purs verbatim d'armsx2 : `pcsx2/EeFpuModel.h`, `VuMulBand.h`, `VuEfuModel.h
 `arm64/VuFmacFlags-arm64.h`, `arm64/EeFpuModelCall-arm64.h` (+ CMakeLists).
 Bonus : GameDB Fate NM00048 `eeClampMode: 3`.
 
-### Step 2 — Modèle bit-domain dans FPU.cpp (À FAIRE)
+### Step 2 — Modèle bit-domain (FAIT, commit d764dff7e4)
+Réalisé en TU AUTONOME `pcsx2/EeFpuModel.cpp` (pas dans FPU.cpp) — plus propre,
+zéro risque pour nos opcodes EE-FPU. Extraction verbatim (brace-matcher) des
+helpers ee* + EeFpuModel, -ffp-contract=off. Compile clean.
+
+### Step 2-OLD (approche abandonnée : injection dans FPU.cpp)
 Notre FPU.cpp (446 l.) ne diverge que de 55 l. de la base ; armsx2 ajoute ~1100.
 Porter UNIQUEMENT, en tant que fonctions autonomes neuves :
 - helpers file-scope : `eeToDouble`, `eeRoundsOutOfRange`, `kEeMinNormal`,
@@ -50,7 +55,12 @@ Porter UNIQUEMENT, en tant que fonctions autonomes neuves :
   (notre FPU.cpp est l'ancienne version, sans la famille ee*).
 - Build-check : les nouvelles fonctions compilent, inutilisées jusqu'au step 3.
 
-### Step 3 — Interpréteur (la référence)
+### Step 3 — Interpréteur (FAIT, commit 4b81876e29)
+VUflags.h/.cpp + VU0.cpp = diffs armsx2 appliqués clean (ours==base). VUops.cpp
+= merge 3-way (nos _vuSQRT/_vuRSQRT superseded par le modèle armsx2). Implémente
+VuMulBand + VuEfuModel. eeMulOneUlpLow appelé en ::global. Compile+linke clean.
+
+### Step 3-DETAIL (référence)
 Signatures neuves + appelants (nos fichiers très peu divergents de la base) :
 - `VUflags.h/.cpp` : `VU_MACx_UPDATE(VU, u32, bool overflow=false, bool underflow=false)`,
   `VU_STAT_UPDATE(VU, u32 extraSticky=0)`.
