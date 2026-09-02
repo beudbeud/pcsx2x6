@@ -86,6 +86,30 @@ d'armsx2 réécrivent la même séquence de store du produit — fold AUTOUR des
 de spill `armEmitEeFpuModelCall`, sans que l'un clobber les operand-stores de
 l'autre (réf `f02cea753e` « move the multiply's operand stores off the hot path »).
 
+### Step 4 — BLOCKER MESURÉ (02/09) : divergence de convention registre
+Tentative de swap wholesale (prendre iCOP2/microVU d'armsx2 + ré-appliquer AX-15
+après) : **échoue sur une divergence de convention registre COP2-macro**. Notre
+`microVU_IR-arm64.h:105` réserve **q8-15** en neonCop2Mode (nos consts de clamp EE,
+SL-13) ; armsx2 réserve **q25/q26** (`i != 25 && i != 26`). L'iCOP2 d'armsx2 (qu'on
+prendrait) suppose la convention 25/26 → clash avec notre IR. Les 2 transplants
+ont divergé là. Donc step 4 = VRAI hand-merge sémantique :
+1. Réconcilier la convention registre COP2 (q8-15 nôtre vs q25/26 armsx2) —
+   choisir une et adapter les consts de clamp + le spill du model-call.
+2. Porter les helpers accuracy (mVUemitFmacUO / mVUemitSaturateAtMax / mVUclearUO,
+   nouvelle signature mVUupdateFlags avec underflow/overflow) dans NOS émetteurs.
+   Ils sont gated en interne par le mode → clampModes 0-3 gardent l'ancien
+   comportement, mode 4 = accuracy. mVUemitFmacUO/SaturateAtMax vivent dans
+   microVU_Upper d'armsx2.
+3. Le VuMulBand out-of-line (store fs/ft/product, armEmitEeFpuModelCall(
+   vuMulShortTailBandVu0/1), reload) au site du multiply — voir armsx2
+   microVU_Upper l.133-140.
+4. Ré-appliquer AX-15 (foldCloneMov aux sites Fmul par-élément) + GE (iCOP2).
+5. Re-valider les 10 jeux (comportement VU change même gated).
+Piège armsx2 IR +1 : `return !neonCop2Mode || (i != 25 && i != 26)` — leur
+exclusion, à réconcilier avec notre `(i < 8 || i > 15)`.
+Note: notre AX-15 dans l'IR reste inerte (note sans fold) si les émetteurs
+n'appellent pas foldCloneMov — sûr mais perte perf jusqu'à ré-application.
+
 ### Step 5 — Config + GameDB
 - `vuClampMode 4` : enum/rung (`662b114168`) ; picker Android (`b760dfd29c`) skippable.
 - GameDB : SC2 NM00007 tester `vuClampMode: 4` ; Fate NM00048 `eeClampMode: 3` (FAIT step 1).
