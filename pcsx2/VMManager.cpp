@@ -836,6 +836,24 @@ void VMManager::ApplyCoreSettings()
 		ApplyGameFixes();
 	}
 
+	// DIAGNOSTIC (PCSX2_FORCE_INTERP): run the VU through the interpreter so the
+	// exact VU FP model (VUops/EeFpuModel, step 3) is active — a decisive test of
+	// whether VU numeric accuracy is behind the SC2 inert-AI bug, WITHOUT the
+	// recompiler emitter port (step 4).
+	//   =1 : VU0/VU1 micro interpreter only (EE stays recompiler — faster; covers
+	//        VU1 + VU0-micro, but NOT COP2 macro which stays on the EE rec).
+	//   =2 : also force the EE interpreter, so COP2/VU0-macro runs the exact model
+	//        too (covers everything, but very slow).
+	if (const char* v = std::getenv("PCSX2_FORCE_INTERP"); v && (*v == '1' || *v == '2'))
+	{
+		EmuConfig.Cpu.Recompiler.EnableVU0 = false;
+		EmuConfig.Cpu.Recompiler.EnableVU1 = false;
+		if (*v == '2')
+			EmuConfig.Cpu.Recompiler.EnableEE = false;
+		Console.WriteLnFmt(Color_StrongYellow, "PCSX2_FORCE_INTERP={}: VU interpreter forced (exact VU model{}).",
+			*v, (*v == '2') ? " + EE interpreter, covers COP2 macro, SLOW" : ", covers VU micro");
+	}
+
 	CheckForConfigChanges(old_config);
 }
 
