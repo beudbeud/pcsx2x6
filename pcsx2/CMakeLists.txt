@@ -213,7 +213,10 @@ set(pcsx2Headers
 	VU1Trace.h
 	VUflags.h
 	VUmicro.h
-	VUops.h)
+	VUops.h
+	EeFpuModel.h
+	VuMulBand.h
+	VuEfuModel.h)
 
 # CDVD sources
 set(pcsx2CDVDSources
@@ -1125,6 +1128,8 @@ set(pcsx2arm64Sources
 
 set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
+	arm64/VuFmacFlags-arm64.h
+	arm64/EeFpuModelCall-arm64.h
 	arm64/iCore-arm64.h
 	arm64/iR3000A-arm64.h
 	arm64/iR5900-arm64.h
