@@ -1300,7 +1300,7 @@ target_include_directories(PCSX2_FLAGS INTERFACE
 # The EE/VU FP model needs each rounding step kept distinct: -ffp-contract=fast
 # would fuse `fs*ft` + accumulate into a single-rounded fmadd and hide the EE
 # multiplier's guard-bit defect (armsx2 pins this on MSUBA corpus cases 567/1130).
-set_source_files_properties(EeFpuModel.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+set_source_files_properties(EeFpuModel.cpp VUops.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
 set_source_files_properties(PrecompiledHeader.cpp PROPERTIES HEADER_FILE_ONLY TRUE)
 if(COMMAND target_precompile_headers)
