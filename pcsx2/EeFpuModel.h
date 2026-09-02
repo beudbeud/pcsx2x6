@@ -38,6 +38,11 @@
 	per-lane MAC nibble beside a sticky STATUS field, so each caller spells its
 	own out of a Result.
 */
+// Whether the EE multiplier array's truncated low columns drop the result one ULP
+// below the correctly-rounded product. The emitters read it out of line at the
+// clampMode-4 tail; defined with the model in EeFpuModel.cpp.
+bool eeMulOneUlpLow(u32 fs, u32 ft);
+
 namespace EeFpuModel
 {
 	// What one rounding step produced.
