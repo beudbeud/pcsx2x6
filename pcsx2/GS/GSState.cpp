@@ -873,7 +873,18 @@ void GSState::PushBuffer()
 
 void GSState::SetDrawBufferEnv()
 {
-	memcpy(&m_env_buffers[m_current_buffer_idx].m_env, &m_env, sizeof(GSDrawingEnvironment));
+	// Runs at the start of every draw batch. The readers of a buffered env
+	// (FlushBuffers, the merge/skip heuristics, CheckWriteOverlap) only touch
+	// the draw registers of both contexts and the derived offset/scissor of
+	// CTXT[m_backed_up_ctx]. When that is context 0, everything they read sits
+	// in the first 544 bytes (context 1's derived data is the tail of the
+	// struct), so the copy stops there. Kept as one memcpy call: inlining the
+	// copy grew the hot kick path more in I-cache than the bytes it saved.
+	static_assert(offsetof(GSDrawingEnvironment, CTXT) == 128);
+	static_assert(offsetof(GSDrawingContext, scissor) == 96);
+	static_assert(sizeof(GSDrawingContext) == 320);
+	const size_t bytes = (m_backed_up_ctx == 0) ? (128 + 320 + 96) : sizeof(GSDrawingEnvironment);
+	memcpy(&m_env_buffers[m_current_buffer_idx].m_env, &m_env, bytes);
 	m_env_buffers[m_current_buffer_idx].m_backed_up_ctx = m_backed_up_ctx;
 }
 
