@@ -272,6 +272,11 @@ private:
 	GLuint m_ps_ss[1 << 8];
 	GSDepthStencilOGL* m_om_dss[1 << 5] = {};
 	std::unordered_map<ProgramSelector, GLProgram, ProgramSelectorHash> m_programs;
+	// One-entry front cache for SetupPipeline: consecutive draws share a program far
+	// more often than not, and the unordered_map lookup was ~0.5 % of the GS thread on
+	// Jak. Invalidated wherever m_programs is cleared.
+	ProgramSelector m_last_psel = {};
+	GLProgram* m_last_prog = nullptr;
 	GLShaderCache m_shader_cache;
 
 	GLuint m_palette_ss = 0;

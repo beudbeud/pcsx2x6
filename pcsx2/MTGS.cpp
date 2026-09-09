@@ -70,18 +70,21 @@ namespace MTGS
 
 	// These vars maintain instance data for sending Data Packets.
 	// Only one data packet can be constructed and uploaded at a time.
-	static u32 s_packet_startpos; // size of the packet (data only, ie. not including the 16 byte command!)
+	// EE-private packet state: keep it off the s_WritePos line the GS thread polls.
+	alignas(__cachelinesize) static u32 s_packet_startpos; // size of the packet (data only, ie. not including the 16 byte command!)
 	static u32 s_packet_size; // size of the packet (data only, ie. not including the 16 byte command!)
 	static u32 s_packet_writepos; // index of the data location in the ringbuffer.
 
-	static std::atomic<bool> s_SignalRingEnable;
+	// Read by the GS thread on every packet (ThreadEntryPoint); written rarely by the
+	// EE. On its own line so the EE's per-packet writes above do not bounce it.
+	alignas(__cachelinesize) static std::atomic<bool> s_SignalRingEnable;
 	static std::atomic<int> s_SignalRingPosition;
 
 	static std::atomic<int> s_QueuedFrameCount;
 	static std::atomic<bool> s_VsyncSignalListener;
 
 	static std::mutex s_mtx_RingBufferBusy2; // Gets released on semaXGkick waiting...
-	static Threading::WorkSema s_sem_event;
+	alignas(__cachelinesize) static Threading::WorkSema s_sem_event;
 	static Threading::UserspaceSemaphore s_sem_OnRingReset;
 	static Threading::UserspaceSemaphore s_sem_Vsync;
 
@@ -375,6 +378,10 @@ void MTGS::MainLoop()
 					uint datapos = (local_ReadPos + 1) & RingBufferMask;
 					const int qsize = tag.data[0];
 					const u128* data = &RingBuffer[datapos];
+					// First tag + registers of the packet: the GS-side loops prefetch from the
+					// second line on, this covers the cold first lines.
+					__builtin_prefetch(data, 0, 0);
+					__builtin_prefetch(reinterpret_cast<const char*>(data) + 64, 0, 0);
 
 					MTGS_LOG("(MTGS Packet Read) ringtype=P1, qwc=%u", qsize);
 
@@ -400,6 +407,10 @@ void MTGS::MainLoop()
 					uint datapos = (local_ReadPos + 1) & RingBufferMask;
 					const int qsize = tag.data[0];
 					const u128* data = &RingBuffer[datapos];
+					// First tag + registers of the packet: the GS-side loops prefetch from the
+					// second line on, this covers the cold first lines.
+					__builtin_prefetch(data, 0, 0);
+					__builtin_prefetch(reinterpret_cast<const char*>(data) + 64, 0, 0);
 
 					MTGS_LOG("(MTGS Packet Read) ringtype=P2, qwc=%u", qsize);
 
@@ -425,6 +436,10 @@ void MTGS::MainLoop()
 					uint datapos = (local_ReadPos + 1) & RingBufferMask;
 					const int qsize = tag.data[0];
 					const u128* data = &RingBuffer[datapos];
+					// First tag + registers of the packet: the GS-side loops prefetch from the
+					// second line on, this covers the cold first lines.
+					__builtin_prefetch(data, 0, 0);
+					__builtin_prefetch(reinterpret_cast<const char*>(data) + 64, 0, 0);
 
 					MTGS_LOG("(MTGS Packet Read) ringtype=P3, qwc=%u", qsize);
 
@@ -560,6 +575,9 @@ void MTGS::MainLoop()
 			}
 
 			uint newringpos = (s_ReadPos.load(std::memory_order_relaxed) + ringposinc) & RingBufferMask;
+			// The next packet tag sits on a line the EE wrote: pull it now so the
+			// switch at the top of the loop does not stall on it.
+			__builtin_prefetch(&RingBuffer[newringpos], 0, 0);
 
 			if (IsDevBuild && EmuConfig.GS.SynchronousMTGS) [[unlikely]]
 			{

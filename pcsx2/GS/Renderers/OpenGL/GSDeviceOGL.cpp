@@ -1039,6 +1039,7 @@ void GSDeviceOGL::DestroyResources()
 		glDeleteSamplers(1, &m_palette_ss);
 
 	m_programs.clear();
+	m_last_prog = nullptr;
 
 	for (GSDepthStencilOGL* ds : m_om_dss)
 		delete ds;
@@ -3065,9 +3066,17 @@ void GSDeviceOGL::SetScissor(const GSVector4i& scissor)
 
 void GSDeviceOGL::SetupPipeline(const ProgramSelector& psel)
 {
+	if (m_last_prog && psel == m_last_psel)
+	{
+		m_last_prog->Bind();
+		return;
+	}
+
 	auto it = m_programs.find(psel);
 	if (it != m_programs.end())
 	{
+		m_last_psel = psel;
+		m_last_prog = &it->second;
 		it->second.Bind();
 		return;
 	}
@@ -3078,6 +3087,8 @@ void GSDeviceOGL::SetupPipeline(const ProgramSelector& psel)
 	GLProgram prog;
 	m_shader_cache.GetProgram(&prog, vs, ps);
 	it = m_programs.emplace(psel, std::move(prog)).first;
+	m_last_psel = psel;
+	m_last_prog = &it->second;
 	it->second.Bind();
 }
 
