@@ -134,7 +134,8 @@
 //  50 — mVU: a full-width ACC write keeps its result in the register it was made in (ARMSX2 2a8ff44243)
 //  51 — mVU: drop the multiply by VF0.w behind an FMINNM/FMAXNM operand clamp (ARMSX2 ca92bed7fb)
 //  52 — mVU: IBEQ/IBNE XOR the cached Is in place (ARMSX2 348bb28f21)
-static constexpr u32 kMvuCompilerAbiVersion = 52;
+//  53 — mVU: single-lane MOVE and MR32 insert into a cached destination (ARMSX2 fac807db26)
+static constexpr u32 kMvuCompilerAbiVersion = 53;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
