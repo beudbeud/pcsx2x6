@@ -997,6 +997,18 @@ mVUop(mVU_FSSET)
 // IADD/IADDI/IADDIU/IAND/IOR/ISUB/ISUBIU
 //------------------------------------------------------------------
 
+// What a VI op reads in place of its destination's old value. When the
+// destination is a different VI from the source, allocGPR copies the cached
+// source into the destination's slot; if that copy is the last word emitted,
+// the op reads the source register instead and the copy goes. Every caller
+// writes the whole destination register with the op that follows, so the
+// copy was dead.
+static __fi a64::Register mVUviSource(mV, const a64::Register& reg)
+{
+	const int src = mVU.regAlloc->takeGPRCloneSource(reg);
+	return (src >= 0) ? armWRegister(src) : reg;
+}
+
 mVUop(mVU_IADD)
 {
 	pass1 { mVUanalyzeIALU1(mVU, _Id_, _Is_, _It_); }
@@ -1014,7 +1026,7 @@ mVUop(mVU_IADD)
 		{
 			const a64::Register& regT = mVU.regAlloc->allocGPR(_It_, -1);
 			const a64::Register& regS = mVU.regAlloc->allocGPR(_Is_, _Id_, mVUlow.backupVI);
-			armAsm->Add(regS.W(), regS.W(), regT.W());
+			armAsm->Add(regS.W(), mVUviSource(mVU, regS).W(), regT.W());
 			mVU.regAlloc->clearNeeded(regS);
 			mVU.regAlloc->clearNeeded(regT);
 		}
@@ -1059,10 +1071,11 @@ mVUop(mVU_IADDI)
 				if (_Imm5_ != 0)
 				{
 					s16 imm = _Imm5_;
+					const a64::Register src = mVUviSource(mVU, regS);
 					if (imm >= 0)
-						armAsm->Add(regS.W(), regS.W(), (u32)imm);
+						armAsm->Add(regS.W(), src.W(), (u32)imm);
 					else
-						armAsm->Sub(regS.W(), regS.W(), (u32)(-imm));
+						armAsm->Sub(regS.W(), src.W(), (u32)(-imm));
 				}
 			}
 			else
@@ -1115,10 +1128,7 @@ mVUop(mVU_IADDIU)
 			if (!EmuConfig.Gamefixes.IbitHack)
 			{
 				if (_Imm15_ != 0)
-				{
-					armAsm->Mov(gprT1.W(), _Imm15_);
-					armAsm->Add(regS.W(), regS.W(), gprT1.W());
-				}
+					armAsm->Add(regS.W(), mVUviSource(mVU, regS).W(), _Imm15_);
 			}
 			else
 			{
@@ -1143,7 +1153,7 @@ mVUop(mVU_IAND)
 		const a64::Register& regT = mVU.regAlloc->allocGPR(_It_, -1);
 		const a64::Register& regS = mVU.regAlloc->allocGPR(_Is_, _Id_, mVUlow.backupVI);
 		if (_It_ != _Is_)
-			armAsm->And(regS.W(), regS.W(), regT.W());
+			armAsm->And(regS.W(), mVUviSource(mVU, regS).W(), regT.W());
 		mVU.regAlloc->clearNeeded(regS);
 		mVU.regAlloc->clearNeeded(regT);
 		mVU.profiler.EmitOp(opIAND);
@@ -1159,7 +1169,7 @@ mVUop(mVU_IOR)
 		const a64::Register& regT = mVU.regAlloc->allocGPR(_It_, -1);
 		const a64::Register& regS = mVU.regAlloc->allocGPR(_Is_, _Id_, mVUlow.backupVI);
 		if (_It_ != _Is_)
-			armAsm->Orr(regS.W(), regS.W(), regT.W());
+			armAsm->Orr(regS.W(), mVUviSource(mVU, regS).W(), regT.W());
 		mVU.regAlloc->clearNeeded(regS);
 		mVU.regAlloc->clearNeeded(regT);
 		mVU.profiler.EmitOp(opIOR);
@@ -1176,7 +1186,7 @@ mVUop(mVU_ISUB)
 		{
 			const a64::Register& regT = mVU.regAlloc->allocGPR(_It_, -1);
 			const a64::Register& regS = mVU.regAlloc->allocGPR(_Is_, _Id_, mVUlow.backupVI);
-			armAsm->Sub(regS.W(), regS.W(), regT.W());
+			armAsm->Sub(regS.W(), mVUviSource(mVU, regS).W(), regT.W());
 			mVU.regAlloc->clearNeeded(regS);
 			mVU.regAlloc->clearNeeded(regT);
 		}
@@ -1200,10 +1210,7 @@ mVUop(mVU_ISUBIU)
 		if (!EmuConfig.Gamefixes.IbitHack)
 		{
 			if (_Imm15_ != 0)
-			{
-				armAsm->Mov(gprT1.W(), _Imm15_);
-				armAsm->Sub(regS.W(), regS.W(), gprT1.W());
-			}
+				armAsm->Sub(regS.W(), mVUviSource(mVU, regS).W(), _Imm15_);
 		}
 		else
 		{
