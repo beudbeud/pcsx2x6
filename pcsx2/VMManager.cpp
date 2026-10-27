@@ -1477,7 +1477,14 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 				}
 				// Slot 2 (mc1:) = save card (e.g. SC2 conquest). Never overwrite an
 				// existing working copy (it holds save data); only seed it when absent.
-				if ((card = INI.GetStringValue("data", "card", "")) != "") {
+				card = INI.GetStringValue("data", "card", "");
+				// Soul Calibur II is the one game that reads a card of its own in slot 2, its Conquest card;
+				// without one its opponents' AI goes wrong (ARMSX2 issue #793). An .acgame that names no card
+				// gets the one named after the game, when there is one. It is a raw card, its spare bytes the
+				// game's own checksums, so never a .bin (converted as a card without ECC).
+				if (card.empty() && s_serial == "NM00007" && !findCardSource("NM00007.conquestcard").empty())
+					card = "NM00007.conquestcard";
+				if (!card.empty()) {
 					const std::string dst = Path::Combine(EmuFolders::MemoryCards, card);
 					if (!FileSystem::FileExists(dst.c_str())) {
 						const std::string src = findCardSource(card);
