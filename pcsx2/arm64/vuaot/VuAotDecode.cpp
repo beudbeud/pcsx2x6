@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 ARMSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include <memory>
 #include "VuAotDecode.h"
 
 #include <cstdio>
@@ -273,21 +274,14 @@ namespace vuaot
 				u32 key; // code + 1 (0: empty)
 				alignas(T) unsigned char value[sizeof(T)];
 			};
-			static thread_local Entry* t_table = nullptr;
-			Entry* table = t_table;
+			// ponytail: GCC 14.2 (buildroot aarch64) ICEs on the thread_local owner struct nested in this
+			// template; a thread_local unique_ptr costs a TLS init guard per lookup instead.
+			static thread_local std::unique_ptr<Entry[]> t_owner;
+			Entry* table = t_owner.get();
 			if (table == nullptr) [[unlikely]]
 			{
-				struct Owner
-				{
-					Entry* table = new Entry[4096](); // (value-initialised: every key 0)
-					~Owner()
-					{
-						t_table = nullptr;
-						delete[] table;
-					}
-				};
-				static thread_local Owner owner;
-				table = t_table = owner.table;
+				t_owner.reset(new Entry[4096]()); // (value-initialised: every key 0)
+				table = t_owner.get();
 			}
 			Entry& e = table[(code ^ (code >> 12) ^ (code >> 24)) & 4095];
 			T* v = reinterpret_cast<T*>(e.value);

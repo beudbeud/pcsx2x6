@@ -74,6 +74,9 @@ namespace Threading
 		/// Sets the affinity for a thread to the specified processors.
 		/// Obviously, only works up to 64 processors.
 		bool SetAffinity(u64 processor_mask) const;
+		/// Nudges the thread's scheduling priority (nice value on POSIX). Negative = higher priority.
+		/// Silently no-ops on platforms without per-thread priority support.
+		bool SetNicePriority(int nice) const;
 
 	protected:
 		void* m_native_handle = nullptr;

@@ -15,6 +15,7 @@
 #if defined(__linux__)
 #include <sys/prctl.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <sched.h>
 
 // glibc < v2.30 doesn't define gettid...
@@ -345,4 +346,16 @@ void Threading::SetNameOfCurrentThread(const char* name)
 #elif defined(__unix__)
 	pthread_set_name_np(pthread_self(), name);
 #endif
+}
+
+bool Threading::ThreadHandle::SetNicePriority(int nice) const
+{
+	if (m_native_id == 0)
+		return false;
+	// PRIO_PROCESS + a tid sets the nice value of that specific thread on Linux.
+	// Silently tolerate EPERM: the process rlimit may forbid going negative.
+	errno = 0;
+	if (setpriority(PRIO_PROCESS, static_cast<id_t>(m_native_id), nice) == 0)
+		return true;
+	return errno == 0;
 }

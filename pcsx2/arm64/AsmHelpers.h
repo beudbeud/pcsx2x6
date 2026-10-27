@@ -11,6 +11,7 @@
 #include "vixl/aarch64/macro-assembler-aarch64.h"
 
 #include <unordered_map>
+#include <vector>
 
 #define RWRET vixl::aarch64::w0
 #define RXRET vixl::aarch64::x0
@@ -68,44 +69,47 @@ const vixl::aarch64::VRegister& armQRegister(int n);
 class ArmConstantPool;
 
 // Address-emission observer for the on-disk VU program cache. While a
-// recorder is attached (mVU code-cache episodes only — see mVUopenCodeCache),
-// the emit helpers below report every host-address-bearing emission so the
-// recorder can build a relocation fixup table, and let it force canonical
-// fixed-width forms where the default encoding couldn't be patched after the
-// code block moves:
-//   - armMoveAddressToReg of a volatile (heap) target → movz+movk×3 (16 bytes,
-//     patchable) instead of the shortest mov/adrp form.
-//   - armEmitCondBranch to a relocatable target → inverted-cond skip + B imm26
-//     (B.cond's ±1MB imm19 can't survive arbitrary replacement).
-// `at` arguments are the address of the first emitted instruction of the
+// recorder is attached (mVU code-cache episodes only, see mVUopenCodeCache),
+// the emit helpers below report every host-address-bearing instruction they
+// emit, so the recorder can build a relocation table that lets the code run
+// at another address in another process (ASLR moves the image, the heap and
+// possibly the arenas).
+//
+// Emission stays in the forms the helpers use without a recorder, with one
+// exception: an address materialized as an immediate is emitted as a
+// fixed-shape MOVZ + MOVK run over halfwords 0..width-1 (see armEmitMovRun),
+// so a patcher can rewrite the value in place. The width is the value's own
+// minimum (top non-zero halfword) or the recorder's floor, whichever is
+// larger; that is the instruction count vixl's Mov emits for an address
+// unless a halfword below the top one happens to be zero. `at` arguments are the address of the first instruction of the
 // reported shape. All hooks are no-ops when no recorder is attached.
 class ArmAddressRecorder
 {
 public:
-	enum class MoveForm
+	struct AddressClass
 	{
-		Default, // emit in shortest form; recorder may still log it
-		CanonicalAbs, // emit fixed-width movz+movk×3 so the operand is patchable
+		bool relocatable = false; // false: the recorder has failed the episode
+		bool allowAdrp = false; // ADRP + ADD/ORR may carry it (page-aligned moves only)
+		u32 minMovWidth = 1; // floor for the MOVZ/MOVK run width
+	};
+
+	enum class BranchForm
+	{
+		Rel26, // B / BL
+		Rel19, // B.cond / CBZ / CBNZ
 	};
 
 	virtual ~ArmAddressRecorder() = default;
 
-	// armMoveAddressToReg: pick the emission form for `addr`.
-	virtual MoveForm ClassifyMove(const void* addr) = 0;
-	// armMoveAddressToReg emitted the canonical 16-byte movz+movk×3 at `at`.
-	virtual void OnCanonicalAbsMove(u8* at, const void* addr) = 0;
-	// armMoveAddressToReg emitted ADRP (+Add/Orr) at `at`; the page offset is
-	// PC-relative and must be re-paged if this code moves.
+	// Classify an address about to be materialized (armMoveAddressToReg, or
+	// the out-of-range paths of armEmitJmp/armEmitCall).
+	virtual AddressClass ClassifyAddress(const void* addr) = 0;
+	// A MOVZ + MOVK×(width-1) run carrying `addr` was emitted at `at`.
+	virtual void OnMovRun(u8* at, u32 width, const void* addr) = 0;
+	// ADRP (+ ADD/ORR of the page offset) carrying `addr` was emitted at `at`.
 	virtual void OnAdrp(u8* at, const void* addr) = 0;
-	// armEmitJmp/armEmitCall/armEmitCondBranch emitted a direct B/BL imm26 at
-	// `at` targeting `target`.
-	virtual void OnDirectBranch(u8* at, const void* target, bool is_call) = 0;
-	// armEmitCondBranch: return true to force the long (cond-skip + B) form.
-	virtual bool WantsLongCondBranch(const void* target) = 0;
-	// An absolute (movz/movk-materialized) target with no patch site — emitted
-	// by the out-of-range paths of armEmitJmp/armEmitCall/armMoveAddressToReg.
-	// Recorder uses this to verify the target is run-invariant.
-	virtual void OnAbsoluteTarget(const void* target) = 0;
+	// A direct PC-relative branch to `target` was emitted at `at`.
+	virtual void OnBranch(u8* at, const void* target, BranchForm form) = 0;
 };
 
 static const u32 SP_SCRATCH_OFFSET = 0;
@@ -144,6 +148,44 @@ u8* armEndBlock();
 void armDisassembleAndDumpCode(const void* ptr, size_t size);
 void armEmitJmp(const void* ptr, bool force_inline = false);
 void armEmitCall(const void* ptr, bool force_inline = false);
+// Store one instruction word into code memory, opening its own W^X scope when
+// the target lies outside the open emit window. Use for anything that patches
+// code outside the block being emitted — link sites, entry stubs, fastmem
+// backpatch. No cache maintenance: callers own the flush policy.
+void armPatchCodeWord(void* site, u32 instr);
+
+// ---------------------------------------------------------------------------
+// Cache maintenance for many scattered single-word code patches
+//
+// HostSys::FlushInstructionCache is the wrong shape for this. On Linux/AArch64
+// it is __builtin___clear_cache, which ends in a `dsb ish` / `isb` pair, and
+// BaseblockEx-arm64.h's FlushPatchedSites already states the cost model: the
+// per-call cost is dominated by that pair, not by the DC/IC ops. That helper
+// answers the adjacent-sites case by coalescing into ranges, which is right for
+// the handful of link sites one block emits a few instructions apart. A pass
+// that rewrites tens of thousands of words spread over a multi-megabyte arena
+// has no adjacency to coalesce and would pay one barrier pair per site.
+//
+// Note() each patched word, then Finish() once. Finish issues the clean and
+// invalidate for every touched line and exactly ONE barrier pair for the whole
+// set. (`ic iallu` would collapse the I-side to a single instruction, but it is
+// EL1-only; EL0 gets `ic ivau` and nothing else.)
+//
+// Note() takes the EXECUTE address of the word, not the writable alias: cache
+// maintenance is architecturally on the address the instruction fetch uses.
+// ---------------------------------------------------------------------------
+class ArmCodePatchFlusher
+{
+public:
+	void Note(const void* site);
+	void Finish();
+
+	void Reset() { m_lines.clear(); }
+	size_t LineCount() const { return m_lines.size(); }
+
+private:
+	std::vector<uintptr_t> m_lines;
+};
 // In-place patch: overwrite the 4-byte B at `code_address` with a branch to
 // `target`. Used by EE block chaining to rewrite a link site (not tied to the
 // current emit cursor). `code_address` must already hold a single B instruction.
@@ -151,6 +193,12 @@ void armEmitJmpPtr(void* code_address, const void* target, bool flush_icache = t
 void armEmitCbnz(const vixl::aarch64::Register& reg, const void* ptr);
 void armEmitCondBranch(vixl::aarch64::Condition cond, const void* ptr);
 void armMoveAddressToReg(const vixl::aarch64::Register& reg, const void* addr);
+// MOVZ reg, #hw0 then MOVK reg, #hwN, lsl 16N for N = 1..width-1: a fixed
+// shape whose value a relocation patcher can rewrite. `value` must fit in
+// `width` halfwords.
+void armEmitMovRun(const vixl::aarch64::Register& reg, u64 value, u32 width);
+// Halfwords needed to hold `value` in a MOVZ/MOVK run (1..4).
+u32 armMovRunWidth(u64 value);
 void armLoadPtr(const vixl::aarch64::CPURegister& reg, const void* addr);
 void armStorePtr(const vixl::aarch64::CPURegister& reg, const void* addr);
 void armBeginStackFrame(bool save_fpr);
@@ -245,15 +293,20 @@ __fi static int armEmitLaneGather32(const vixl::aarch64::VRegister& dst,
 // mask (x86's AND_XYZW) costs nothing; `shift` likewise absorbs x86's
 // single-scalar SHIFT_XYZW rotate. Both are emit-time constants.
 //
+// `withUnderflow` and `withOverflow` add the MAC U and O nibbles at bit + 8 and
+// bit + 12, for the callers that pass armEmitPackSignZeroBits a third or fourth
+// predicate.
+//
 // The caller must keep `bit + shift <= 3` so the zero half stays inside the
 // low nibble — see the SLI note in armEmitPackSignZeroBits.
-static constexpr u32 armPackLaneWeight(int lane, u32 keepMask, bool reverse, int shift)
+static constexpr u32 armPackLaneWeight(int lane, u32 keepMask, bool reverse, int shift,
+	bool withUnderflow = false, bool withOverflow = false)
 {
 	const int bit = reverse ? (3 - lane) : lane;
 	if (!(keepMask & (1u << bit)))
 		return 0;
 	const u32 w = 1u << (bit + shift);
-	return w | (w << 4);
+	return w | (w << 4) | (withUnderflow ? (w << 8) : 0) | (withOverflow ? (w << 12) : 0);
 }
 
 // Pack the sign and zero predicates of a 4-lane float vector into one GPR as
@@ -277,20 +330,115 @@ static constexpr u32 armPackLaneWeight(int lane, u32 keepMask, bool reverse, int
 // callers choose their cheapest route to it (a pinned-base Ldr in microVU, a
 // literal in the EE's COP2 macro path).
 //
-// Emits 6 insns + the weight load.
+// `vExactZero`, when given, is a third temporary holding all-ones per lane
+// where a zero result is an exact zero rather than a flushed underflow; it is
+// turned into the U predicate here and inserted at nibble 2. `vOverflow` is the
+// same for the O nibble, and is read rather than clobbered. Weights for either
+// must come from armPackLaneWeight with the matching flag set.
+//
+// Each SLI keeps the destination bits below its shift, so the three inserts run
+// in ascending order — 4, 8, 12 — and a skipped one leaves its nibble holding
+// whatever the previous insert shifted through. The weight vector clears that.
+//
+// Emits 6 insns + the weight load, 8 with vExactZero, 9 with vOverflow.
 template <typename LoadWeightsFn>
 __fi static void armEmitPackSignZeroBits(const vixl::aarch64::Register& dst,
 	const vixl::aarch64::VRegister& src, const vixl::aarch64::VRegister& vSign,
 	const vixl::aarch64::VRegister& vZero, const vixl::aarch64::VRegister& weights,
-	LoadWeightsFn&& load_weights)
+	LoadWeightsFn&& load_weights,
+	const vixl::aarch64::VRegister& vExactZero = vixl::aarch64::NoVReg,
+	const vixl::aarch64::VRegister& vOverflow = vixl::aarch64::NoVReg)
 {
 	armAsm->Cmlt(vSign.V4S(), src.V4S(), 0);    // all-1s where negative
 	armAsm->Fcmeq(vZero.V4S(), src.V4S(), 0.0); // all-1s where zero
+	if (vExactZero.IsValid())
+		armAsm->Bic(vExactZero.V16B(), vZero.V16B(), vExactZero.V16B()); // zero, not exactly
 	armAsm->Sli(vZero.V4S(), vSign.V4S(), 4);   // [31:4] = sign, [3:0] = zero
+	if (vExactZero.IsValid())
+		armAsm->Sli(vZero.V4S(), vExactZero.V4S(), 8); // [31:8] = underflow
+	if (vOverflow.IsValid())
+		armAsm->Sli(vZero.V4S(), vOverflow.V4S(), 12); // [31:12] = overflow
 	load_weights(weights);
 	armAsm->And(vZero.V16B(), vZero.V16B(), weights.V16B());
 	armAsm->Addv(vixl::aarch64::VRegister(vZero.GetCode(), 32), vZero.V4S());
 	armAsm->Fmov(dst, vixl::aarch64::VRegister(vZero.GetCode(), 32));
+}
+
+// The EE FPR word <-> stored double relocation of EeFpuFormat.h, emitted.
+//
+// Sign-extending the word puts its sign bit at 63 but also fills 62..60; this
+// clears those three. 61 contiguous ones under rotation, so a logical immediate.
+static constexpr u64 kEeFprWidenMask = 0x8FFFFFFFFFFFFFFFULL;
+
+// dst = widen(word). `tmp` is an X scratch and may be `word`'s X form. Only
+// the low 32 bits of `word` are read.
+__fi static void armEmitEeFprWiden(const vixl::aarch64::VRegister& dst,
+	const vixl::aarch64::Register& word, const vixl::aarch64::Register& tmp)
+{
+	armAsm->Sbfiz(tmp.X(), word.X(), 29, 32);
+	armAsm->And(tmp.X(), tmp.X(), static_cast<int64_t>(kEeFprWidenMask));
+	armAsm->Fmov(dst.D(), tmp.X());
+}
+
+// dst = widen(*src). Ldrsw does the sign extension the widen needs anyway.
+__fi static void armEmitEeFprWidenFromMem(const vixl::aarch64::VRegister& dst,
+	const vixl::aarch64::MemOperand& src, const vixl::aarch64::Register& tmp)
+{
+	armAsm->Ldrsw(tmp.X(), src);
+	armAsm->Lsl(tmp.X(), tmp.X(), 29);
+	armAsm->And(tmp.X(), tmp.X(), static_cast<int64_t>(kEeFprWidenMask));
+	armAsm->Fmov(dst.D(), tmp.X());
+}
+
+// dst = narrow(src), zero-extended: dst.W() is the word and dst.X() is that
+// word with the top half clear. `tmp` is an X scratch and must not be `dst`.
+__fi static void armEmitEeFprNarrow(const vixl::aarch64::Register& dst,
+	const vixl::aarch64::VRegister& src, const vixl::aarch64::Register& tmp)
+{
+	armAsm->Fmov(tmp.X(), src.D());
+	armAsm->Lsr(dst.X(), tmp.X(), 32);
+	armAsm->Bfxil(dst.X(), tmp.X(), 29, 31);
+}
+
+// *dst = narrow(src). `word` receives the narrowed word; neither scratch may
+// be the other.
+__fi static void armEmitEeFprNarrowToMem(const vixl::aarch64::MemOperand& dst,
+	const vixl::aarch64::VRegister& src, const vixl::aarch64::Register& word,
+	const vixl::aarch64::Register& tmp)
+{
+	armEmitEeFprNarrow(word, src, tmp);
+	armAsm->Str(word.W(), dst);
+}
+
+// The same relocation against an fpuRegs slot: memory holds the stored double
+// and a register holds the architectural word.
+
+// dst = the word in *slot, zero-extended. `tmp` is an X scratch, not `dst`.
+__fi static void armEmitEeFprLoadSlotWord(const vixl::aarch64::Register& dst,
+	const vixl::aarch64::MemOperand& slot, const vixl::aarch64::Register& tmp)
+{
+	armAsm->Ldr(tmp.X(), slot);
+	armAsm->Lsr(dst.X(), tmp.X(), 32);
+	armAsm->Bfxil(dst.X(), tmp.X(), 29, 31);
+}
+
+// *slot = `word`. `tmp` is an X scratch and may be `word`'s X form.
+__fi static void armEmitEeFprStoreSlotWord(const vixl::aarch64::MemOperand& slot,
+	const vixl::aarch64::Register& word, const vixl::aarch64::Register& tmp)
+{
+	armAsm->Sbfiz(tmp.X(), word.X(), 29, 32);
+	armAsm->And(tmp.X(), tmp.X(), static_cast<int64_t>(kEeFprWidenMask));
+	armAsm->Str(tmp.X(), slot);
+}
+
+// Bridge for emitters holding a result as the architectural single in an S
+// register while the slot they store it to holds the stored double: iFPUd's
+// bodies, the fast path's SQRT, and LWC1's fastmem load. Clobbers `tmp`.
+__fi static void armEmitEeFprFromS(const vixl::aarch64::VRegister& slot,
+	const vixl::aarch64::VRegister& src, const vixl::aarch64::Register& tmp)
+{
+	armAsm->Fmov(tmp.W(), src.S());
+	armEmitEeFprWiden(slot, tmp, tmp);
 }
 
 // may clobber RSCRATCH/RSCRATCH2. they shouldn't be inputs.
