@@ -1180,6 +1180,7 @@ void mVUreset(microVU& mVU, bool resetReserve)
 	if (!mVU.index)
 		mVU0ParkedSpin = 0;
 	mVU.branchCondCarryGpr = -1;
+	mVU.branchCondCarryLow16 = false;
 	mVU.profiler.Reset(mVU.index);
 
 	// Program Variables

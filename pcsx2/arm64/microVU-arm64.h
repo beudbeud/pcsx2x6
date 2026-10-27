@@ -124,7 +124,8 @@
 //  40 — mVU: the status update clears the non-sticky field in one AND (ARMSX2 b3122525c3)
 //  41 — VU1: reach data memory from the pinned state pointer (ARMSX2 8b97db61ae)
 //  42 — mVU: a VU1 load or store reads its base VI where it is cached (ARMSX2 06cab3b1f4)
-static constexpr u32 kMvuCompilerAbiVersion = 42;
+//  43 — mVU: IBEQ/IBNE fold vi00 and test the low halfword in the tail (ARMSX2 2a054d6977)
+static constexpr u32 kMvuCompilerAbiVersion = 43;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
@@ -626,6 +627,11 @@ struct microVU
 	// slot at compile time (XGKICK's C call, end-program emission, the
 	// divtrace per-op hook).
 	int branchCondCarryGpr;
+	// With the carry: the value is IBEQ/IBNE's raw XOR of two VIs, whose upper
+	// halves can be dirty, so the tail tests its low 16 bits (Tst #0xffff)
+	// rather than comparing the whole register with zero. Their conditions
+	// read only Z, which the two set alike for the low halfword.
+	bool branchCondCarryLow16;
 
 	// Compile-time only (never read by emitted code, so it stays out of the
 	// mVUfieldMem pin window above): set during pass 1 when this block, or a block
@@ -708,6 +714,7 @@ __fi static void mVUstrField(mV, const a64::CPURegister& reg, const void* addr)
 __fi static void mVUclearBranchCondCarry(mV)
 {
 	mVU.branchCondCarryGpr = -1;
+	mVU.branchCondCarryLow16 = false;
 }
 
 //------------------------------------------------------------------
