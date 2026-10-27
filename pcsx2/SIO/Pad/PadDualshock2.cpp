@@ -5,6 +5,7 @@
 #include "SIO/Pad/Pad.h"
 #include "SIO/Sio.h"
 #include "SIO/Sio0.h"
+#include "DEV9/ACJV.h"
 
 #include "Common.h"
 #include "Input/InputManager.h"
@@ -921,6 +922,15 @@ u8 PadDualshock2::SendCommandByte(u8 commandByte)
 			if (this->currentCommand != Pad::Command::POLL && this->currentCommand != Pad::Command::CONFIG && !this->isInConfig)
 			{
 				Console.Warning("%s(%02X) Config-only command was sent to a pad outside of config mode!", __FUNCTION__, commandByte);
+			}
+
+			// Arcade (.acgame) titles read JVS; some (SC2) also poll the PS2 pad port, which Pad keeps neutral.
+			if (ACJV::enabled && this->currentCommand == Pad::Command::POLL)
+			{
+				static bool s_logged = false;
+				if (!s_logged)
+					Console.WriteLn("ARCADE: game polls the SIO pad (slot %u); host input stays on JVS", this->unifiedSlot);
+				s_logged = true;
 			}
 
 			ret = this->isInConfig ? static_cast<u8>(Pad::Mode::CONFIG) : static_cast<u8>(this->currentMode);

@@ -11,6 +11,7 @@
 #include "SIO/Pad/PadPopn.h"
 #include "SIO/Pad/PadNotConnected.h"
 #include "SIO/Sio.h"
+#include "DEV9/ACJV.h"
 
 #include "Input/SDLInputSource.h"
 
@@ -546,6 +547,10 @@ PadBase* Pad::GetPad(const u8 unifiedSlot)
 void Pad::SetControllerState(u32 controller, u32 bind, float value)
 {
 	if (controller >= NUM_CONTROLLER_PORTS)
+		return;
+	// Arcade (.acgame): the cabinet has no PS2 pad; host input goes to JVS only. SC2 polls the pad port
+	// too, so mirroring the host pad here made the game see every press twice (double menu moves).
+	if (ACJV::enabled)
 		return;
 
 	s_controllers[controller]->Set(bind, value);

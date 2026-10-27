@@ -433,6 +433,8 @@ bool LibretroHost::InitializeConfig()
 				"MemoryCards",
 				"DEV9/Eth",
 				"DEV9/Hdd",
+				"Arcade", // SuppressDaemon etc. (JVS > Extra in the Qt UI)
+				"JVS",    // DIP switches (TestMode/VideoVoltage/MonitorSyncFreq/VideoSyncSplit), lightgun link
 			};
 
 			u32 merged = 0;
@@ -490,17 +492,28 @@ void LibretroHost::SettingsOverride()
 	{
 		FileSystem::FindResultsArray files;
 		FileSystem::FindFiles(EmuFolders::Bios.c_str(), "*", FILESYSTEM_FIND_FILES, &files);
+		// Prefer an arcade (COH-H/COH-R System 246/256) BIOS over a console one sharing the folder:
+		// directory order picked SCPH-70004 on a desktop and the 246 titles booted to a black screen.
+		std::string pick, pick_desc;
 		for (const FILESYSTEM_FIND_DATA& fd : files)
 		{
 			u32 version, region;
 			std::string description, zone;
-			if (IsBIOS(fd.FileName.c_str(), version, description, region, zone))
+			if (!IsBIOS(fd.FileName.c_str(), version, description, region, zone))
+				continue;
+			const bool arcade = description.find("COH-") != std::string::npos || description.find("System 2") != std::string::npos;
+			if (pick.empty() || arcade)
 			{
-				const std::string filename(Path::GetFileName(fd.FileName));
-				Console.WriteLnFmt("Auto-selected BIOS: {} ({})", filename, description);
-				s_settings_interface.SetStringValue("Filenames", "BIOS", filename.c_str());
-				break;
+				pick = Path::GetFileName(fd.FileName);
+				pick_desc = description;
 			}
+			if (arcade)
+				break;
+		}
+		if (!pick.empty())
+		{
+			Console.WriteLnFmt("Auto-selected BIOS: {} ({})", pick, pick_desc);
+			s_settings_interface.SetStringValue("Filenames", "BIOS", pick.c_str());
 		}
 	}
 }
@@ -1629,6 +1642,11 @@ bool retro_load_game(const struct retro_game_info* game)
 {
 	if (!game || !game->path)
 		return false;
+	if (!FileSystem::FileExists(game->path))
+	{
+		Console.ErrorFmt("Content file not found: '{}' (shell quoting? no backslashes or ~ inside quotes)", game->path);
+		return false;
+	}
 
 	enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
 	if (!s_environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
@@ -1779,37 +1797,61 @@ static int GenericBindingToRetroButton(GenericInputBinding binding)
 // Feed the retropad into the per-game JVS layout tables (ACJV selects them from
 // the gameid — TEKKEN/STANDARD/SIX_BUTTON). Fixed system buttons:
 //   SELECT = insert coin (edge), START = start,
-//   L3 = test menu (toggles the TESTMODE DIP switch, edge),
+//   L3 = TEST button (held, like the cabinet's momentary service-panel switch: press to enter
+//        the test menu, leave it through the menu; a latched toggle left TEST on during play),
 //   R3 = JVS service button (held).
+// Per-game action-button layout (fighting/standard/racing) from the ACJV tables; empty = plain JVS,
+// i.e. the Button1..6 rows of the generic table. Racing is 1 player per cabinet.
+static std::span<const InputBindingInfo> ArcadeLayoutButtons(u32 player)
+{
+	std::span<const InputBindingInfo> s = ACJV::GetFightingButtons();
+	if (s.empty())
+		s = ACJV::GetStandardButtons();
+	if (s.empty() && player == 0)
+		s = ACJV::GetRacingButtons();
+	return s;
+}
+
 static void UpdateArcadeInput()
 {
 	static u32 s_prev_edges[2] = {};
+	static constexpr u16 ACTION_BITS = JVS_BTN_1 | JVS_BTN_2 | JVS_BTN_3 | JVS_BTN_4 | JVS_BTN_5 | JVS_BTN_6;
 
 	for (u32 player = 0; player < 2; player++)
 	{
+		const auto layout = ArcadeLayoutButtons(player);
+		u16 touched = 0, pressed = 0;
+		const auto poll = [&](const InputBindingInfo& bi, int retro_id) {
+			if (retro_id < 0)
+				return;
+			touched |= static_cast<u16>(bi.bind_index);
+			if (s_input_state_cb(player, RETRO_DEVICE_JOYPAD, 0, retro_id) != 0)
+				pressed |= static_cast<u16>(bi.bind_index);
+		};
 		const auto bindings = (player == 0) ? ACJV::GetButtonBindings() : ACJV::GetP2ButtonBindings();
 		for (const InputBindingInfo& bi : bindings)
 		{
 			if (bi.bind_index == JVS_BTN_SERVICE)
 				continue; // handled below on R3, not on the table's Select hint
-			const int retro_id = (bi.bind_index == JVS_BTN_START) ?
-				RETRO_DEVICE_ID_JOYPAD_START : GenericBindingToRetroButton(bi.generic_mapping);
-			if (retro_id < 0)
-				continue;
-			const bool pressed = s_input_state_cb(player, RETRO_DEVICE_JOYPAD, 0, retro_id) != 0;
-			ACJV::SetButtonState(player, bi.bind_index, pressed);
+			if (!layout.empty() && (bi.bind_index & ACTION_BITS))
+				continue; // action buttons come from the game's layout (SC2 Kick = Sw3, CFJ L1/R1, BR3 order...)
+			poll(bi, (bi.bind_index == JVS_BTN_START) ? RETRO_DEVICE_ID_JOYPAD_START : GenericBindingToRetroButton(bi.generic_mapping));
 		}
+		for (const InputBindingInfo& bi : layout)
+			poll(bi, GenericBindingToRetroButton(bi.generic_mapping));
+		// A JVS bit is down if any row driving it is (BG3/Inufuku wire game buttons onto the D-pad bits).
+		ACJV::SetButtonState(player, touched & ~pressed, false);
+		ACJV::SetButtonState(player, pressed, true);
 
 		ACJV::SetButtonState(player, JVS_BTN_SERVICE,
 			s_input_state_cb(player, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3) != 0);
 
 		const bool coin = s_input_state_cb(player, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT) != 0;
-		const bool test = s_input_state_cb(player, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3) != 0;
 		if (coin && !(s_prev_edges[player] & 1u))
 			ACJV::InsertCoin(player);
-		if (test && !(s_prev_edges[player] & 2u))
-			ACJV::ToggleDIPSwitchState(0); // DIP 0 = TESTMODE -> service/test menu
-		s_prev_edges[player] = (coin ? 1u : 0u) | (test ? 2u : 0u);
+		s_prev_edges[player] = coin ? 1u : 0u;
+		if (player == 0)
+			ACJV::SetDIPSwitchState(0, s_input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3) != 0); // DIP 0 = TEST
 	}
 }
 
@@ -1826,7 +1868,7 @@ static void UpdateInput()
 	s_input_poll_cb();
 
 	if (ACJV::enabled)
-		UpdateArcadeInput();
+		UpdateArcadeInput(); // Pad::SetControllerState is a no-op for arcade titles (JVS only)
 
 	static constexpr std::pair<unsigned, u32> button_map[] = {
 		{RETRO_DEVICE_ID_JOYPAD_UP, PadDualshock2::Inputs::PAD_UP},
