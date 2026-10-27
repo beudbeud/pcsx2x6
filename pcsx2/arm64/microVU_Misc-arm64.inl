@@ -275,7 +275,6 @@ __fi void mVUbackupRegs(microVU& mVU, bool toMemory = false, bool onlyNeeded = f
 	// callee clobbers caller-saved pool regs, so the branch-condition carry
 	// can't survive past it.
 	mVUclearBranchCondCarry(mVU);
-	mVU.clampConstsValid = false; // q25/q26 die with the wrapped call
 	mVU.regAlloc->flushAll();
 	armAsm->Str(qmmPQ, mVUneonBackupMem(qmmPQ.GetCode()));
 }
@@ -346,7 +345,6 @@ __fi void mVUaddrFix(mV, const a64::Register& gprReg)
 				armEmitEEClobberedPinFlushForCOP2();
 			// Need to wait for VU1 thread
 			armEmitCall((void*)mVU.waitMTVU);
-			mVU.clampConstsValid = false; // AAPCS call: clobbers q25/q26
 			if (mVU.cop2)
 				armEmitEEClobberedPinReloadForCOP2();
 		}

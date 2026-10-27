@@ -98,11 +98,7 @@ protected:
 	// the sync stubs raw-preserve q11-q15). Micro mode keeps the full pool.
 	__ri bool neonUsable(int i) const
 	{
-		// q25/q26 are the clamp-constant broadcasts in BOTH modes (SL-13 for
-		// macro, mVUensureClampConsts for micro) — never allocator-owned.
-		if (i == 25 || i == 26)
-			return false;
-		return !neonCop2Mode || (i < 8 || i > 15);
+		return !neonCop2Mode || ((i < 8 || i > 15) && i != 25 && i != 26);
 	}
 
 	// Find least-recently-used NEON reg (recursive, for eviction)
