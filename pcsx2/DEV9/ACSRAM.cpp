@@ -14,8 +14,13 @@ std::string ACSRAM::filepath = "";
 bool LockSave = false; //why? because I dont wanna wipe an SRAM image that already existed but failed to be read
 
 
+// Each session decides afresh whether its SRAM may be saved. The lock used to be cleared on the
+// line after it was set, so an SRAM file of another size (a game's settings and high scores) was written
+// over with the blank buffer at shutdown; and nothing cleared it for the next session, whose good read
+// then never saved. Saving is allowed only over a whole SRAM read, or where there is no file yet.
 int ACSRAM::ReadFile() {
     Error error;
+    LockSave = false;
     FILE* FD = std::fopen(ACSRAM::filepath.c_str(), "r+b");
     if (FD) {
         // unlike PS2 NVRAM, which we can do a generic damage/invalid detection attempt. 
@@ -32,10 +37,11 @@ int ACSRAM::ReadFile() {
 	    std::fclose(FD);
     } else {
         Console.ErrorFmt("ACSRAM: Could not open input image file {} '{}'", errno, strerror(errno));
+        // A file that is there but would not open is kept as it is too.
+        LockSave = FileSystem::FileExists(ACSRAM::filepath.c_str());
     }
     Console.Warning("ACSRAM: failed to read SRAM. Preparing blank buffer");
     ACSRAM::Clear(0x0);
-    LockSave = false;
     return 0;
 }
 
