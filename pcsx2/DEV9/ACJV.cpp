@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <string>
 
 enum ACJVCMD {
@@ -1049,12 +1051,38 @@ void do_jvs_packet(const u8* input, u8* output) {
 			//if (m_jvsButtonState[0])
 			//	Console.WriteLn("JVS P1 buttons: %04X coin:%d", m_jvsButtonState[0], ACJV::coin[0]);
 
+			u16 p2btn = 0;
 			if(playerCount == 2)
 			{
-				const u16 p2btn = m_jvsButtonState[1] | m_jvsMacroButtonState[1];
+				p2btn = m_jvsButtonState[1] | m_jvsMacroButtonState[1];
 				(*output++) = static_cast<u8>(p2btn);      //Player 2
 				(*output++) = static_cast<u8>(p2btn >> 8); //Player 2
 				(*dstSize) += 2;
+			}
+
+			// PCSX2_JVS_TRACE=1: log each switch-word change the game reads + the poll rate (polls/s),
+			// to tell an input-path glitch (flicker) from the game double-processing a clean edge.
+			static const bool s_jvsTrace = std::getenv("PCSX2_JVS_TRACE") != nullptr;
+			if (s_jvsTrace)
+			{
+				static u32 s_polls = 0, s_pollsAtSec = 0;
+				static u16 s_last[2] = {0xFFFF, 0xFFFF};
+				static auto s_t0 = std::chrono::steady_clock::now();
+				s_polls++;
+				if (p1btn != s_last[0] || p2btn != s_last[1])
+				{
+					Console.WriteLn("JVS SW poll=%u P1=%04X P2=%04X test=%02X coin=%u/%u", s_polls, p1btn, p2btn,
+						m_testButtonState | (s_dip_switch_state & TESTMODE), ACJV::coin[0], ACJV::coin[1]);
+					s_last[0] = p1btn;
+					s_last[1] = p2btn;
+				}
+				const auto now = std::chrono::steady_clock::now();
+				if (now - s_t0 >= std::chrono::seconds(5))
+				{
+					Console.WriteLn("JVS SW rate: %.1f polls/s", (s_polls - s_pollsAtSec) / std::chrono::duration<double>(now - s_t0).count());
+					s_pollsAtSec = s_polls;
+					s_t0 = now;
+				}
 			}
 		}
 		break;
