@@ -115,7 +115,8 @@
 //  31 — mVU: the sign clamp loads its row's two bounds together (ARMSX2 2fbaa68522)
 //  32 — mVU: every clamped operand folds the copy in front of it (ARMSX2 a52c0a4529)
 //  33 — mVU: the accumulate's copy of ACC folds too (ARMSX2 6d79d1b655)
-static constexpr u32 kMvuCompilerAbiVersion = 33;
+//  34 — mVU: the cycle-budget break is one shared stub (ARMSX2 5caa0c7d7b)
+static constexpr u32 kMvuCompilerAbiVersion = 34;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
@@ -502,7 +503,7 @@ struct microVU
 
 	// Resume-aware dispatch (VE-07). A cycle-budget break re-enters the very
 	// block that broke (mVUtestCycles saves that block's own pState/TPC), so
-	// its early-exit path parks the block's hostEntry here (copyPLStateResume,
+	// its early-exit path parks the block's hostEntry here (mVU.cycleBreak,
 	// [gprMVUFlag, #imm] — keep this field in the pin window above `prog`).
 	// recMicroVUx::Execute consumes it once (std::exchange) and enters
 	// startFunctResume, skipping mVUlookupProg entirely. Disarmed by anything
@@ -572,12 +573,13 @@ struct microVU
 	u8* exitFunctXG;
 	u8* waitMTVU;
 	u8* copyPLState;
-	// copyPLState + parks the breaking block's hostEntry in resumeEntry.
-	// Called ONLY from mVUtestCycles' budget-break exit, where x0 is the
-	// block's own &pState (== the microBlock, pState sits at offset 0).
-	// The M-bit end sites keep plain copyPLState: they save pStateEnd and
-	// resume at the *branch target*, which a fresh lookup must resolve.
-	u8* copyPLStateResume;
+	// The whole of mVUtestCycles' budget-break exit, entered by B with
+	// x0 = &pBlock->pState (== the microBlock) and w1 = the block's start
+	// PC. It copies the state and additionally parks the breaking block's
+	// hostEntry in resumeEntry. The M-bit end site keeps plain copyPLState:
+	// it saves pStateEnd and resumes at the *branch target*, which a fresh
+	// lookup must resolve. See mVUGenerateCycleBreak in microVU-arm64.cpp.
+	u8* cycleBreak;
 	// Per-VU SFLAGc + micro_flag tail helpers BL'd by mVUendProgram /
 	// mVUsetupBranch emit. See mVUGenerateEndProgramFlagsHelper in
 	// microVU-arm64.cpp — each exit thunk's inline shrinks from ~20 insns
