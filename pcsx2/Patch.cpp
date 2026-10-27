@@ -15,6 +15,7 @@
 #include "GameDatabase.h"
 #include "Host.h"
 #include "IopMem.h"
+#include "IopThread/IopBridge.h"
 #include "Memory.h"
 #include "Patch.h"
 #include "R5900.h"
