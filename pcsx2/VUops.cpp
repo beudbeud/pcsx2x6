@@ -38,7 +38,7 @@ EEFPU_MODEL_CALL void vuMulShortTailBandLanes(const u32* fs, const u32* ft, u32*
 		const int k = (exact >> 47) ? 24 : 23;
 		if ((exp >> 23) >= 48u && (exact & ((1ull << k) - 1u)) == 0)
 			continue;
-		if (R5900::Interpreter::OpcodeImpl::COP1::eeMulOneUlpLow(a, b))
+		if (eeMulOneUlpLow(a, b)) // EeFpuModel.h (global scope here)
 			product[lane] = w - 1u;
 	}
 }
