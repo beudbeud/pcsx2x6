@@ -125,7 +125,8 @@
 //  41 — VU1: reach data memory from the pinned state pointer (ARMSX2 8b97db61ae)
 //  42 — mVU: a VU1 load or store reads its base VI where it is cached (ARMSX2 06cab3b1f4)
 //  43 — mVU: IBEQ/IBNE fold vi00 and test the low halfword in the tail (ARMSX2 2a054d6977)
-static constexpr u32 kMvuCompilerAbiVersion = 43;
+//  44 — mVU: FCOR is one BICS of the bits its immediate leaves clear (ARMSX2 795632e9a3)
+static constexpr u32 kMvuCompilerAbiVersion = 44;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
