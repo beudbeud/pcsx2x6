@@ -647,6 +647,14 @@ void LibretroHost::RegisterCoreOptions()
 			"extra sync costs more than it saves. Applies on the fly.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_iop_thread", "IOP Thread", nullptr,
+			"Runs the IOP (sound, disc, pad, arcade board I/O) on its own thread instead of inside the "
+			"EE's event test (ARMSX2). Lockstep: the two threads take strict turns, no concurrency in "
+			"the arcade board code. Threaded: the IOP runs up to the lag bound behind the EE, needs a "
+			"spare core. Applies at the next settings reload.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"lockstep", "Lockstep"}, {"threaded", "Threaded"}, {nullptr, nullptr}},
+			"disabled"},
 		{"pcsx2_fast_cdvd", "Fast CDVD", nullptr,
 			"Removes the emulated DVD seek/read delays. Shortens loads and menu/character-select "
 			"asset streaming; a few titles depend on real disc timing (leave disabled if a game "
@@ -840,6 +848,11 @@ void LibretroHost::ReadCoreOptions(bool startup)
 	s_settings_interface.SetIntValue("EmuCore/Speedhacks", "EECycleSkip", get_int_option("pcsx2_ee_cycle_skip", "0"));
 	s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "vuThread",
 		std::strcmp(get_option("pcsx2_mtvu", "disabled"), "enabled") == 0);
+	{
+		const char* iop = get_option("pcsx2_iop_thread", "disabled");
+		s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "iopThread", std::strcmp(iop, "disabled") != 0);
+		s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "iopThreadLockstep", std::strcmp(iop, "lockstep") == 0);
+	}
 	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "fpuGuardedAddSub",
 		std::strcmp(get_option("pcsx2_fpu_guarded_addsub", "enabled"), "enabled") == 0);
 	const bool perf_log_on = std::strcmp(get_option("pcsx2_perf_log", "disabled"), "enabled") == 0;
