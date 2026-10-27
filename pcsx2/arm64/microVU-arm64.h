@@ -121,7 +121,8 @@
 //  37 — mVU: the arithmetic step reads the register a clone was copied from (ARMSX2 b29cb14d7e)
 //  38 — mVU: MAX and MINI against VF0 are one integer max or min (ARMSX2 127e81506d)
 //  39 — mVU: VI arithmetic reads its source register and folds its immediate (ARMSX2 057f5cb289)
-static constexpr u32 kMvuCompilerAbiVersion = 39;
+//  40 — mVU: the status update clears the non-sticky field in one AND (ARMSX2 b3122525c3)
+static constexpr u32 kMvuCompilerAbiVersion = 40;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
