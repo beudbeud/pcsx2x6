@@ -179,6 +179,7 @@ set(pcsx2Headers
 	IopHw.h
 	IopMem.h
 	IopThread/IopChannels.h
+	IopThread/EeBridge.h
 	IopThread/IopBridge.h
 	IopThread/IopThread.h
 	IopThread/IopThreadMode.h

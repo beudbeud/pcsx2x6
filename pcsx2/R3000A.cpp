@@ -13,6 +13,7 @@
 #include "IopHw.h"
 #include "IopDma.h"
 #include "SIO/Sio2.h"
+#include "IopThread/EeBridge.h"
 #include "CDVD/Ps1CD.h"
 #include "CDVD/CDVD.h"
 
@@ -154,7 +155,7 @@ __fi void PSX_INT( IopEventId n, s32 ecycle )
 	{
 		// The EE called this int, so inform it to branch as needed:
 		
-		cpuSetNextEventDelta(iopDelta - psxRegs.iopCycleEE);
+		EeBridge::ScheduleEeEvent(iopDelta - psxRegs.iopCycleEE);
 	}
 }
 
@@ -258,20 +259,7 @@ void iopTestIntc()
 	if( psxHu32(HW_ICTRL) == 0 ) return;
 	if( (psxHu32(HW_ISTAT) & psxHu32(HW_IMASK)) == 0 ) return;
 
-	if( !eeEventTestIsActive )
-	{
-		// An iop exception has occurred while the EE is running code.
-		// Inform the EE to branch so the IOP can handle it promptly:
-
-		cpuSetNextEventDelta( 16 );
-		iopEventAction = true;
-		//Console.Error( "** IOP Needs an EE EventText, kthx **  %d", iopCycleEE );
-
-		// Note: No need to set the iop's branch delta here, since the EE
-		// will run an IOP branch test regardless.
-	}
-	else if ( !iopEventTestIsActive )
-		psxSetNextBranchDelta( 2 );
+	EeBridge::IopInterruptPending();
 }
 
 inline bool psxIsBranchOrJump(u32 addr)
