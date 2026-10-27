@@ -1127,6 +1127,7 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 	mVUbranch = 0;
 	u32 x = 0;
 
+	mVUemitClampConsts(mVU);
 	mvuPreloadRegisters(mVU, endCount);
 
 	for (; x < endCount; x++)

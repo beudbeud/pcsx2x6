@@ -101,7 +101,8 @@
 //  18 — RSQRT's zero path ORs its D/I into divFlag instead of assigning over
 //       it, so the sign test's I survives. Only RSQRT changes shape.
 //  19 — mVU: fold the clone-write copy into the operand clamp (ARMSX2 ec48b37975)
-static constexpr u32 kMvuCompilerAbiVersion = 19;
+//  20 — mVU: hold the clamp bounds in registers (ARMSX2 b5922d1beb)
+static constexpr u32 kMvuCompilerAbiVersion = 20;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
