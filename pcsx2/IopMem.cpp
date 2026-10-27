@@ -153,292 +153,24 @@ u8 iopMemRead8(u32 mem)
 	}
 }
 
-u16 iopMemRead16(u32 mem)
+#include "IopThread/SharedWord.h"
+
+// ---- The SBUS registers, IOP side ---------------------------------------------------------------
+// The IOP's 0x1D000000 window onto the words the EE reaches at 0x1000F200. The words are the EE's, in
+// psHu, and the EE thread writes them too, so every access is one atomic operation (SharedWord.h). A
+// halfword access works on the low half of the word it falls in.
+
+// Write to the control register, 0x1D000040. Bits 4-7 of the value toggle together: if any of them is set
+// in the register all of them are cleared, otherwise all are set. A value with bit 5 or 7 first resets
+// bits 12-15 of the register and sets bit 13. One atomic step, so the EE's change to bit 8 cannot land
+// between the reset and the toggle, or be undone by them.
+static __fi void IopSbusWriteControl(u32 value)
 {
-	u16 V;
-	mem &= 0x1fffffff;
-	u32 t = mem >> 16;
-
-	if (t == 0x1f80)
-	{
-		switch( mem & 0xf000 )
-		{
-			case 0x1000: return IopMemory::iopHwRead16_Page1(mem);
-			case 0x3000: return IopMemory::iopHwRead16_Page3(mem);
-			case 0x8000: return IopMemory::iopHwRead16_Page8(mem);
-
-			default:
-				return psxHu16(mem);
-		}
-	} else if (t == 0x1241) {
-		if (IS_ACUART_RANGE(mem)) {
-			V = ACUART::Read16(mem);
-    		//Console.Error("%-16s %08X:  %04X", "ACUART::Read16", mem, V);
-		} else {
-			V = ACCORE::Read16(mem);
-		}
-		return V;
-	} else if (t == ACJV_RANGE) {
-		V = ACJV::Read16(mem);
-    	// Console.Error("%-16s %08X:  %04X", "ACJV::read16", mem, V);
-		return V;
-	} else if (t == ACSRAM_RANGE) {
-		return ACSRAM::Read16(mem);
-	} else if ((t & 0xFF00) == ACRAM_RANGE) {
-		return ACRAM::Read16(mem);
-	} else if ((t & 0xFF00) == ACATA_RANGE) {
-		V = ACATA::read16(mem);
-		return V;
-	}
-	else
-	{
-		const u8* p = (const u8*)(psxMemRLUT[mem >> 16]);
-		if (p != NULL)
-		{
-			if (t == 0x1d00)
-			{
-				u16 ret;
-				switch(mem & 0xF0)
-				{
-				case 0x00:
-					ret= psHu16(SBUS_F200);
-					break;
-				case 0x10:
-					ret= psHu16(SBUS_F210);
-					break;
-				case 0x40:
-					ret= psHu16(SBUS_F240) | 0x0002;
-					break;
-				case 0x60:
-					ret = 0;
-					break;
-				default:
-					ret = psxHu16(mem);
-					break;
-				}
-				//SIF_LOG("Sif reg read %x value %x", mem, ret);
-				return ret;
-			}
-			return *(const u16 *)(p + (mem & 0xffff));
-		}
-		else
-		{
-			if (t == 0x1F90)
-				return SPU2read(mem);
-			if (t == 0x1000)
-				return DEV9read16(mem);
-			PSXMEM_LOG("err lh %8.8lx", mem);
-			return 0;
-		}
-	}
-}
-
-u32 iopMemRead32(u32 mem)
-{
-	mem &= 0x1fffffff;
-	u32 t = mem >> 16;
-
-	if (t == 0x1f80)
-	{
-		switch( mem & 0xf000 )
-		{
-			case 0x1000: return IopMemory::iopHwRead32_Page1(mem);
-			case 0x3000: return IopMemory::iopHwRead32_Page3(mem);
-			case 0x8000: return IopMemory::iopHwRead32_Page8(mem);
-
-			default:
-				return psxHu32(mem);
-		}
-	} else
-	{
-		//see also Hw.c
-		const u8* p = (const u8*)(psxMemRLUT[mem >> 16]);
-		if (p != NULL)
-		{
-			if (t == 0x1d00)
-			{
-				u32 ret;
-				switch(mem & 0x8F0)
-				{
-				case 0x00:
-					ret= psHu32(SBUS_F200);
-					break;
-				case 0x10:
-					ret= psHu32(SBUS_F210);
-					break;
-				case 0x20:
-					ret= psHu32(SBUS_F220);
-					break;
-				case 0x30:	// EE Side
-					ret= psHu32(SBUS_F230);
-					break;
-				case 0x40:
-					ret= psHu32(SBUS_F240) | 0xF0000002;
-					break;
-				case 0x60:
-					ret = 0;
-					break;
-
-				default:
-					ret = psxHu32(mem);
-					break;
-				}
-				//SIF_LOG("Sif reg read %x value %x", mem, ret);
-				return ret;
-			}
-			return *(const u32 *)(p + (mem & 0xffff));
-		}
-		else
-		{
-			if (t == 0x1000)
-				return DEV9read32(mem);
-			return 0;
-		}
-	}
-}
-
-void iopMemWrite8(u32 mem, u8 value)
-{
-	mem &= 0x1fffffff;
-	u32 t = mem >> 16;
-
-	if (t == 0x1f80)
-	{
-		switch( mem & 0xf000 )
-		{
-			case 0x1000: IopMemory::iopHwWrite8_Page1(mem,value); break;
-			case 0x3000: IopMemory::iopHwWrite8_Page3(mem,value); break;
-			case 0x8000: IopMemory::iopHwWrite8_Page8(mem,value); break;
-
-			default:
-				psxHu8(mem) = value;
-			break;
-		}
-	}
-	else if (t == 0x1f40)
-	{
-		psxHw4Write8(mem, value);
-	}
-	else if ((t & 0xFF00) == ACRAM_RANGE)
-	{
-		u16 cur = ACRAM::Read16(mem & ~1);
-		if (mem & 1) cur = (cur & 0x00FF) | ((u16)value << 8);
-		else         cur = (cur & 0xFF00) | value;
-		ACRAM::Write16(mem & ~1, cur);
-	}
-	else if ((t & 0xFF00) == ACATA_RANGE)
-	{
-		u16 cur = ACATA::read16(mem & ~1);
-		if (mem & 1) cur = (cur & 0x00FF) | ((u16)value << 8);
-		else         cur = (cur & 0xFF00) | value;
-		ACATA::write16(mem & ~1, cur);
-	}
-	else if (t == ACJV_RANGE)
-	{
-		if (ACJV::enabled) ACJV::Write16(mem & ~1, value);
-	}
-	else if (t == 0x1241)
-	{
-		ACCORE::Write16(mem & ~1, value);
-	}
-	else
-	{
-		u8* p = (u8 *)(psxMemWLUT[mem >> 16]);
-		if (p != NULL && !(psxRegs.CP0.n.Status & 0x10000) )
-		{
-			*(u8  *)(p + (mem & 0xffff)) = value;
-			psxCpu->Clear(mem&~3, 1);
-		}
-		else
-		{
-			if (t == 0x1d00)
-			{
-				Console.WriteLn("sw8 [0x%08X]=0x%08X", mem, value);
-				psxSu8(mem) = value;
-				return;
-			}
-			if (t == 0x1000)
-			{
-				DEV9write8(mem, value); return;
-			}
-			PSXMEM_LOG("err sb %8.8lx = %x", mem, value);
-		}
-	}
-}
-
-void iopMemWrite16(u32 mem, u16 value)
-{
-	mem &= 0x1fffffff;
-	u32 t = mem >> 16;
-
-	if (t == 0x1f80)
-	{
-		switch( mem & 0xf000 )
-		{
-			case 0x1000: IopMemory::iopHwWrite16_Page1(mem,value); break;
-			case 0x3000: IopMemory::iopHwWrite16_Page3(mem,value); break;
-			case 0x8000: IopMemory::iopHwWrite16_Page8(mem,value); break;
-
-			default:
-				psxHu16(mem) = value;
-				break;
-		}
-	
-	} else if ((t & 0xFF00) == ACATA_RANGE) {
-		ACATA::write16(mem, value);
-	} else if (t == ACJV_RANGE) {
-		if (ACJV::enabled) {
-			ACJV::Write16(mem, value);
-		}
-	} else if ((t & 0xFF00) == ACRAM_RANGE) {
-		ACRAM::Write16(mem, value);
-	} else if (t == ACSRAM_RANGE) {
-		ACSRAM::Write16(mem, value);
-	} else if (t == 0x1241) {
-		if (IS_ACUART_RANGE(mem))
-			ACUART::Write16(mem, value);
-		else
-			ACCORE::Write16(mem, value);
-	} else if ((t & 0xFF00) == 0x1300) {
-		ACCORE::Interrupt(mem, value);
-	} else
-	{
-		u8* p = (u8 *)(psxMemWLUT[mem >> 16]);
-		if (p != NULL && !(psxRegs.CP0.n.Status & 0x10000) )
-		{
-			if( t==0x1D00 ) Console.WriteLn("sw16 [0x%08X]=0x%08X", mem, value);
-			*(u16 *)(p + (mem & 0xffff)) = value;
-			psxCpu->Clear(mem&~3, 1);
-		}
-		else
-		{
-			if (t == 0x1d00)
-			{
-				switch (mem & 0x8f0)
-				{
-					case 0x10:
-						// write to ps2 mem
-						psHu16(SBUS_F210) = value;
-						return;
-					case 0x40:
-					{
-						u32 temp = value & 0xF0;
-						// write to ps2 mem
-						if(value & 0x20 || value & 0x80)
-						{
-							psHu16(SBUS_F240) &= ~0xF000;
-							psHu16(SBUS_F240) |= 0x2000;
-						}
-
-
-						if(psHu16(SBUS_F240) & temp)
-							psHu16(SBUS_F240) &= ~temp;
-						else
-							psHu16(SBUS_F240) |= temp;
+	const IopSbusWriteControl(value);
 						return;
 					}
 					case 0x60:
-						psHu32(SBUS_F260) = 0;
+						SharedWord::StoreRelease(psHu32(SBUS_F260), 0);
 						return;
 				}
 #if PSX_EXTRALOGS
@@ -496,36 +228,25 @@ void iopMemWrite32(u32 mem, u32 value)
 						return;		// this is the IOP, so read-only (do nothing)
 
 					case 0x10:		// IOP write path (EE/IOP readable)
-						psHu32(SBUS_F210) = value;
+						SharedWord::StoreRelease(psHu32(SBUS_F210), value);
 						return;
 
 					case 0x20:		// Bits cleared when written from IOP.
-						psHu32(SBUS_F220) &= ~value;
+						SharedWord::FetchAnd(psHu32(SBUS_F220), ~value);
 						return;
 
 					case 0x30:		// bits set when written from IOP
-						psHu32(SBUS_F230) |= value;
+						SharedWord::FetchOr(psHu32(SBUS_F230), value);
 						return;
 
 					case 0x40:		// Control Register
 					{
-						u32 temp = value & 0xF0;
-						if (value & 0x20 || value & 0x80)
-						{
-							psHu32(SBUS_F240) &= ~0xF000;
-							psHu32(SBUS_F240) |= 0x2000;
-						}
-
-
-						if (psHu32(SBUS_F240) & temp)
-							psHu32(SBUS_F240) &= ~temp;
-						else
-							psHu32(SBUS_F240) |= temp;
+						IopSbusWriteControl(value);
 						return;
 					}
 
 					case 0x60:
-						psHu32(SBUS_F260) = 0;
+						SharedWord::StoreRelease(psHu32(SBUS_F260), 0);
 						return;
 
 				}
