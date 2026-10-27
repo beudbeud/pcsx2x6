@@ -7,15 +7,19 @@
 #include "Gif_Unit.h"
 #include "MTGS.h"
 #include "VMManager.h"
+#include "IopThread/SharedWord.h"
 
 #include <list>
 
 alignas(16) u8 g_RealGSMem[Ps2MemSize::GSregs];
 static bool s_GSRegistersWritten = false;
 
+// gsVideoMode is written here, on the EE thread, and read by GetVerticalFrequency from other threads
+// (the IOP thread's cdvdVsync, the GS thread's frame rate), so these stores and that load are relaxed
+// atomics: the same plain instructions, and no torn or invented value for the other thread.
 void gsSetVideoMode(GS_VideoMode mode)
 {
-	gsVideoMode = mode;
+	SharedWord::StoreRelaxed(gsVideoMode, mode);
 	UpdateVSyncRate(false);
 }
 
@@ -23,7 +27,7 @@ void gsSetVideoMode(GS_VideoMode mode)
 void gsReset()
 {
 	MTGS::ResetGS(true);
-	gsVideoMode = GS_VideoMode::Uninitialized;
+	SharedWord::StoreRelaxed(gsVideoMode, GS_VideoMode::Uninitialized);
 	std::memset(g_RealGSMem, 0, sizeof(g_RealGSMem));
 	UpdateVSyncRate(true);
 }

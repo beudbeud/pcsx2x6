@@ -10,6 +10,7 @@
 #include "IopCounters.h"
 #include "IopMem.h"
 #include "IopThread/IopBridge.h"
+#include "IopThread/SharedWord.h"
 
 #include "GS.h"
 #include "GS/GS.h"
@@ -343,7 +344,9 @@ double GetVerticalFrequency()
 	// https://web.archive.org/web/20120629231826fw_/http://ntsc-tv.com/index.html
 	// https://web.archive.org/web/20200831051302/https://www.hdretrovision.com/240p/
 
-	switch (gsVideoMode)
+
+	// Called from threads other than the one that sets the video mode (see gsSetVideoMode).
+	switch (SharedWord::LoadRelaxed(gsVideoMode))
 	{
 		case GS_VideoMode::Uninitialized: // SetGsCrt hasn't executed yet, give some temporary values.
 			return 60.00;
