@@ -12,6 +12,7 @@
 #include "GS/GSCapture.h"
 #include "MTGS.h"
 #include "R3000A.h"
+#include "IopThread/IopThreadVm.h"
 #include "IopThread/OwnerAsserts.h"
 #include "Common.h"
 #include "VMManager.h"
@@ -112,6 +113,8 @@ void SPU2writeDMA7Mem(u16* pMem, u32 size)
 
 void SPU2::CreateOutputStream()
 {
+	// The stream the IOP thread writes is replaced: the CPU thread holds the IOP (IOP thread design 8.10).
+	IOP_SIDE_ASSERT();
 	// Initialize volume and mute settings on new session.
 	if (!s_output_stream)
 	{
@@ -170,6 +173,14 @@ u32 SPU2::GetOutputVolume()
 
 void SPU2::SetOutputVolume(u32 volume)
 {
+	// The Android JNI setters call this from their own thread with no hold; the design leaves that race (8.10),
+	// and this assert reports it in a Devel build running Lockstep.
+	IOP_SIDE_ASSERT();
+	if (VMManager::GetTargetSpeed() == 1.0f)
+		s_standard_volume = volume;
+	else
+		s_fast_forward_volume = volume;
+
 	if (s_output_stream)
 		s_output_stream->SetOutputVolume(volume);
 }
@@ -182,6 +193,8 @@ float SPU2::GetNominalRate()
 
 bool SPU2::SetOutputMuted(const bool muted)
 {
+	// See SetOutputVolume.
+	IOP_SIDE_ASSERT();
 	// User setting takes precedence. Unmute not guaranteed by design.
 	if (!s_output_stream || (!muted && EmuConfig.SPU2.OutputMuted))
 		return false;
@@ -222,6 +235,7 @@ void SPU2::SaveOutputVolume()
 
 void SPU2::SetOutputPaused(bool paused)
 {
+	IOP_SIDE_ASSERT();
 	s_output_stream->SetPaused(paused);
 }
 
@@ -268,6 +282,7 @@ void SPU2::Reset(bool psxmode)
 
 void SPU2::OnTargetSpeedChanged()
 {
+	IOP_SIDE_ASSERT();
 	if (!s_output_stream)
 		return;
 
@@ -343,6 +358,7 @@ bool SPU2::IsRunningPSXMode()
 
 void SPU2::CheckForConfigChanges(const Pcsx2Config& old_config)
 {
+	IOP_SIDE_ASSERT();
 	const Pcsx2Config::SPU2Options& opts = EmuConfig.SPU2;
 	const Pcsx2Config::SPU2Options& old_opts = old_config.SPU2;
 

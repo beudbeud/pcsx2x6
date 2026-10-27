@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "Host.h"
+#include "IopThread/OwnerAsserts.h"
 #include "StateWrapper.h"
 #include "USB/USB.h"
 #include "USB/deviceproxy.h"
@@ -62,6 +63,8 @@ OHCIPort& USB::GetOHCIPort(u32 port)
 
 bool USB::CreateDevice(u32 port)
 {
+	// Attaches a device to the IOP's OHCI controller (IOP thread design 8.6).
+	IOP_SIDE_ASSERT();
 	const Pcsx2Config::USBOptions::Port& portcfg = EmuConfig.USB.Ports[port];
 	const DeviceProxy* proxy = (portcfg.DeviceType != DEVTYPE_NONE) ? RegisterDevice::instance().Device(portcfg.DeviceType) : nullptr;
 	if (!proxy)
@@ -91,6 +94,7 @@ bool USB::CreateDevice(u32 port)
 
 void USB::DestroyDevice(u32 port)
 {
+	IOP_SIDE_ASSERT();
 	USBDevice* dev = s_usb_device[port];
 	if (!dev)
 		return;
@@ -104,6 +108,7 @@ void USB::DestroyDevice(u32 port)
 
 void USB::UpdateDevice(u32 port)
 {
+	IOP_SIDE_ASSERT();
 	if (!s_usb_device[port])
 		return;
 
@@ -809,6 +814,7 @@ void USB::SetDefaultConfiguration(SettingsInterface* si)
 
 void USB::CheckForConfigChanges(const Pcsx2Config& old_config)
 {
+	IOP_SIDE_ASSERT();
 	static_assert(Pcsx2Config::USBOptions::NUM_PORTS == NUM_PORTS);
 
 	for (u32 port = 0; port < NUM_PORTS; port++)

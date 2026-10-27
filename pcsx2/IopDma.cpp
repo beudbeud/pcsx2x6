@@ -157,7 +157,7 @@ void psxDma6(u32 madr, u32 bcr, u32 chcr)
 void psxDma8(u32 madr, u32 bcr, u32 chcr)
 {
 	IOP_SIDE_ASSERT();
-
+	const int size = (bcr >> 16) * (bcr & 0xFFFF) * 8;
 
 	switch (chcr & 0x01000201)
 	{
