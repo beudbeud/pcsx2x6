@@ -31,31 +31,11 @@ in vec4 PSin_c;
 
 layout(binding = 0) uniform sampler2D TextureSampler;
 
-// GLES requires all macros used in #if expressions to be defined.
-// Provide zero defaults for macros that may not be set by the caller.
-#ifndef HAS_INTEGER_OUTPUT
-#define HAS_INTEGER_OUTPUT 0
-#endif
-#ifndef HAS_DEPTH_OUTPUT
-#define HAS_DEPTH_OUTPUT 0
-#endif
-#ifndef HAS_FLOAT32_OUTPUT
-#define HAS_FLOAT32_OUTPUT 0
-#endif
-#ifndef HAS_STENCIL_OUTPUT
-#define HAS_STENCIL_OUTPUT 0
-#endif
-#ifndef HAS_FLOAT32_INPUT
-#define HAS_FLOAT32_INPUT 0
-#endif
-#ifndef HAS_BILN
-#define HAS_BILN 0
-#endif
-
 #if HAS_INTEGER_OUTPUT
 	layout(location = 0) out uint o_col0;
 	#define OUTPUT o_col0
 #elif HAS_DEPTH_OUTPUT
+	out float gl_FragDepth;
 	#define OUTPUT gl_FragDepth
 #elif HAS_FLOAT32_OUTPUT
 	layout(location = 0) out float o_col0;
@@ -159,6 +139,11 @@ float depth32_to_depth24(float d)
 	return uint_to_depth24(depth_to_uint(d));
 }
 
+vec4 primid_to_rgba8(float p)
+{
+	return uint_to_rgba8(floatBitsToUint(p));
+}
+
 #ifdef ps_copy
 void ps_copy()
 {
@@ -186,7 +171,7 @@ void ps_downsample_copy()
 	for (int yoff = 0; yoff < DownsampleFactor; yoff++)
 	{
 		for (int xoff = 0; xoff < DownsampleFactor; xoff++)
-			result += texelFetch(TextureSampler, coord + ivec2(int(float(xoff) * StepMultiplier), int(float(yoff) * StepMultiplier)), 0);
+			result += texelFetch(TextureSampler, coord + ivec2(xoff * StepMultiplier, yoff * StepMultiplier), 0);
 	}
 	o_col0 = result / Weight;
 }
@@ -229,6 +214,13 @@ void ps_convert_depth32_depth24()
 {
 	// Truncates depth value to 24bits
 	OUTPUT = depth32_to_depth24(sample_c());
+}
+#endif
+
+#ifdef ps_convert_primid_rgba8
+void ps_convert_primid_rgba8()
+{
+	OUTPUT = primid_to_rgba8(sample_c());
 }
 #endif
 
@@ -635,23 +627,23 @@ void ps_yuv()
 
 void main()
 {
-	o_col0 = vec4(float(0x7FFFFFFF));
+	o_col0 = vec4(PRIMID_MAX);
 
 	#ifdef ps_primid_image_init_0
 		if((127.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
-			o_col0 = vec4(-1.0f);
+			o_col0 = vec4(PRIMID_MIN);
 	#endif
 	#ifdef ps_primid_image_init_1
 		if(sample_c().a < (127.5f / 255.0f)) // >= 0x80 pass
-			o_col0 = vec4(-1.0f);
+			o_col0 = vec4(PRIMID_MIN);
 	#endif
 	#ifdef ps_primid_image_init_2
 		if((254.5f / 255.0f) < sample_c().a) // < 0x80 pass (== 0x80 should not pass)
-			o_col0 = vec4(-1.0f);
+			o_col0 = vec4(PRIMID_MIN);
 	#endif
 	#ifdef ps_primid_image_init_3
 		if(sample_c().a < (254.5f / 255.0f)) // >= 0x80 pass
-			o_col0 = vec4(-1.0f);
+			o_col0 = vec4(PRIMID_MIN);
 	#endif
 }
 #endif
