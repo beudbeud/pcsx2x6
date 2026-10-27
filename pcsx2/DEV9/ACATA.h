@@ -102,6 +102,9 @@ namespace ACATA
     }
     void SetEnv(std::string ata_img_path, std::string ata_img_filename, std::string Media);
     void SetImgPath(const char* S);
+    // The drive as a freshly started emulator has it: every register and transfer zero, at a game's
+    // start and at every reset of it.
+    void Reset();
 
     // Synchronous 2048-byte ISO9660 sector read off the already-open arcade
     // media image (CHD or flat file). Used by the ac0: ELF loader to read the

@@ -1807,6 +1807,9 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	memBindConditionalHandlers();
 	SysMemory::Reset();
 	cpuReset();
+	// The arcade drive as a freshly started emulator has it: no transfer left half done, every register zero.
+	ACATA::Reset();
+	ACJV::enabled = false;
 
 	Console.WriteLn("Opening GS...");
 	s_gs_open_on_initialize = MTGS::IsOpen();
@@ -2093,6 +2096,9 @@ void VMManager::Reset()
 	memBindConditionalHandlers();
 	SysMemory::Reset();
 	cpuReset();
+	// The arcade drive as a freshly started emulator has it: no transfer left half done, every register zero.
+	ACATA::Reset();
+	ACJV::enabled = false;
 	hwReset();
 
 	if (g_InputRecording.isActive())
