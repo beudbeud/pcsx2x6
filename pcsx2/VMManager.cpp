@@ -3232,6 +3232,12 @@ const std::string& VMManager::Internal::GetELFOverride()
 	return s_elf_override;
 }
 
+VMState VMManager::Internal::GetStateForEventTest()
+{
+	// Relaxed: the caller adds the acquire as a fence where it relies on the value (_cpuEventTest_Shared).
+	return s_state.load(std::memory_order_relaxed);
+}
+
 bool VMManager::Internal::IsExecutionInterrupted()
 {
 	return s_state.load(std::memory_order_relaxed) != VMState::Running || s_cpu_implementation_changed;
