@@ -23,6 +23,7 @@
 #include "ImGui/ImGuiOverlays.h"
 #include "Input/InputManager.h"
 #include "IopBios.h"
+#include "IopThread/IopThreadVm.h"
 #include "MTGS.h"
 #include "MTVU.h"
 #include "PINE.h"
@@ -294,6 +295,8 @@ void VMManager::SetState(VMState state)
 		const bool paused = (state == VMState::Paused);
 		if (paused)
 		{
+			// The IOP stays held for the whole pause, so the debugger and the settings see a still IOP.
+			IopThread::OnVmPaused(true);
 			if (THREAD_VU1)
 				vu1Thread.WaitVU();
 			MTGS::WaitGS(false);
@@ -306,6 +309,8 @@ void VMManager::SetState(VMState state)
 		}
 
 		SPU2::SetOutputPaused(paused);
+		if (!paused)
+			IopThread::OnVmPaused(false);
 		Achievements::OnVMPaused(paused);
 
 		UpdateInhibitScreensaver(!paused && EmuConfig.InhibitScreensaver);
@@ -791,6 +796,9 @@ void VMManager::ApplySettings()
 {
 	Console.WriteLn("Applying settings...");
 
+	// A settings change can reset the recompilers and start or stop the IOP thread.
+	IopThread::VmHold iop_hold;
+
 	// If we're running, ensure the threads are synced.
 	if (GetState() == VMState::Running)
 	{
@@ -813,6 +821,8 @@ void VMManager::ApplyCoreSettings()
 	// Lightweight version of above, called when ELF changes. This should not get called without an active VM.
 	pxAssertRel(HasValidOrInitializingVM(), "Reloading core settings requires a valid VM.");
 	Console.WriteLn("Applying core settings...");
+
+	IopThread::VmHold iop_hold;
 
 	// If we're running, ensure the threads are synced.
 	if (GetState() == VMState::Running)
@@ -1654,6 +1664,7 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 
 		UpdateGameSettingsLayer();
 		s_state.store(VMState::Shutdown, std::memory_order_release);
+		IopThread::StopThread();
 		Host::OnVMDestroyed();
 		ApplySettings();
 	};
@@ -1802,6 +1813,9 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	s_use_vsync_for_timing = false;
 
 	s_cpu_implementation_changed = false;
+	// The IOP thread mode is chosen before the recompilers are reset: the EE JIT's dispatcher is
+	// generated for it. The thread itself starts once the devices are open.
+	IopThread::ChooseMode();
 	UpdateCPUImplementations();
 	mmap_ResetBlockTracking();
 	EmuConfig.Cpu.ExtraMemory = true;
@@ -1917,6 +1931,10 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	if (EmuConfig.CdvdPrecache)
 		PrecacheCDVDFile();
 
+	// The devices are open and the CPU state is reset: the IOP thread, if the mode has one, takes its
+	// clocks from it.
+	IopThread::SyncThread();
+
 	hwReset();
 
 	Console.WriteLn("VM subsystems initialized in %.2f ms", init_timer.GetTimeMilliseconds());
@@ -1948,6 +1966,9 @@ void VMManager::Shutdown(bool save_resume_state)
 	s_state.store(VMState::Stopping, std::memory_order_release);
 
 	SetTimerResolutionIncreased(false);
+
+	// Everything below touches the devices the IOP owns; the thread is gone before any of them close.
+	IopThread::VmHold iop_hold;
 
 	// sync everything
 	if (THREAD_VU1)
@@ -1997,6 +2018,7 @@ void VMManager::Shutdown(bool save_resume_state)
 
 	FPControlRegister::SetCurrent(FPControlRegister::GetDefault());
 
+	IopThread::StopThread();
 	Patch::UnloadPatches();
 	R3000A::ioman::reset();
 	vtlb_Shutdown();
@@ -2088,6 +2110,8 @@ void VMManager::Reset()
 	if (!GSDumpReplayer::IsReplayingDump() && Achievements::ResetHardcoreMode(false))
 		ApplySettings();
 
+	IopThread::VmHold iop_hold;
+
 	vu1Thread.WaitVU();
 	vu1Thread.Reset();
 	MTGS::WaitGS();
@@ -2108,6 +2132,7 @@ void VMManager::Reset()
 	// The arcade drive as a freshly started emulator has it: no transfer left half done, every register zero.
 	ACATA::Reset();
 	ACJV::enabled = false;
+	IopThread::ResyncClocks();
 	hwReset();
 
 	if (g_InputRecording.isActive())
@@ -2232,6 +2257,9 @@ void VMManager::DoSaveState(const char* filename, s32 slot_for_message, bool zip
 		error_callback(TRANSLATE_STR("VMManager", "Cannot save state while replaying a GS dump."));
 		return;
 	}
+
+	// The state reads the IOP's registers, RAM and devices.
+	IopThread::VmHold iop_hold;
 
 	Error error;
 	std::unique_ptr<ArchiveEntryList> elist = SaveState_DownloadState(&error);
@@ -3055,6 +3083,9 @@ void VMManager::UpdateCPUImplementations()
 
 void VMManager::Internal::ClearCPUExecutionCaches()
 {
+	// Resets the IOP's code cache with the rest, so the IOP must be held or not running.
+	IopThread::AssertHeldOrStopped();
+
 	Cpu->Reset();
 	psxCpu->Reset();
 
@@ -3087,6 +3118,7 @@ void VMManager::Execute()
 	if (std::exchange(s_cpu_implementation_changed, false))
 	{
 		// We need to switch the cpus out, and reset the new ones if so.
+		IopThread::VmHold iop_hold;
 		UpdateCPUImplementations();
 		Internal::ClearCPUExecutionCaches();
 		vtlb_ResetFastmem();
@@ -3319,6 +3351,16 @@ void VMManager::CheckForCPUConfigChanges(const Pcsx2Config& old_config)
 
 	Console.WriteLn("Updating CPU configuration...");
 	FPControlRegister::SetCurrent(EmuConfig.Cpu.FPUFPCR);
+
+
+	// The IOP thread mode may have changed, and the EE JIT's dispatcher is generated for the mode in
+	// effect, so it is chosen before the caches are reset below.
+	IopThread::OnCpuConfigChanged();
+
+	// The VU program cache toggle (EnableVUProgramCache) is picked up by the
+	// mVUreset that ClearCPUExecutionCaches triggers below — recording and the
+	// disk cache are re-synced there from the live config, so no explicit sync
+	// is needed here.
 	Internal::ClearCPUExecutionCaches();
 	memBindConditionalHandlers();
 

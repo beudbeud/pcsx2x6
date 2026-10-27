@@ -94,6 +94,7 @@ set(pcsx2Sources
 	IopThread/IopChannels.cpp
 	IopThread/IopThread.cpp
 	IopThread/IopThreadMode.cpp
+	IopThread/IopThreadVm.cpp
 	PINE.cpp
 	Mdec.cpp
 	Memory.cpp
@@ -183,6 +184,8 @@ set(pcsx2Headers
 	IopThread/IopBridge.h
 	IopThread/IopThread.h
 	IopThread/IopThreadMode.h
+	IopThread/IopThreadVm.h
+	IopThread/SharedWord.h
 	LayeredSettingsInterface.h
 	PINE.h
 	Mdec.h

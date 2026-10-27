@@ -14,6 +14,7 @@
 #include "GS.h"
 #include "GS/GS.h"
 #include "Host.h"
+#include "IopThread/IopThreadVm.h"
 #include "MTGS.h"
 #include "MTVU.h"
 #include "Patch.h"
@@ -82,6 +83,9 @@ static void PostLoadPrep()
 	CBreakPoints::SetSkipFirst(BREAKPOINT_IOP, 0);
 
 	UpdateVSyncRate(true);
+
+	// The state brought its own EE cycle counter and IOP slice books.
+	IopThread::ResyncClocks();
 
 	if (VMManager::Internal::HasBootedELF())
 		R5900SymbolImporter.OnElfLoadedInMemory();
@@ -1289,6 +1293,10 @@ bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
 		Error::SetString(error, "Some required components were not found or are incomplete.");
 		return false;
 	}
+
+	// Held from before the state starts overwriting anything until after PostLoadPrep has moved the
+	// IOP thread's clocks to the loaded ones.
+	IopThread::VmHold iop_hold;
 
 	PreLoadPrep();
 
