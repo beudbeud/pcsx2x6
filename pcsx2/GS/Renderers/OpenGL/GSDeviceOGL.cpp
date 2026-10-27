@@ -602,6 +602,12 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		Console.Error("GS: This GL/GLES driver lacks glDrawElementsBaseVertex (need GL 3.2, GLES 3.2, or OES/EXT_draw_elements_base_vertex).");
 		return false;
 	}
+	if (glad_glDrawRangeElementsBaseVertex)
+		m_draw_range_elements_base_vertex = glad_glDrawRangeElementsBaseVertex;
+	else if (GLAD_GL_OES_draw_elements_base_vertex && glad_glDrawRangeElementsBaseVertexOES)
+		m_draw_range_elements_base_vertex = glad_glDrawRangeElementsBaseVertexOES;
+	else if (GLAD_GL_EXT_draw_elements_base_vertex && glad_glDrawRangeElementsBaseVertexEXT)
+		m_draw_range_elements_base_vertex = glad_glDrawRangeElementsBaseVertexEXT;
 
 	// Image load store and GLSL 420pack is core in GL4.2, no need to check.
 	// GLES 3.1+ has compute shaders as core.
@@ -1333,10 +1339,18 @@ void GSDeviceOGL::DrawIndexedPrimitive()
 	DrawIndexedPrimitive(0, m_index.count);
 }
 
+void GSDeviceOGL::DrawElementsInRange(GLenum mode, u32 vertex_count, GLsizei count, const void* indices, GLint base_vertex)
+{
+	if (m_draw_range_elements_base_vertex && vertex_count > 0)
+		m_draw_range_elements_base_vertex(mode, 0, vertex_count - 1, count, GL_UNSIGNED_SHORT, indices, base_vertex);
+	else
+		m_draw_elements_base_vertex(mode, count, GL_UNSIGNED_SHORT, indices, base_vertex);
+}
+
 void GSDeviceOGL::DrawIndexedPrimitive(int offset, int count)
 {
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
-	m_draw_elements_base_vertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+	DrawElementsInRange(m_draw_topology, m_vertex.count, count,
 		reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)),
 		static_cast<GLint>(m_vertex.start));
 }
@@ -1352,7 +1366,7 @@ void GSDeviceOGL::DrawIndexedPrimitiveVSExpand(int offset, int count, bool vs_in
 	else
 	{
 		VSSetPushConstants(m_vertex.start);
-		m_draw_elements_base_vertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+		DrawElementsInRange(m_draw_topology, m_vertex.count, count,
 			reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)), 0);
 	}
 }
@@ -2816,8 +2830,10 @@ void GSDeviceOGL::RenderImGui()
 				glBindTextureUnit(0, texture_id);
 			}
 
-			m_draw_elements_base_vertex(GL_TRIANGLES, (GLsizei)pcmd->ElemCount, GL_UNSIGNED_SHORT,
-				(void*)(intptr_t)((pcmd->IdxOffset + m_index.start) * sizeof(ImDrawIdx)), pcmd->VtxOffset + vertex_start);
+			// VtxOffset is folded into the base vertex, so the indices reach at most the end of VtxBuffer.
+			DrawElementsInRange(GL_TRIANGLES, static_cast<u32>(cmd_list->VtxBuffer.Size) - pcmd->VtxOffset,
+				(GLsizei)pcmd->ElemCount, (void*)(intptr_t)((pcmd->IdxOffset + m_index.start) * sizeof(ImDrawIdx)),
+				pcmd->VtxOffset + vertex_start);
 		}
 
 		g_perfmon.Put(GSPerfMon::DrawCalls, cmd_list->CmdBuffer.Size);

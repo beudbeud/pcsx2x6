@@ -165,6 +165,12 @@ private:
 	// Resolved at device creation to the core entry, or the OES/EXT extension
 	// variant on GLES 3.1, so indexed draws don't dispatch through a null pointer.
 	PFNGLDRAWELEMENTSBASEVERTEXPROC m_draw_elements_base_vertex = nullptr;
+	// The ranged variant, resolved the same way; null where no core/OES/EXT entry exists.
+	PFNGLDRAWRANGEELEMENTSBASEVERTEXPROC m_draw_range_elements_base_vertex = nullptr;
+	// Every index of the draw is in [0, vertex_count) relative to base_vertex: passing that range
+	// keeps the driver from scanning the indices for it (and, on Mali, from caching the scan per
+	// offset for the whole session). Falls back to the unranged call.
+	void DrawElementsInRange(GLenum mode, u32 vertex_count, GLsizei count, const void* indices, GLint base_vertex);
 
 	struct
 	{
