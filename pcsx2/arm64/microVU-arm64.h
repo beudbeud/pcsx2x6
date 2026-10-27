@@ -132,7 +132,8 @@
 //  48 — mVU: CLIP reads its operands where they are cached (ARMSX2 b637c589f4)
 //  49 — mVU: micro mode addresses VU data memory off a pinned x29 (ARMSX2 262e85b8c6)
 //  50 — mVU: a full-width ACC write keeps its result in the register it was made in (ARMSX2 2a8ff44243)
-static constexpr u32 kMvuCompilerAbiVersion = 50;
+//  51 — mVU: drop the multiply by VF0.w behind an FMINNM/FMAXNM operand clamp (ARMSX2 ca92bed7fb)
+static constexpr u32 kMvuCompilerAbiVersion = 51;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
