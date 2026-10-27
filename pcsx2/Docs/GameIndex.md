@@ -275,6 +275,8 @@ These values are in a key-value format, where the value is assumed to be an inte
 * `eeCycleRate`
 * Accepted Values - `-3` / `3`
 * `iopThread`
+* `eeCycleSkip` (0-3, the EE cycle skip factor; PCSX2x6 per-game performance profile)
+* `vuAot` (0/1, the VU1 ahead-of-time compiler; PCSX2x6)
 * Accepted Values - `0` / `1`
 * Runs the IOP on its own thread. This is off unless the player turns it on. `0` keeps a title on the single-threaded IOP even when the player has it on, for a title that needs the IOP in step with the EE.
 

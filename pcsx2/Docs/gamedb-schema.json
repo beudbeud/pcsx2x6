@@ -357,6 +357,16 @@
               "minimum": 0,
               "maximum": 1
             },
+            "eeCycleSkip": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            "vuAot": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1
+            },
             "mtvu": {
               "type": "integer",
               "minimum": 0,

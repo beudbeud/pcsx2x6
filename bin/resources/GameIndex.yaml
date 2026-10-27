@@ -14,6 +14,9 @@ NM00001:
     gpuPaletteConversion: 2
     cpuSpriteRenderBW: 1
     cpuSpriteRenderLevel: 1
+  speedHacks:
+    eeCycleSkip: 0
+    vuAot: 1
 NM00002:
   name: Bloody Roar 3
   region: System246
@@ -40,6 +43,9 @@ NM00004:
   input: button
   gsHWFixes:
     alignSprite: 1
+  speedHacks:
+    eeCycleSkip: 0 # Skip loses here (2026-08-10 campaign); GS-bound.
+    vuAot: 1 # Neutral on a GS-bound game.
 NM00005:
   name: Wangan Midnight R
   region: System246
@@ -54,6 +60,9 @@ NM00006:
   input: button
   gsHWFixes:
     beforeDraw: OI_SmashCourt # Page-by-page framebuffer feedback: serve the page copies from a snapshot (tiler render-pass explosion).
+  speedHacks:
+    eeCycleSkip: 1 # Measured 2026-08-11 profile (with the OI page-feedback hack).
+    vuAot: 1
 NM00007:
   name: Soul Calibur II
   region: System246
@@ -68,6 +77,9 @@ NM00007:
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
     nativeScaling: 2 # Fixes misaligned bloom
+  speedHacks:
+    eeCycleSkip: 2 # Measured 2026-08-12: skip 1 drops to 44-55.
+    vuAot: 1 # Same engine family as SC3.
 NM00008:
   name: Wangan Midnight
   region: System246
@@ -101,6 +113,9 @@ NM00012:
   bootprog: TC3LOAD
   media: DVD
   input: lightgun
+  speedHacks:
+    eeCycleSkip: 0
+    vuAot: 1 # Measured 2026-10-27: holds 60, no early-scene dips.
 NM00013:
   name: Mobile Suit Gundam Zeta - A.E.U.G. vs. Titans
   region: System246
@@ -140,6 +155,9 @@ NM00018:
   bootprog: FJMLOAD
   media: DVD
   input: button
+  speedHacks:
+    eeCycleSkip: 0 # Any skip crashes the game after boot (2026-08).
+    vuAot: 1
 NM00019:
   name: Tekken 5
   region: System256
@@ -220,6 +238,9 @@ NM00027:
   bootprog: DBALOAD
   media: DVD
   input: button
+  speedHacks:
+    eeCycleSkip: 0
+    vuAot: 1
 NM00028:
   name: Druaga Online - The Story of Aon
   region: System256
@@ -251,12 +272,18 @@ NM00031:
   gsHWFixes:
     alignSprite: 1 # Fixes vertical lines.
     nativeScaling: 2 # Fixes misaligned bloom.
+  speedHacks:
+    eeCycleSkip: 2 # Measured 2026-08: 60fps flat on the attract, 41->59 in heavy combat (EE-bound).
+    vuAot: 1 # Measured 2026-10-27: +3 to +5 fps in combat (54.8 vs 50.5).
 NM00032:
   name: Time Crisis 4
   region: System SUPER256
   bootprog: TC4LOAD
   media: HDD
   input: lightgun
+  speedHacks:
+    eeCycleSkip: 0
+    vuAot: 1
 NM00033:
   name: Taiko Drum Master 8
   region: System256

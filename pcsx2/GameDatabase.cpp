@@ -544,12 +544,22 @@ void GameDatabaseSchema::GameEntry::applyGameFixes(Pcsx2Config& config, bool app
 	}
 
 	// TODO - config - this could be simplified with maps instead of bitfields and enums
+	// The per-game performance profile has its own switch (EnableGameDBSpeedHacks, core option
+	// pcsx2_gamedb_perf): off, the user's own core options stand, while the correctness entries
+	// above and below still apply.
+	const bool applySpeedHacks = applyAuto && config.EnableGameDBSpeedHacks;
 	for (const auto& it : speedHacks)
 	{
-		if (!applyAuto)
+		if (!applySpeedHacks)
 		{
 			Console.Warning("GameDB: Skipping setting Speedhack '%s' to [mode=%d]",
 				Pcsx2Config::SpeedhackOptions::GetSpeedHackName(it.first), it.second);
+			continue;
+		}
+		if (it.first == SpeedHack::VUAot)
+		{
+			config.Cpu.Recompiler.EnableVUAot = (it.second != 0);
+			Console.WriteLn("GameDB: Setting EnableVUAot to %d", it.second);
 			continue;
 		}
 		// Legacy note - speedhacks are setup in the GameDB as integer values, but

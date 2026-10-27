@@ -326,6 +326,8 @@ static constexpr const char* s_speed_hack_names[] = {
 	"mtvu",
 	"eeCycleRate",
 	"iopThread",
+	"eeCycleSkip",
+	"vuAot",
 };
 
 const char* Pcsx2Config::SpeedhackOptions::GetSpeedHackName(SpeedHack id)
@@ -366,6 +368,11 @@ void Pcsx2Config::SpeedhackOptions::Set(SpeedHack id, int value)
 		case SpeedHack::IOPThread:
 			iopThread = (value != 0);
 			break;
+		case SpeedHack::EECycleSkip:
+			EECycleSkip = static_cast<u8>(std::clamp<int>(value, 0, MAX_EE_CYCLE_SKIP));
+			break;
+		case SpeedHack::VUAot:
+			break; // lives in Cpu.Recompiler; GameEntry::applyGameFixes sets it
 			jNO_DEFAULT
 	}
 }
@@ -2006,6 +2013,7 @@ Pcsx2Config::Pcsx2Config()
 	EnableFastBoot = true;
 	EnableRecordingTools = true;
 	EnableGameFixes = true;
+	EnableGameDBSpeedHacks = true;
 	InhibitScreensaver = true;
 	UseSavestateSelector = true;
 	BackupSavestate = true;
@@ -2050,6 +2058,7 @@ void Pcsx2Config::LoadSaveCore(SettingsWrapper& wrap)
 	SettingsWrapBitBool(EnableThreadPinning);
 	SettingsWrapBitBool(EnableRecordingTools);
 	SettingsWrapBitBool(EnableGameFixes);
+	SettingsWrapBitBool(EnableGameDBSpeedHacks);
 	SettingsWrapBitBool(SaveStateOnShutdown);
 	SettingsWrapBitBool(UseSavestateSelector);
 	SettingsWrapBitBool(EnableDiscordPresence);

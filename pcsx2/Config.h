@@ -188,6 +188,8 @@ enum class SpeedHack
 	MTVU,
 	EECycleRate,
 	IOPThread,
+	EECycleSkip, // GameDB: the EE cycle skip factor (0-3)
+	VUAot,       // GameDB: EnableVUAot (not a speedhack bit; applied by applyGameFixes)
 	MaxCount,
 };
 
@@ -1422,6 +1424,7 @@ struct Pcsx2Config
 		// TODO - Vaser - where are these settings exposed in the Qt UI?
 		EnableRecordingTools : 1,
 		EnableGameFixes : 1, // enables automatic game fixes
+		EnableGameDBSpeedHacks : 1, // applies the per-game performance profile (GameDB speedHacks); off = the core options stand
 		SaveStateOnShutdown : 1, // default value for saving state on shutdown
 		EnableDiscordPresence : 1, // enables discord rich presence integration
 		UseSavestateSelector : 1,

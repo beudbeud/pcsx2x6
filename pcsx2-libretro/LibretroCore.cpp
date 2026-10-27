@@ -648,6 +648,12 @@ void LibretroHost::RegisterCoreOptions()
 			"extra sync costs more than it saves. Applies on the fly.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_gamedb_perf", "Per-Game Performance Profile (GameDB)", nullptr,
+			"Applies the speedHacks block of the game's GameIndex.yaml entry (EE cycle skip, VU1 AOT, "
+			"MTVU...) on top of the options below. Disable to run every game with the options as set "
+			"here. The correctness entries (clamp modes, game fixes, GS fixes) apply either way.",
+			nullptr, "performance",
+			{{"enabled", "Enabled (Default)"}, {"disabled", nullptr}, {nullptr, nullptr}}, "enabled"},
 		{"pcsx2_vu_aot", "VU1 Ahead-of-Time Compiler", nullptr,
 			"ARMSX2 vu-aot: VU1 programs that run often enough are recompiled whole, above microVU, "
 			"which stays the fallback at every block boundary. Compiles on a background thread and "
@@ -861,6 +867,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "iopThread", std::strcmp(iop, "disabled") != 0);
 		s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "iopThreadLockstep", std::strcmp(iop, "lockstep") == 0);
 	}
+	s_settings_interface.SetBoolValue("EmuCore", "EnableGameDBSpeedHacks",
+		std::strcmp(get_option("pcsx2_gamedb_perf", "enabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "EnableVUAot",
 		std::strcmp(get_option("pcsx2_vu_aot", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "fpuGuardedAddSub",
