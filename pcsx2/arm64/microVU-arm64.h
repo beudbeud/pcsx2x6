@@ -106,7 +106,8 @@
 //  22 — VU: LQD and SQD step the address off a vi00 base too (ARMSX2 b83409ff56)
 //  23 — VU: ILW's dest field names one lane through a two-bit code (ARMSX2 30af63c447)
 //  24 — mVU: raise the E-bit interrupt in front of the exit path (ARMSX2 f6f8e0f021)
-static constexpr u32 kMvuCompilerAbiVersion = 24;
+//  25 — mVU: the options sentinel records every setting the emitters read (ARMSX2 ebee76977d)
+static constexpr u32 kMvuCompilerAbiVersion = 25;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
