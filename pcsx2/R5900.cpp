@@ -24,6 +24,7 @@
 #include "GSDumpReplayer.h"
 #include "IopThread/IopThreadMode.h"
 #include "IopThread/EeBridge.h"
+#include "IopThread/IopBridge.h"
 
 #include "DebugTools/Breakpoints.h"
 #include "DebugTools/MIPSAnalyst.h"
@@ -80,7 +81,12 @@ void cpuReset()
 	EEsCycle = 0;
 	EEoCycle = cpuRegs.cycle;
 
-	psxReset();
+	// C18: the reset writes the IOP's registers and devices. A VM reset holds the IOP around this
+	// already; boot calls it before the IOP thread exists. The hold is for whoever calls it next.
+	{
+		IopBridge::EmuHold hold(IopThread::HoldKind::Lifecycle);
+		psxReset();
+	}
 	pgifInit();
 
 	extern void Deci2Reset();		// lazy, no good header for it yet.
