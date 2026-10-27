@@ -130,7 +130,8 @@
 //  46 — mVU: the OP ops permute their multiplicands from the cached registers (ARMSX2 748d8d9e0f)
 //  47 — mVU: a single-lane op clamps its scalar destination full width (ARMSX2 3d28f68aea)
 //  48 — mVU: CLIP reads its operands where they are cached (ARMSX2 b637c589f4)
-static constexpr u32 kMvuCompilerAbiVersion = 48;
+//  49 — mVU: micro mode addresses VU data memory off a pinned x29 (ARMSX2 262e85b8c6)
+static constexpr u32 kMvuCompilerAbiVersion = 49;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
