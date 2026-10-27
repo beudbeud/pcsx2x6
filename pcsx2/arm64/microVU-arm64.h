@@ -128,7 +128,8 @@
 //  44 — mVU: FCOR is one BICS of the bits its immediate leaves clear (ARMSX2 795632e9a3)
 //  45 — mVU: single-lane and Q multiplies read their operand lane by element (ARMSX2 c7e7ec99a2)
 //  46 — mVU: the OP ops permute their multiplicands from the cached registers (ARMSX2 748d8d9e0f)
-static constexpr u32 kMvuCompilerAbiVersion = 46;
+//  47 — mVU: a single-lane op clamps its scalar destination full width (ARMSX2 3d28f68aea)
+static constexpr u32 kMvuCompilerAbiVersion = 47;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of

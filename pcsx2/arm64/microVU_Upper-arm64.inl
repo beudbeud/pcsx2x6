@@ -57,8 +57,11 @@ static __fi void mVUclampStepOperands(mV, const a64::VRegister& to, const a64::V
 {
 	if (!clampE)
 		return;
+	// A single-lane step is scalar arithmetic into `to` (mVUclampOperands'
+	// scalarDst).
 	mVUclampOperands(mVU, {(preClamped & preClampFrom) ? a64::NoVReg : from,
-	                       (preClamped & preClampTo) ? a64::NoVReg : to}, xyzw, true);
+	                       (preClamped & preClampTo) ? a64::NoVReg : to}, xyzw, true,
+	                 (xyzw == 0x8) ? to : a64::NoVReg);
 }
 
 static void NEON_ADDPS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
@@ -496,8 +499,11 @@ static void mVU_FMACa(microVU& mVU, int recPass, int opCase, int opType, bool is
 			Fs = mVU.regAlloc->allocReg(_Fs_, _Fd_, _X_Y_Z_W);
 		}
 
+		// A single-lane ADD/SUB/MUL writes Fs with scalar arithmetic next
+		// (mVUclampOperands' scalarDst). MAX/MINI clamp nothing.
 		mVUclampOperands(mVU, {((clampType & cFt) && bcLane < 0) ? Ft : a64::NoVReg,
-		                       (clampType & cFs) ? Fs : a64::NoVReg}, _X_Y_Z_W);
+		                       (clampType & cFs) ? Fs : a64::NoVReg}, _X_Y_Z_W, false,
+		                 (_XYZW_SS && opType != 3 && opType != 4) ? Fs : a64::NoVReg);
 
 		// AX-14 fold (== broadcast + NEON_MULPS/SS under the no-clamp gate).
 		// MAX/MINI with VF0 on either side: see mVUemitMaxMinSignClear. Ft
@@ -562,8 +568,10 @@ static void mVU_FMACb(microVU& mVU, int recPass, int opCase, int opType, microOp
 		if (_XYZW_SS2)
 			shuffleSSto0(ACC, offsetReg); // Rotate target lane to lane 0
 
+		// Step 1's single-lane multiply writes Fs with scalar arithmetic.
 		mVUclampOperands(mVU, {((clampType & cFt) && bcLane < 0) ? Ft : a64::NoVReg,
-		                       (clampType & cFs) ? Fs : a64::NoVReg}, _X_Y_Z_W);
+		                       (clampType & cFs) ? Fs : a64::NoVReg}, _X_Y_Z_W, false,
+		                 _XYZW_SS ? Fs : a64::NoVReg);
 
 		// mVUclamp4 does not run behind the AX-14 lane fold, which replaces
 		// NEON_*[2], nor in the sign-preserving mode, which clamps operands only.
@@ -644,9 +652,11 @@ static void mVU_FMACc(microVU& mVU, int recPass, int opCase, microOpcode opEnum,
 		if (_XYZW_SS2)
 			shuffleSSto0(ACC, offsetReg); // Rotate target lane to lane 0
 
+		// Step 1's single-lane multiply writes Fs with scalar arithmetic.
 		mVUclampOperands(mVU, {((clampType & cFt) && bcLane < 0) ? Ft : a64::NoVReg,
 		                       (clampType & cFs) ? Fs : a64::NoVReg,
-		                       (clampType & cACC) ? ACC : a64::NoVReg}, _X_Y_Z_W);
+		                       (clampType & cACC) ? ACC : a64::NoVReg}, _X_Y_Z_W, false,
+		                 _XYZW_SS ? Fs : a64::NoVReg);
 
 		const bool prodClamped = (bcLane < 0) && !CHECK_VU_SIGN_OVERFLOW(mVU.index);
 
@@ -692,9 +702,11 @@ static void mVU_FMACd(microVU& mVU, int recPass, int opCase, microOpcode opEnum,
 		Fs = mVU.regAlloc->allocReg(_Fs_,  0, _X_Y_Z_W);
 		Fd = mVU.regAlloc->allocReg(32, _Fd_, _X_Y_Z_W);
 
+		// Step 1's single-lane multiply writes Fs with scalar arithmetic.
 		mVUclampOperands(mVU, {((clampType & cFt) && bcLane < 0) ? Ft : a64::NoVReg,
 		                       (clampType & cFs) ? Fs : a64::NoVReg,
-		                       (clampType & cACC) ? Fd : a64::NoVReg}, _X_Y_Z_W);
+		                       (clampType & cACC) ? Fd : a64::NoVReg}, _X_Y_Z_W, false,
+		                 _XYZW_SS ? Fs : a64::NoVReg);
 
 		const bool prodClamped = (bcLane < 0) && !CHECK_VU_SIGN_OVERFLOW(mVU.index);
 
