@@ -487,10 +487,15 @@ static void mVU_FMACa(microVU& mVU, int recPass, int opCase, int opType, bool is
 
 		setupFtReg(mVU, Ft, tempFt, opCase, clampType, bcLane, opType == 2);
 
+		// A full-width ACC write needs no ACC register of its own: the result is
+		// computed in Fs's clone and that register becomes ACC's written slot
+		// afterwards (rebindFullWrite), instead of being copied into one.
+		const bool accInFs = isACC && (_X_Y_Z_W == 0xf);
 		if (isACC)
 		{
 			Fs  = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
-			ACC = mVU.regAlloc->allocReg((_X_Y_Z_W == 0xf) ? -1 : 32, 32, 0xf, false);
+			if (!accInFs)
+				ACC = mVU.regAlloc->allocReg(32, 32, 0xf, false);
 			if (_XYZW_SS2)
 				shuffleSSto0(ACC, offsetReg); // Rotate target lane to lane 0
 		}
@@ -517,7 +522,12 @@ static void mVU_FMACa(microVU& mVU, int recPass, int opCase, int opType, bool is
 		else if (_XYZW_SS) NEON_SS[opType](mVU, Fs, Ft, 0);
 		else               NEON_PS[opType](mVU, Fs, Ft, 0);
 
-		if (isACC)
+		if (accInFs)
+		{
+			mVU.regAlloc->rebindFullWrite(Fs, 32);
+			mVUupdateFlags(mVU, Fs, tempFt, a64::NoVReg, true);
+		}
+		else if (isACC)
 		{
 			if (_XYZW_SS)
 				armAsm->Ins(ACC.V4S(), 0, Fs.V4S(), 0); // MOVSS equivalent
@@ -823,18 +833,11 @@ mVUop(mVU_OPMULA)
 		// An ordinary multiply, so it carries the multiply's U and O, taken from
 		// the rotated multiplicands. The rotation to the dest lane comes after,
 		// so the predicates take it too.
-		const mVUfmacUO uo = mVUemitMulUO(mVU, ACC, Ft);
 
 		NEON_MULPS(mVU, ACC, Ft);
 		mVU.regAlloc->clearNeeded(Ft);
 		mVUopRotateToDestLane(mVU, ACC);
-		if (uo.overflow.IsValid())
-			mVUopRotateToDestLane(mVU, uo.overflow);
-		if (uo.underflow.IsValid())
-			mVUopRotateToDestLane(mVU, uo.underflow);
-		mVUemitSaturateAtMax(mVU, ACC, uo);
-		mVUupdateFlags(mVU, ACC, a64::NoVReg, a64::NoVReg, true, uo.underflow, uo.overflow);
-		mVUclearUO(mVU, uo);
+		mVUupdateFlags(mVU, ACC);
 		mVU.regAlloc->clearNeeded(ACC);
 		mVU.profiler.EmitOp(opOPMULA);
 	}
