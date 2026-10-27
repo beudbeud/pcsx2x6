@@ -455,6 +455,12 @@ void ACATA::SetEnv(std::string ata_img_path, std::string ata_img_filename, std::
 	Console.WarningFmt("mediat: '{}'", (int)ACATA::MediaType);
 }
 
+std::string ACATA::writespath;
+
+void ACATA::SetWritesFile(std::string path) {
+	ACATA::writespath = std::move(path);
+}
+
 
 u16 ACATA::R_DATA;
 u16 ACATA::R_FEATURE;

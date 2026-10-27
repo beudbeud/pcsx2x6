@@ -1500,6 +1500,8 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 				s_elf_override = Path::Combine(basedir, INI.GetStringValue("data", "elf", "boot.elf"));
 				EmuConfig.CurrentGameArgs = INI.GetStringValue("data", "args");
 				ACSRAM::filepath = Path::Combine(basedir, INI.GetStringValue("data", "sram", "sram.bin"));
+				// What the game writes to a hard drive that is a CHD is kept beside its SRAM (ChdWrites).
+				ACATA::SetWritesFile(Path::Combine(Path::GetDirectory(ACSRAM::filepath), "hdd-writes.bin"));
 				// JVS device mode: an explicit jvsmode= in the .acgame overrides (force/legacy); otherwise it is
 				// derived from the gameid alone (ACJV::ResolveModeFromGameId), so a .acgame needs only its gameid.
 				std::string jvsmode = INI.GetStringValue("data", "jvsmode", "");

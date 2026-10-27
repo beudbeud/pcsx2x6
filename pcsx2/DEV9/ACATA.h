@@ -102,6 +102,9 @@ namespace ACATA
     }
     void SetEnv(std::string ata_img_path, std::string ata_img_filename, std::string Media);
     void SetImgPath(const char* S);
+    // Where a CHD hard drive's writes are kept, beside the game's SRAM (ChdImage::OpenWrites).
+    extern std::string writespath;
+    void SetWritesFile(std::string path);
     // The drive as a freshly started emulator has it: every register and transfer zero, at a game's
     // start and at every reset of it.
     void Reset();
