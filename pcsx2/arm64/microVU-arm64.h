@@ -103,7 +103,8 @@
 //  19 — mVU: fold the clone-write copy into the operand clamp (ARMSX2 ec48b37975)
 //  20 — mVU: hold the clamp bounds in registers (ARMSX2 b5922d1beb)
 //  21 — mVU: ILW's lane offset is added at the address's own width (ARMSX2 fe5fa851cd)
-static constexpr u32 kMvuCompilerAbiVersion = 21;
+//  22 — VU: LQD and SQD step the address off a vi00 base too (ARMSX2 b83409ff56)
+static constexpr u32 kMvuCompilerAbiVersion = 22;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
