@@ -1122,12 +1122,44 @@ void Patch::ApplyBootPatches()
 	ApplyPatches(s_active_patches, PPT_ON_LOAD_OR_WHEN_ENABLED, ee, iop);
 }
 
+// The vsync patches of one CPU only: the IOP's have to run where IOP memory is owned, which with the IOP
+// thread on is not the EE thread (IopBridge::ApplyVsyncPatches).
+static void ApplyVsyncPatchesFor(Patch::patch_cpu_type cpu)
+{
+	Patch::EEMemoryInterface ee;
+	Patch::IOPMemoryInterface iop;
+	Patch::ExtendedState state;
+	for (const Patch::patch_place_type place : {Patch::PPT_CONTINUOUSLY, Patch::PPT_COMBINED_0_1})
+	{
+		state = {};
+		for (const Patch::PatchCommand* patch : s_active_patches)
+		{
+			if (!patch)
+			{
+				state = {};
+				continue;
+			}
+			if (patch->placetopatch != place || patch->cpu != cpu)
+				continue;
+			Patch::ApplyPatch(patch, ee, iop, state);
+		}
+	}
+}
+
 void Patch::ApplyVsyncPatches()
 {
-	EEMemoryInterface ee;
-	IOPMemoryInterface iop;
-	ApplyPatches(s_active_patches, PPT_CONTINUOUSLY, ee, iop);
-	ApplyPatches(s_active_patches, PPT_COMBINED_0_1, ee, iop);
+	ApplyVsyncPatchesEE();
+	IopBridge::ApplyVsyncPatches();
+}
+
+void Patch::ApplyVsyncPatchesEE()
+{
+	ApplyVsyncPatchesFor(CPU_EE);
+}
+
+void Patch::ApplyVsyncPatchesIOP()
+{
+	ApplyVsyncPatchesFor(CPU_IOP);
 }
 
 void Patch::ApplyPatches(

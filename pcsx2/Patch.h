@@ -176,6 +176,10 @@ namespace Patch
 
 	/// Apply all loaded patches that should be applied during vsync.
 	extern void ApplyVsyncPatches();
+	/// The two halves of ApplyVsyncPatches. The IOP half is a separate call because it has to run
+	/// where IOP memory is owned (IopBridge::ApplyVsyncPatches).
+	extern void ApplyVsyncPatchesEE();
+	extern void ApplyVsyncPatchesIOP();
 
 	/// Apply the patches from the provided list which have place values that
 	/// match the one specified.
