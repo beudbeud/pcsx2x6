@@ -214,7 +214,9 @@ namespace IopThread
 	{
 		// Design 3.10, modelled on MTVU.cpp and MTGS.cpp.
 		Threading::SetNameOfCurrentThread(m_params.name);
+#if defined(__ANDROID__)
 		PerformanceMetrics::AdpfRegisterCallingThread();
+#endif
 		PageFaultHandler::InstallSecondaryThread();
 		FPControlRegister::SetCurrent(m_params.fpcr);
 

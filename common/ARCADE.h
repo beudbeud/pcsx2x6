@@ -30,3 +30,9 @@ struct ArcadeBootParams {
 	std::string sram_path;
 	ACMEDIATYPE MediaType;
 };
+
+namespace Arcade
+{
+	/// ARMSX2 gates its arcade board on a session flag; here the whole emulator is an arcade board.
+	static inline bool IsActive() { return true; }
+} // namespace Arcade
