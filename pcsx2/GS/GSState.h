@@ -570,7 +570,7 @@ public:
 				break;
 			}
 			// Ring full: sleep until the back has retired a batch.
-			m_chan->space.Wait(GSBackQueue::Channel::kRingRefill, [this]() {
+			m_chan->space.Wait([this]() {
 				return GSBackQueue::RecordRing::Capacity() - m_chan->ring.Size() >= GSBackQueue::Channel::kRingRefill;
 			});
 		}

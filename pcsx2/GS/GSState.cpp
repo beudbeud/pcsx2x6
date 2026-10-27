@@ -21,6 +21,10 @@
 #include <bit>
 #include <thread>
 
+#if defined(__linux__)
+#include <sched.h>
+#include <sys/prctl.h>
+#endif
 
 static __fi bool IsAutoFlushEnabled()
 {
@@ -536,7 +540,7 @@ GSBackQueue::DrawNode* GSState::AcquireDrawNode()
 		if (m_chan->draw_arena.size() < GSBackQueue::Channel::kMaxDrawNodes)
 			break;
 
-		m_chan->space.Wait(GSBackQueue::Channel::kDrawRefill, [this]() {
+		m_chan->space.Wait([this]() {
 			return m_chan->draw_free.Size() >= GSBackQueue::Channel::kDrawRefill;
 		});
 	}
@@ -589,7 +593,7 @@ GSBackQueue::PayloadNode* GSState::AcquirePayloadNode()
 		if (m_chan->payload_arena.size() < GSBackQueue::Channel::kMaxPayloadNodes)
 			break;
 
-		m_chan->space.Wait(GSBackQueue::Channel::kPayloadRefill, [this]() {
+		m_chan->space.Wait([this]() {
 			return m_chan->payload_free.Size() >= GSBackQueue::Channel::kPayloadRefill;
 		});
 	}
@@ -639,6 +643,13 @@ void GSState::StartBackThread()
 	// Claim the empty-wait for this thread (the MTGS thread — every drain site,
 	// and the lockstep tail of PushRecord, run on it). See Channel::drain_thread.
 	m_chan->drain_thread = std::this_thread::get_id();
+#if defined(__linux__)
+	// This thread is the producer, and its waits for ring or pool space are
+	// timed in tens of microseconds (GSBackQueue::SpaceWait). The default 50us
+	// timer slack would stretch every one of them past the point where the back
+	// thread has to wake it with a post, which is the cost the timeout avoids.
+	prctl(PR_SET_TIMERSLACK, 1000UL, 0UL, 0UL, 0UL);
+#endif
 	m_back_thread = std::thread(&GSState::BackThreadLoop, this);
 	// The drain policy is the PRODUCER's (the front object under the split
 	// runs pipelined while this back object's own flag stays lockstep), so
@@ -702,7 +713,7 @@ void GSState::BackThreadLoop()
 		{
 			ExecRecordSlot(*slot);
 			m_chan->ring.Pop();
-			m_chan->space.NotifyRetired();
+			m_chan->space.NotifyRetired([this]() { return m_chan->ring.Size(); });
 		}
 		m_chan->space.NotifyIdle();
 	}
