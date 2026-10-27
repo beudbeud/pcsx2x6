@@ -14,6 +14,8 @@
 #include "DEV9/ACCORE.h"
 #include "DEV9/ACUART.h"
 #include "IopHw.h"
+#include "IopThread/SharedWord.h"
+#include "IopThread/OwnerAsserts.h"
 
 uptr *psxMemWLUT = nullptr;
 const uptr *psxMemRLUT = nullptr;
@@ -384,18 +386,21 @@ bool IOPMemoryInterface::ReadBytes(u32 address, void* dest, u32 size)
 
 bool IOPMemoryInterface::Write8(u32 address, u8 value)
 {
+	IOP_SIDE_ASSERT();
 	iopMemWrite8(address, value);
 	return true;
 }
 
 bool IOPMemoryInterface::Write16(u32 address, u16 value)
 {
+	IOP_SIDE_ASSERT();
 	iopMemWrite16(address, value);
 	return true;
 }
 
 bool IOPMemoryInterface::Write32(u32 address, u32 value)
 {
+	IOP_SIDE_ASSERT();
 	iopMemWrite32(address, value);
 	return true;
 }
@@ -412,6 +417,7 @@ bool IOPMemoryInterface::Write128(u32 address, u128 value)
 
 bool IOPMemoryInterface::WriteBytes(u32 address, void* src, u32 size)
 {
+	IOP_SIDE_ASSERT();
 	return iopMemSafeWriteBytes(address, src, size);
 }
 

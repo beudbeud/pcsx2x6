@@ -14,6 +14,7 @@
 #include "IopDma.h"
 #include "SIO/Sio2.h"
 #include "IopThread/EeBridge.h"
+#include "IopThread/OwnerAsserts.h"
 #include "CDVD/Ps1CD.h"
 #include "CDVD/CDVD.h"
 
@@ -129,6 +130,8 @@ __fi int psxRemainingCycles(IopEventId n)
 
 __fi void PSX_INT( IopEventId n, s32 ecycle )
 {
+	IOP_SIDE_ASSERT();
+
 	// 19 is CDVD read int, it's supposed to be high.
 	//if (ecycle > 8192 && n != 19)
 	//	DevCon.Warning( "IOP cycles high: %d, n %d", ecycle, n );

@@ -8,6 +8,7 @@
 #include "Sif.h"
 #include "IopHw.h"
 #include "IopThread/IopBridge.h"
+#include "IopThread/OwnerAsserts.h"
 #include "IopThread/SharedWord.h"
 
 _sif sif1;
@@ -259,6 +260,41 @@ static __fi void Sif1End()
 	SharedWord::FetchAnd(psHu32(SBUS_F240), ~(0x40u | 0x4000u));
 
 	DMA_LOG("SIF1 DMA End");
+}
+
+// One pass of the EE side of the pump: if the EE side is busy, not held by the DMAC's stall control,
+// and can move, one step of its transfer. Returns whether the step ran. The step itself can set the
+// stall flag, which holds the EE side for the rest of this call and the calls after it.
+static __fi bool Sif1EeStep()
+{
+	EE_SIDE_ASSERT();
+
+	if (sif1.ee.busy && !sif1_dma_stall)
+	{
+		if(sif1.fifo.sif_free() > 0 || (sif1.ee.end && sif1ch.qwc == 0))
+		{
+			HandleEETransfer();
+			return true;
+		}
+	}
+	return false;
+}
+
+// One pass of the IOP side of the pump: if the IOP side is busy and can move, one step of its
+// transfer. Returns whether the step ran.
+static __fi bool Sif1IopStep()
+{
+	IOP_SIDE_ASSERT();
+
+	if (sif1.iop.busy)
+	{
+		if(sif1.fifo.size >= 4 || (sif1.iop.end && sif1.iop.counter == 0))
+		{
+			HandleIOPTransfer();
+			return true;
+		}
+	}
+	return false;
 }
 
 // Transfer EE to IOP, putting data in the fifo as an intermediate step.

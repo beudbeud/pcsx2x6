@@ -8,6 +8,7 @@
 #include "Sif.h"
 #include "IopHw.h"
 #include "IopThread/IopBridge.h"
+#include "IopThread/OwnerAsserts.h"
 #include "IopThread/SharedWord.h"
 
 _sif sif0;
@@ -289,6 +290,49 @@ static __fi void Sif0End()
 	SharedWord::FetchAnd(psHu32(SBUS_F240), ~(0x20u | 0x2000u));
 
 	DMA_LOG("SIF0 DMA End");
+}
+
+// One pass of the IOP side of the pump: first the junk words that fill out the quadword the last
+// packet ended in (written whenever the IOP has nothing left of that packet and the FIFO has room, busy
+// or not), then, if the IOP side is busy and can move, one step of its transfer. Returns whether the
+// transfer step ran; the junk write does not count.
+static __fi bool Sif0IopStep()
+{
+	IOP_SIDE_ASSERT();
+
+	if (sif0.iop.counter == 0 && sif0.iop.writeJunk && sif0.fifo.sif_free() >= sif0.iop.writeJunk)
+	{
+		SIF_LOG("Writing Junk %d", sif0.iop.writeJunk);
+		sif0.fifo.writeJunk(sif0.iop.writeJunk);
+		sif0.iop.writeJunk = 0;
+	}
+
+	if (sif0.iop.busy)
+	{
+		if(sif0.fifo.sif_free() > 0 || (sif0.iop.end && sif0.iop.counter == 0))
+		{
+			HandleIOPTransfer();
+			return true;
+		}
+	}
+	return false;
+}
+
+// One pass of the EE side of the pump: if the EE side is busy and can move, one step of its transfer.
+// Returns whether the step ran.
+static __fi bool Sif0EeStep()
+{
+	EE_SIDE_ASSERT();
+
+	if (sif0.ee.busy)
+	{
+		if(sif0.fifo.size >= 4 || (sif0.ee.end && sif0ch.qwc == 0))
+		{
+			HandleEETransfer();
+			return true;
+		}
+	}
+	return false;
 }
 
 // Transfer IOP to EE, putting data in the fifo as an intermediate step.
