@@ -129,7 +129,8 @@
 //  45 — mVU: single-lane and Q multiplies read their operand lane by element (ARMSX2 c7e7ec99a2)
 //  46 — mVU: the OP ops permute their multiplicands from the cached registers (ARMSX2 748d8d9e0f)
 //  47 — mVU: a single-lane op clamps its scalar destination full width (ARMSX2 3d28f68aea)
-static constexpr u32 kMvuCompilerAbiVersion = 47;
+//  48 — mVU: CLIP reads its operands where they are cached (ARMSX2 b637c589f4)
+static constexpr u32 kMvuCompilerAbiVersion = 48;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
