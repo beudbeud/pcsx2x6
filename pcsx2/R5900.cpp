@@ -22,6 +22,7 @@
 #include "Patch.h"
 #include "GameDatabase.h"
 #include "GSDumpReplayer.h"
+#include "IopThread/IopThreadMode.h"
 
 #include "DebugTools/Breakpoints.h"
 #include "DebugTools/MIPSAnalyst.h"
@@ -43,7 +44,7 @@ cachedTlbs_t cachedTlbs;
 
 R5900cpu *Cpu = NULL;
 
-static constexpr uint eeWaitCycles = 3072;
+static constexpr uint eeWaitCycles = IopThread::kEeWaitCycles;
 
 bool eeEventTestIsActive = false;
 
