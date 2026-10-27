@@ -107,7 +107,8 @@
 //  23 — VU: ILW's dest field names one lane through a two-bit code (ARMSX2 30af63c447)
 //  24 — mVU: raise the E-bit interrupt in front of the exit path (ARMSX2 f6f8e0f021)
 //  25 — mVU: the options sentinel records every setting the emitters read (ARMSX2 ebee76977d)
-static constexpr u32 kMvuCompilerAbiVersion = 25;
+//  26 — mVU: CLIP folds its six comparison lanes with one UZP1 and an ADDV (ARMSX2 bce6f12ede)
+static constexpr u32 kMvuCompilerAbiVersion = 26;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
