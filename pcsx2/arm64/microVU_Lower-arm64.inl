@@ -1358,7 +1358,8 @@ mVUop(mVU_ILW)
 	pass2
 	{
 		// Compute address: (VI[Is] + Imm11) wrapped, then byte offset
-		if (!mVUoptimizeConstantAddr(mVU, _Is_, _Imm11_, offsetSS, gprT1q))
+		mVUmemRef addr;
+		if (!mVUoptimizeConstantAddr(mVU, _Is_, _Imm11_, offsetSS, gprT1q, kDispReachH, addr))
 		{
 			mVU.regAlloc->moveVIToGPR(gprT1, _Is_);
 			if (!EmuConfig.Gamefixes.IbitHack)
@@ -1383,20 +1384,13 @@ mVUop(mVU_ILW)
 			}
 			mVUaddrFix(mVU, gprT1);
 
-			// Add lane offset for the selected component, at the width
-			// mVUaddrFix answered in: on VU0 an index with bit 0x400 set is
-			// not an address in VU0's memory but a 64-bit offset from it to
-			// VU1's register file, and a 32-bit add keeps only the low half.
-			armAsm->Add(gprT1q, gprT1q, offsetSS);
-
-			// Add VU memory base
-			armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-			armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+			addr = mVUmemAtIndex(mVU, gprT1q);
+			addr.disp += offsetSS;
 		}
 
 		// Load 16-bit value from memory
 		const a64::Register& regT = mVU.regAlloc->allocGPR(-1, _It_, mVUlow.backupVI);
-		armAsm->Ldrh(regT.W(), a64::MemOperand(gprT1q));
+		armAsm->Ldrh(regT.W(), a64::MemOperand(addr.base, addr.disp));
 		mVU.regAlloc->clearNeeded(regT);
 		mVU.profiler.EmitOp(opILW);
 	}
@@ -1425,13 +1419,10 @@ mVUop(mVU_ILWR)
 			armAsm->Mov(gprT1.W(), 0);
 		}
 
-		// 64-bit, for the reason ILW gives above.
-		armAsm->Add(gprT1q, gprT1q, offsetSS);
-		armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-		armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+		const mVUmemRef addr = mVUmemAtIndex(mVU, gprT1q);
 
 		const a64::Register& regT = mVU.regAlloc->allocGPR(-1, _It_, mVUlow.backupVI);
-		armAsm->Ldrh(regT.W(), a64::MemOperand(gprT1q));
+		armAsm->Ldrh(regT.W(), a64::MemOperand(addr.base, addr.disp + offsetSS));
 		mVU.regAlloc->clearNeeded(regT);
 		mVU.profiler.EmitOp(opILWR);
 	}
@@ -1453,7 +1444,8 @@ mVUop(mVU_ISW)
 	pass2
 	{
 		// Compute address
-		if (!mVUoptimizeConstantAddr(mVU, _Is_, _Imm11_, 0, gprT1q))
+		mVUmemRef addr;
+		if (!mVUoptimizeConstantAddr(mVU, _Is_, _Imm11_, 0, gprT1q, kDispReachW - 12, addr))
 		{
 			mVU.regAlloc->moveVIToGPR(gprT1, _Is_);
 			if (!EmuConfig.Gamefixes.IbitHack)
@@ -1477,16 +1469,15 @@ mVUop(mVU_ISW)
 			}
 			mVUaddrFix(mVU, gprT1);
 
-			armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-			armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+			addr = mVUmemAtIndex(mVU, gprT1q);
 		}
 
 		// Load VI[It] value (zero-extended to 32-bit) and store to selected lanes
 		const a64::Register& regT = mVU.regAlloc->allocGPR(_It_, -1, false, true);
-		if (_X) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 0));
-		if (_Y) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 4));
-		if (_Z) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 8));
-		if (_W) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 12));
+		if (_X) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp));
+		if (_Y) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp + 4));
+		if (_Z) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp + 8));
+		if (_W) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp + 12));
 		mVU.regAlloc->clearNeeded(regT);
 		mVU.profiler.EmitOp(opISW);
 	}
@@ -1513,14 +1504,13 @@ mVUop(mVU_ISWR)
 			armAsm->Mov(gprT1.W(), 0);
 		}
 
-		armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-		armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+		const mVUmemRef addr = mVUmemAtIndex(mVU, gprT1q);
 
 		const a64::Register& regT = mVU.regAlloc->allocGPR(_It_, -1, false, true);
-		if (_X) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 0));
-		if (_Y) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 4));
-		if (_Z) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 8));
-		if (_W) armAsm->Str(regT.W(), a64::MemOperand(gprT1q, 12));
+		if (_X) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp));
+		if (_Y) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp + 4));
+		if (_Z) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp + 8));
+		if (_W) armAsm->Str(regT.W(), a64::MemOperand(addr.base, addr.disp + 12));
 		mVU.regAlloc->clearNeeded(regT);
 		mVU.profiler.EmitOp(opISWR);
 	}
@@ -1537,7 +1527,8 @@ mVUop(mVU_LQ)
 	pass2
 	{
 		// Compute address: (VI[Is] + Imm11) wrapped
-		if (!mVUoptimizeConstantAddr(mVU, _Is_, _Imm11_, 0, gprT1q))
+		mVUmemRef addr;
+		if (!mVUoptimizeConstantAddr(mVU, _Is_, _Imm11_, 0, gprT1q, kDispReachW - 12, addr))
 		{
 			mVU.regAlloc->moveVIToGPR(gprT1, _Is_);
 			if (!EmuConfig.Gamefixes.IbitHack)
@@ -1560,12 +1551,11 @@ mVUop(mVU_LQ)
 				armAsm->Add(gprT1.W(), gprT1.W(), gprT2.W());
 			}
 			mVUaddrFix(mVU, gprT1);
-			armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-			armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+			addr = mVUmemAtIndex(mVU, gprT1q);
 		}
 
 		const a64::VRegister& Ft = mVU.regAlloc->allocReg(-1, _Ft_, _X_Y_Z_W);
-		mVUloadMem(Ft, gprT1q, _X_Y_Z_W);
+		mVUloadMem(Ft, addr.base, addr.disp, _X_Y_Z_W);
 		mVU.regAlloc->clearNeeded(Ft);
 		mVU.profiler.EmitOp(opLQ);
 	}
@@ -1587,13 +1577,12 @@ mVUop(mVU_LQD)
 		mVU.regAlloc->clearNeeded(regS);
 		mVUaddrFix(mVU, gprT1);
 
-		armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-		armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+		const mVUmemRef addr = mVUmemAtIndex(mVU, gprT1q);
 
 		if (!mVUlow.noWriteVF)
 		{
 			const a64::VRegister& Ft = mVU.regAlloc->allocReg(-1, _Ft_, _X_Y_Z_W);
-			mVUloadMem(Ft, gprT1q, _X_Y_Z_W);
+			mVUloadMem(Ft, addr.base, addr.disp, _X_Y_Z_W);
 			mVU.regAlloc->clearNeeded(Ft);
 		}
 		mVU.profiler.EmitOp(opLQD);
@@ -1620,13 +1609,12 @@ mVUop(mVU_LQI)
 			armAsm->Mov(gprT1.W(), 0);
 		}
 
-		armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-		armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+		const mVUmemRef addr = mVUmemAtIndex(mVU, gprT1q);
 
 		if (!mVUlow.noWriteVF)
 		{
 			const a64::VRegister& Ft = mVU.regAlloc->allocReg(-1, _Ft_, _X_Y_Z_W);
-			mVUloadMem(Ft, gprT1q, _X_Y_Z_W);
+			mVUloadMem(Ft, addr.base, addr.disp, _X_Y_Z_W);
 			mVU.regAlloc->clearNeeded(Ft);
 		}
 		mVU.profiler.EmitOp(opLQI);
@@ -1644,7 +1632,8 @@ mVUop(mVU_SQ)
 	pass2
 	{
 		// Compute address from VI[It] + Imm11
-		if (!mVUoptimizeConstantAddr(mVU, _It_, _Imm11_, 0, gprT1q))
+		mVUmemRef addr;
+		if (!mVUoptimizeConstantAddr(mVU, _It_, _Imm11_, 0, gprT1q, kDispReachQ, addr))
 		{
 			mVU.regAlloc->moveVIToGPR(gprT1, _It_);
 			if (!EmuConfig.Gamefixes.IbitHack)
@@ -1667,21 +1656,20 @@ mVUop(mVU_SQ)
 				armAsm->Add(gprT1.W(), gprT1.W(), gprT2.W());
 			}
 			mVUaddrFix(mVU, gprT1);
-			armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-			armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+			addr = mVUmemAtIndex(mVU, gprT1q);
 		}
 
 		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, -1, _X_Y_Z_W);
 		if (_X_Y_Z_W == 0xf)
 		{
-			armAsm->Str(Fs, a64::MemOperand(gprT1q));
+			armAsm->Str(Fs, a64::MemOperand(addr.base, addr.disp));
 		}
 		else
 		{
 			// Partial store: load existing, merge, store
-			armAsm->Ldr(RQSCRATCH, a64::MemOperand(gprT1q));
+			armAsm->Ldr(RQSCRATCH, a64::MemOperand(addr.base, addr.disp));
 			mVUmergeRegs(RQSCRATCH, Fs, _X_Y_Z_W, false);
-			armAsm->Str(RQSCRATCH, a64::MemOperand(gprT1q));
+			armAsm->Str(RQSCRATCH, a64::MemOperand(addr.base, addr.disp));
 		}
 		mVU.regAlloc->clearNeeded(Fs);
 		mVU.profiler.EmitOp(opSQ);
@@ -1700,19 +1688,18 @@ mVUop(mVU_SQD)
 		mVU.regAlloc->clearNeeded(regT);
 		mVUaddrFix(mVU, gprT1);
 
-		armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-		armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+		const mVUmemRef addr = mVUmemAtIndex(mVU, gprT1q);
 
 		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, -1, _X_Y_Z_W);
 		if (_X_Y_Z_W == 0xf)
 		{
-			armAsm->Str(Fs, a64::MemOperand(gprT1q));
+			armAsm->Str(Fs, a64::MemOperand(addr.base, addr.disp));
 		}
 		else
 		{
-			armAsm->Ldr(RQSCRATCH, a64::MemOperand(gprT1q));
+			armAsm->Ldr(RQSCRATCH, a64::MemOperand(addr.base, addr.disp));
 			mVUmergeRegs(RQSCRATCH, Fs, _X_Y_Z_W, false);
-			armAsm->Str(RQSCRATCH, a64::MemOperand(gprT1q));
+			armAsm->Str(RQSCRATCH, a64::MemOperand(addr.base, addr.disp));
 		}
 		mVU.regAlloc->clearNeeded(Fs);
 		mVU.profiler.EmitOp(opSQD);
@@ -1739,19 +1726,18 @@ mVUop(mVU_SQI)
 			armAsm->Mov(gprT1.W(), 0);
 		}
 
-		armAsm->Ldr(gprT2q, mVUstateMem(offsetof(VURegs, Mem)));
-		armAsm->Add(gprT1q, gprT2q, gprT1q.X());
+		const mVUmemRef addr = mVUmemAtIndex(mVU, gprT1q);
 
 		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, -1, _X_Y_Z_W);
 		if (_X_Y_Z_W == 0xf)
 		{
-			armAsm->Str(Fs, a64::MemOperand(gprT1q));
+			armAsm->Str(Fs, a64::MemOperand(addr.base, addr.disp));
 		}
 		else
 		{
-			armAsm->Ldr(RQSCRATCH, a64::MemOperand(gprT1q));
+			armAsm->Ldr(RQSCRATCH, a64::MemOperand(addr.base, addr.disp));
 			mVUmergeRegs(RQSCRATCH, Fs, _X_Y_Z_W, false);
-			armAsm->Str(RQSCRATCH, a64::MemOperand(gprT1q));
+			armAsm->Str(RQSCRATCH, a64::MemOperand(addr.base, addr.disp));
 		}
 		mVU.regAlloc->clearNeeded(Fs);
 		mVU.profiler.EmitOp(opSQI);
