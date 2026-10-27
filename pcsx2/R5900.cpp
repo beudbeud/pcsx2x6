@@ -432,10 +432,19 @@ void iopRunSliceOnIopThread()
 //
 // Off runs the slice here, on the EE's thread, exactly as before. Lockstep hands it to the IOP
 // thread and waits (design section 6.2); the EE's side of the books is settled first, and the twin
-// counter is counted here, so both match Off.
+// counter is counted here, so both match Off. Threaded runs nothing here: the IOP paces itself from
+// the watermark, and the EE only makes sure it is not more than L ahead (W1, design section 4).
 template <IopThreadMode M>
 static __fi void iopRunSliceForEE()
 {
+	if constexpr (M == IopThreadMode::Threaded)
+	{
+		// With no IOP thread (a mode switch or a shutdown in progress) the slice is run here, as Off does,
+		// from the books the thread's stop rewrote.
+		if (IopThread::EeLagWait(cpuRegs.cycle))
+			return;
+	}
+
 	// * It's important to run a iopEventTest before calling ExecuteBlock. This
 	//   is because the IOP does not always perform branch tests before returning
 	//   (during the prev branch) and also so it can act on the state the EE has
@@ -520,6 +529,25 @@ __fi void _cpuEventTest_Shared()
 	eeEventTestIsActive = true;
 	cpuRegs.nextEventCycle = cpuRegs.cycle + eeWaitCycles;
 	cpuRegs.lastEventCycle = cpuRegs.cycle;
+
+	// Android's in-game Exit/Reset can flip the VM to Stopping from another
+	// thread while the EE recompiler is in its generated-code event path. Once
+	// Stopping is visible, do not continue into IOP counters/VU sync; return
+	// immediately so the recompiler's outer recEventTest can fastjmp out of
+	// Cpu->Execute(). Without this, PSX-vsync/IOP work can keep running after
+	// the stop latch and the Java shutdown call times out.
+	const VMState vm_state = VMManager::GetState();
+	if (vm_state == VMState::Stopping || vm_state == VMState::Shutdown)
+	{
+		eeEventTestIsActive = false;
+		return;
+	}
+
+	// Threaded: publish where the EE has got and take what the IOP queued for it (the SBUS interrupt, a
+	// pause request), so that the interrupt checks below see it at once.
+	if constexpr (M == IopThreadMode::Threaded)
+		IopThread::EeEventTestBegin(cpuRegs.cycle);
+
 	// ---- INTC / DMAC (CPU-level Exceptions) -----------------
 	// Done first because exceptions raised during event tests need to be postponed a few
 	// cycles (fixes Grandia II [PAL], which does a spin loop on a vsync and expects to
@@ -601,7 +629,14 @@ __fi void _cpuEventTest_Shared()
 		CpuVU1->ExecuteBlock();
 
 	// ---- Schedule Next Event Test --------------
-	eeScheduleForIop();
+	// Threaded: the EE does not look at the IOP's events (C2), unless there is no IOP thread to do the work.
+	if constexpr (M == IopThreadMode::Threaded)
+	{
+		if (!IopThread::g_thread.IsRunning()) [[unlikely]]
+			eeScheduleForIop();
+	}
+	else
+		eeScheduleForIop();
 
 	// Apply vsync and other counter nextCycles
 	cpuSetNextEvent(nextStartCounter, nextDeltaCounter);
@@ -611,6 +646,7 @@ __fi void _cpuEventTest_Shared()
 
 template void _cpuEventTest_Shared<IopThreadMode::Off>();
 template void _cpuEventTest_Shared<IopThreadMode::Lockstep>();
+template void _cpuEventTest_Shared<IopThreadMode::Threaded>();
 
 CpuEventTestFn cpuEventTestFor(IopThreadMode mode)
 {
@@ -618,8 +654,9 @@ CpuEventTestFn cpuEventTestFor(IopThreadMode mode)
 	{
 		case IopThreadMode::Lockstep:
 			return &_cpuEventTest_Shared<IopThreadMode::Lockstep>;
+		case IopThreadMode::Threaded:
+			return &_cpuEventTest_Shared<IopThreadMode::Threaded>;
 		case IopThreadMode::Off:
-		case IopThreadMode::Threaded: // not built yet: Threaded resolves to Off
 		default:
 			return &_cpuEventTest_Shared<IopThreadMode::Off>;
 	}

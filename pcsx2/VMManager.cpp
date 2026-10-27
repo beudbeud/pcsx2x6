@@ -3984,6 +3984,19 @@ static u32 GetProcessorIdForProcessor(const cpuinfo_processor* proc)
 #endif
 }
 
+u32 VMManager::Internal::GetPerformanceCoreCount()
+{
+	// ponytail: every host we target (Pi 5) has identical cores, so all of them are performance
+	// cores. ARMSX2 ranks clusters by sysfs cpu_capacity for big.LITTLE phones; add that if one shows up.
+	EnsureCPUInfoInitialized();
+	return cpuinfo_get_processors_count();
+}
+
+std::string VMManager::Internal::GetThreadPlacementDebug()
+{
+	return {};
+}
+
 static void InitializeProcessorList()
 {
 	if (!cpuinfo_initialize())
