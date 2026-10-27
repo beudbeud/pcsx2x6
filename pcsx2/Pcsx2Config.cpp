@@ -465,6 +465,7 @@ Pcsx2Config::RecompilerOptions::RecompilerOptions()
 	EnableFastmem = true;
 	PauseOnTLBMiss = false;
 	EnableVUProgramCache = false; // default off; opt-in until the on-disk cache is validated on the target hardware
+	EnableVUAot = false; // off until measured on the Pi; ARMSX2 ships it on. It also turns the VU program cache on.
 	fpuGuardedAddSub = true; // PS2-accurate add/sub guard-bit emulation; opt-out for perf on titles verified not to need it.
 
 	// vu and fpu clamping default to standard overflow.
@@ -506,6 +507,8 @@ void Pcsx2Config::RecompilerOptions::ApplySanityCheck()
 		vuIsOk = vuIsOk && vu0Overflow;
 	if (vu0SignOverflow)
 		vuIsOk = vuIsOk && vu0ExtraOverflow;
+	if (vu0ExactMode)
+		vuIsOk = vuIsOk && vu0SignOverflow;
 
 	if (!vuIsOk)
 	{
@@ -514,6 +517,7 @@ void Pcsx2Config::RecompilerOptions::ApplySanityCheck()
 		vu0ExtraOverflow = RecompilerOptions().vu0ExtraOverflow;
 		vu0SignOverflow = RecompilerOptions().vu0SignOverflow;
 		vu0Underflow = RecompilerOptions().vu0Underflow;
+		vu0ExactMode = RecompilerOptions().vu0ExactMode;
 	}
 
 	vuIsOk = true;
@@ -522,6 +526,8 @@ void Pcsx2Config::RecompilerOptions::ApplySanityCheck()
 		vuIsOk = vuIsOk && vu1Overflow;
 	if (vu1SignOverflow)
 		vuIsOk = vuIsOk && vu1ExtraOverflow;
+	if (vu1ExactMode)
+		vuIsOk = vuIsOk && vu1SignOverflow;
 
 	if (!vuIsOk)
 	{
@@ -530,6 +536,7 @@ void Pcsx2Config::RecompilerOptions::ApplySanityCheck()
 		vu1ExtraOverflow = RecompilerOptions().vu1ExtraOverflow;
 		vu1SignOverflow = RecompilerOptions().vu1SignOverflow;
 		vu1Underflow = RecompilerOptions().vu1Underflow;
+		vu1ExactMode = RecompilerOptions().vu1ExactMode;
 	}
 }
 
@@ -549,16 +556,19 @@ void Pcsx2Config::RecompilerOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(vu0ExtraOverflow);
 	SettingsWrapBitBool(vu0SignOverflow);
 	SettingsWrapBitBool(vu0Underflow);
+	SettingsWrapBitBool(vu0ExactMode);
 	SettingsWrapBitBool(vu1Overflow);
 	SettingsWrapBitBool(vu1ExtraOverflow);
 	SettingsWrapBitBool(vu1SignOverflow);
 	SettingsWrapBitBool(vu1Underflow);
+	SettingsWrapBitBool(vu1ExactMode);
 
 	SettingsWrapBitBool(fpuOverflow);
 	SettingsWrapBitBool(fpuExtraOverflow);
 	SettingsWrapBitBool(fpuFullMode);
 	SettingsWrapBitBool(fpuGuardedAddSub);
 	SettingsWrapBitBool(EnableVUProgramCache);
+	SettingsWrapBitBool(EnableVUAot);
 }
 
 u32 Pcsx2Config::RecompilerOptions::GetEEClampMode() const

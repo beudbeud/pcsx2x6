@@ -658,13 +658,15 @@ struct Pcsx2Config
 			vu0Overflow : 1,
 			vu0ExtraOverflow : 1,
 			vu0SignOverflow : 1,
-			vu0Underflow : 1;
+			vu0Underflow : 1,
+			vu0ExactMode : 1; // GameDB vuClampMode 4: mode 3 plus the VU's own arithmetic and status flags (ARMSX2)
 
 		bool
 			vu1Overflow : 1,
 			vu1ExtraOverflow : 1,
 			vu1SignOverflow : 1,
-			vu1Underflow : 1;
+			vu1Underflow : 1,
+			vu1ExactMode : 1; // GameDB vuClampMode 4: mode 3 plus the VU's own arithmetic and status flags (ARMSX2)
 
 		bool
 			fpuOverflow : 1,
@@ -676,8 +678,13 @@ struct Pcsx2Config
 			// one op instead of the guard sequence). Independent of the clamp tiers:
 			// Full mode runs the DOUBLE path, which guards unconditionally regardless.
 			fpuGuardedAddSub : 1,
-			// Persisted microVU program cache (arm64 rec).
-			EnableVUProgramCache : 1;
+			// Persisted microVU program cache (arm64 rec). Read through UseVUProgramCache(), not
+			// directly: the cache is also on whenever EnableVUAot is.
+			EnableVUProgramCache : 1,
+			// vu-aot, the whole-program VU1 compiler (pcsx2/arm64/vuaot/): programs that run often
+			// enough are recompiled above microVU, which stays the fallback at every block boundary.
+			// arm64-only. It turns the VU program cache on (UseVUProgramCache()).
+			EnableVUAot : 1;
 
 		bool
 			EnableEECache : 1;
@@ -686,6 +693,10 @@ struct Pcsx2Config
 		bool
 			PauseOnTLBMiss : 1;
 		BITFIELD_END
+
+		// Whether the on-disk VU program cache runs: EnableVUProgramCache, or EnableVUAot (ARMSX2 binds
+		// vu-aot to the cache, there is no separate switch). Every reader of the cache setting goes through this.
+		bool UseVUProgramCache() const { return EnableVUProgramCache || EnableVUAot; }
 
 		RecompilerOptions();
 		void ApplySanityCheck();
@@ -1589,6 +1600,7 @@ namespace EmuFolders
 #define CHECK_VU_OVERFLOW(vunum) (((vunum) == 0) ? EmuConfig.Cpu.Recompiler.vu0Overflow : EmuConfig.Cpu.Recompiler.vu1Overflow)
 #define CHECK_VU_EXTRA_OVERFLOW(vunum) (((vunum) == 0) ? EmuConfig.Cpu.Recompiler.vu0ExtraOverflow : EmuConfig.Cpu.Recompiler.vu1ExtraOverflow) // If enabled, Operands are clamped before being used in the VU recs
 #define CHECK_VU_SIGN_OVERFLOW(vunum) (((vunum) == 0) ? EmuConfig.Cpu.Recompiler.vu0SignOverflow : EmuConfig.Cpu.Recompiler.vu1SignOverflow)
+#define CHECK_VU_EXACT(vunum) (((vunum) == 0) ? EmuConfig.Cpu.Recompiler.vu0ExactMode : EmuConfig.Cpu.Recompiler.vu1ExactMode) // GameDB vu0/vu1ClampMode 4 (ARMSX2)
 #define CHECK_VU_UNDERFLOW(vunum) (((vunum) == 0) ? EmuConfig.Cpu.Recompiler.vu0Underflow : EmuConfig.Cpu.Recompiler.vu1Underflow)
 
 #define CHECK_FPU_OVERFLOW (EmuConfig.Cpu.Recompiler.fpuOverflow)

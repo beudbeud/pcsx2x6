@@ -1137,6 +1137,17 @@ set(pcsx2arm64Sources
 	arm64/Vif_UnpackNEON.cpp
 	arm64/RecStubs.cpp
 	arm64/microVU-arm64.cpp
+	arm64/FPU-divunit-arm64.cpp
+	arm64/vuaot/VuAotBackground.cpp
+	arm64/vuaot/VuAotDecode.cpp
+	arm64/vuaot/VuAotGraph.cpp
+	arm64/vuaot/VuAotIR.cpp
+	arm64/vuaot/VuAotLower.cpp
+	arm64/vuaot/VuAotMvuTrace.cpp
+	arm64/vuaot/VuAotPersist.cpp
+	arm64/vuaot/VuAotPipe.cpp
+	arm64/vuaot/VuAotTier.cpp
+	arm64/vuaot/VuAotRegion.cpp
 	x86/iR5900Analysis.cpp  # arch-neutral EE instruction-liveness analysis, shared with the x86 build
 	)
 

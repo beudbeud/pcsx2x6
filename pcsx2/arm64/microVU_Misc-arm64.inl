@@ -291,8 +291,9 @@ __fi void mVUrestoreRegs(microVU& mVU, bool fromMemory = false, bool onlyNeeded 
 	armAsm->Ldr(qmmPQ, mVUneonBackupMem(qmmPQ.GetCode()));
 	// A plain-AAPCS callee has been through qmmClampMax and qmmClampMin with
 	// the rest of the caller-saved NEON file. This is the only seam that
-	// needs them back: every other C call a block emits either ends it, or
-	// goes through the waitMTVU thunk, which spills q0-q28 itself.
+	// needs them back: a block's other C calls either end it, go through the
+	// waitMTVU thunk, which spills q0-q28 itself, or reach an EE FPU / EFU
+	// model stub, whose callee model_call_contract_tests holds below q8.
 	mVUemitClampConsts(mVU);
 }
 
@@ -306,11 +307,21 @@ static inline u32 branchAddr(const mV)
 	return ((((iPC + 2) + (_Imm11_ * 2)) & mVU.progMemMask) * 4);
 }
 
-static void mVUwaitMTVU()
+// What the waitMTVU thunk calls when VU0 (or COP2 macro mode) addresses VU1's register window.
+// `vi` is the VI-based address mVUaddrFix was fixing up (the thunk passes gprT1). Under MTVU the
+// access waits for the VU1 thread; whatever the threading, an access to the quadword that holds
+// VU1's STATUS register tells the vu-aot tier that something outside VU1 can see the sticky bits it
+// drops.
+static void mVUwaitMTVU(u32 vi)
 {
-	if (IsDevBuild)
-		DevCon.WriteLn("microVU0: Waiting on VU1 thread to access VU1 regs!");
-	vu1Thread.WaitVU();
+	if (THREAD_VU1)
+	{
+		if (IsDevBuild)
+			DevCon.WriteLn("microVU0: Waiting on VU1 thread to access VU1 regs!");
+		vu1Thread.WaitVU();
+	}
+	if ((vi & 0x3f) == VU0_WINDOW_VU1_STATUS_QWORD)
+		vuAotNoteOutsideStatusRead();
 }
 
 static void mVUTBit()
@@ -344,6 +355,7 @@ __fi void mVUaddrFix(mV, const a64::Register& gprReg)
 		armAsm->B(&notVU1Access, a64::eq);
 
 		// Accessing VU1 regs from VU0
+		pxAssert(gprReg.GetCode() == gprT1.GetCode()); // (the waitMTVU thunk reads the address from gprT1)
 		if (THREAD_VU1)
 		{
 			// COP2 macro mode emits this inline into an EE block where the
@@ -354,10 +366,24 @@ __fi void mVUaddrFix(mV, const a64::Register& gprReg)
 			// lazy-dirty no-op in write-through mode.
 			if (mVU.cop2)
 				armEmitEEClobberedPinFlushForCOP2();
-			// Need to wait for VU1 thread
+			// Need to wait for VU1 thread (and to tell the vu-aot tier if this is the STATUS quadword)
 			armEmitCall((void*)mVU.waitMTVU);
 			if (mVU.cop2)
 				armEmitEEClobberedPinReloadForCOP2();
+		}
+		else if (mVUvuAotVU0WindowHook())
+		{
+			// Nothing to wait for. The access to VU1's STATUS register (VI[16]: quadword 48 of the
+			// window) goes to the same thunk, which saves every register a C call can clobber, so
+			// no pin or cached value needs to be flushed around it. Any other quadword of the
+			// window costs the compare and the branch. Only while the vu-aot tier is wanted: it is
+			// the tripwire's hook, and with the setting off nothing is emitted here.
+			a64::Label notStatus;
+			armAsm->And(RWSCRATCH, gprReg.W(), 0x3f);
+			armAsm->Cmp(RWSCRATCH, VU0_WINDOW_VU1_STATUS_QWORD);
+			armAsm->B(&notStatus, a64::ne);
+			armEmitCall((void*)mVU.waitMTVU);
+			armAsm->Bind(&notStatus);
 		}
 		armAsm->And(gprReg.W(), gprReg.W(), 0x3f);
 		// Add offset in u128 units (x86 mVUaddrFix uses pointer arithmetic so

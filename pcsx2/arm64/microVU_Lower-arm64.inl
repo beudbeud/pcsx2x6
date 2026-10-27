@@ -16,6 +16,37 @@
 // DIV/SQRT/RSQRT
 //------------------------------------------------------------------
 
+/*	The div unit has no denormal encoding: an operand whose exponent field is
+	zero is a zero, and a quotient below 2^-126 is a signed zero (eeDivide,
+	FPU.cpp). FPCR.FZ does all of that in hardware, so the tests below read the
+	exponent field rather than comparing against 0.0 -- one Umov dearer, the
+	same answer either way -- and the value flush is emitted only when the
+	unit's own FPCR clears it. mVUsetupOptionsSentinel hashes all three FPCRs,
+	so a change to the setting compiles new programs.
+*/
+static constexpr u32 kEeExpMask = 0x7F800000;
+
+static bool mVUneedsSoftwareFlush(mV)
+{
+	return !(isVU0 ? EmuConfig.Cpu.VU0FPCR : EmuConfig.Cpu.VU1FPCR).GetDenormalsAreZero();
+}
+
+// Z set when the word in lane 0 of `reg` is a div-unit zero: exponent field
+// zero. Under a VU FPCR with FZ that is FCMP against 0.0, which flushes a
+// denormal operand to zero before comparing and leaves an exponent-255 word
+// unordered (Z clear), one instruction for the move and the test. Without
+// FZ a denormal compares nonzero, so the field itself is tested.
+static __fi void mVUemitDivZeroTest(mV, const a64::VRegister& reg, const a64::Register& scratch)
+{
+	if (!mVUneedsSoftwareFlush(mVU))
+	{
+		armAsm->Fcmp(a64::SRegister(reg.GetCode()), 0.0);
+		return;
+	}
+	armAsm->Umov(scratch.W(), reg.V4S(), 0);
+	armAsm->Tst(scratch.W(), kEeExpMask);
+}
+
 mVUop(mVU_DIV)
 {
 	pass1 { mVUanalyzeFDIV(mVU, _Fs_, _Fsf_, _Ft_, _Ftf_, 7); }
@@ -27,13 +58,25 @@ mVUop(mVU_DIV)
 		const a64::SRegister sFt(Ft.GetCode());
 		const a64::SRegister sFs(Fs.GetCode());
 
-		// Test if Ft is zero (NaN takes the not-zero branch — matches Fcmeq path).
-		armAsm->Fcmp(sFt, 0.0);
+		// vuClampMode 4 reads the divide unit's own arithmetic out of line
+		// instead of the host's; below it the flush fixups stand in for the
+		// part of the model a host divide does reproduce.
+		const bool exact = CHECK_VU_EXACT(mVU.index);
+		const bool flush = !exact && mVUneedsSoftwareFlush(mVU);
+		// 0x7FFFFFFF is a NaN to a host Fmul. mVUclamp3 bounds every FMAC
+		// operand from vuClampMode 2, but sign-preservingly only from 3, where
+		// mVUclamp2's integer min replaces mVUclamp1's Fminnm -- so that is
+		// where the console word becomes a number the FMAC can read.
+		const bool consoleQ = CHECK_VU_SIGN_OVERFLOW(mVU.index);
+
+		// Test if Ft is zero (a NaN's exponent is 255, so it takes the not-zero
+		// branch).
+		mVUemitDivZeroTest(mVU, Ft, gprT1);
 		a64::Label ftNotZero, divDone;
 		armAsm->B(&ftNotZero, a64::ne); // Skip if Ft != 0
 
 		// Ft is zero -- check Fs
-		armAsm->Fcmp(sFs, 0.0);
+		mVUemitDivZeroTest(mVU, Fs, gprT2);
 		a64::Label fsNotZero;
 		armAsm->B(&fsNotZero, a64::ne); // Skip if Fs != 0
 
@@ -49,11 +92,18 @@ mVUop(mVU_DIV)
 		mVUstrField(mVU, gprT1, &mVU.divFlag);
 
 		armAsm->Bind(&afterDivFlag);
-		// Result = +/- fmax: sign(Fs) XOR sign(Ft), magnitude = fmax
+		// Q = sign(Fs) xor sign(Ft), magnitude the ceiling the FMAC can read.
 		armAsm->Eor(Fs.V16B(), Fs.V16B(), Ft.V16B());
-		armAsm->Ldr(t1, mVUglobMem(&mVUglob.signbit[0]));
-		armAsm->And(Fs.V16B(), Fs.V16B(), t1.V16B());
-		armAsm->Ldr(t1, mVUglobMem(&mVUglob.maxvals[0]));
+		if (consoleQ)
+		{
+			armAsm->Mvni(t1.V4S(), 0x80, a64::LSL, 24);
+		}
+		else
+		{
+			armAsm->Ldr(t1, mVUglobMem(&mVUglob.signbit[0]));
+			armAsm->And(Fs.V16B(), Fs.V16B(), t1.V16B());
+			armAsm->Ldr(t1, mVUglobMem(&mVUglob.maxvals[0]));
+		}
 		armAsm->Orr(Fs.V16B(), Fs.V16B(), t1.V16B());
 		a64::Label skipNormalDiv;
 		armAsm->B(&skipNormalDiv);
@@ -62,8 +112,37 @@ mVUop(mVU_DIV)
 		// Normal division
 		armAsm->Mov(gprT1.W(), 0);
 		mVUstrField(mVU, gprT1, &mVU.divFlag);
-		armAsm->Fdiv(sFs, sFs, sFt);
-		mVUclamp1(mVU, Fs, t1, 8, true);
+		if (exact)
+		{
+			// No clamp follows the model: mVUclamp1 would read 0x7FFFFFFF as a
+			// NaN and hand back the binade-lower maxvals. Nor the flush -- a
+			// denormal dividend and an underflowing quotient already leave it a
+			// signed zero.
+			armAsm->Umov(RWARG1, Fs.V4S(), 0);
+			armAsm->Umov(RWARG2, Ft.V4S(), 0);
+			mVUemitModelCall(mVU, mVUModelStubDivide);
+			armAsm->Ins(Fs.V4S(), 0, RWARG1);
+		}
+		else
+		{
+			// A denormal dividend and a quotient below 2^-126 both leave a signed
+			// zero, which the host quotient already carries, so one word serves
+			// both selects. Neither implies the other.
+			if (flush)
+				armAsm->Umov(gprT2.W(), Fs.V4S(), 0); // dividend word, before Fdiv takes it
+			armAsm->Fdiv(sFs, sFs, sFt);
+			mVUclamp1(mVU, Fs, t1, 8, true);
+			if (flush)
+			{
+				armAsm->Umov(gprT1.W(), Fs.V4S(), 0);
+				armAsm->And(gprT3.W(), gprT1.W(), 0x80000000);
+				armAsm->Tst(gprT1.W(), kEeExpMask);
+				armAsm->Csel(gprT1.W(), gprT3.W(), gprT1.W(), a64::eq);
+				armAsm->Tst(gprT2.W(), kEeExpMask);
+				armAsm->Csel(gprT1.W(), gprT3.W(), gprT1.W(), a64::eq);
+				armAsm->Ins(Fs.V4S(), 0, gprT1.W());
+			}
+		}
 
 		armAsm->Bind(&skipNormalDiv);
 
@@ -107,16 +186,46 @@ mVUop(mVU_SQRT)
 		armAsm->And(Ft.V16B(), Ft.V16B(), RQSCRATCH.V16B());
 		armAsm->Bind(&notNeg);
 
-		// Clamp infinity. Fminnm (number-preserving) so positive-NaN inputs
-		// clamp to +maxfloat instead of propagating into Fsqrt — matches
-		// mVUclamp1's semantics (see microVU_Clamp-arm64.inl).
-		if (CHECK_VU_OVERFLOW(mVU.index))
-		{
-			armAsm->Ldr(RQSCRATCH, mVUglobMem(&mVUglob.maxvals[0]));
-			armAsm->Fminnm(sFt, sFt, a64::SRegister(RQSCRATCH.GetCode()));
-		}
+		// vuClampMode 4 reads the model instead of an Fsqrt, taking the whole VU
+		// range with it: the infinity clamp has nothing left to do, and
+		// eeSqrtBits maps a zero exponent field to a bare +0 itself.
+		const bool exact = CHECK_VU_EXACT(mVU.index);
 
-		armAsm->Fsqrt(sFt, sFt);
+		// The radicand's word, before Fsqrt takes it. Only the operand needs
+		// the test: the root of the smallest normal is 2^-63, so no in-range
+		// radicand can land the result in the denormal band.
+		const bool flush = !exact && mVUneedsSoftwareFlush(mVU);
+		if (flush)
+			armAsm->Umov(gprT2.W(), Ft.V4S(), 0);
+
+		if (exact)
+		{
+			armAsm->Umov(RWARG1, Ft.V4S(), 0);
+			mVUemitModelCall(mVU, mVUModelStubSqrtBits);
+			armAsm->Ins(Ft.V4S(), 0, RWARG1);
+		}
+		else
+		{
+			// Clamp infinity. Fminnm (number-preserving) so positive-NaN inputs
+			// clamp to +maxfloat instead of propagating into Fsqrt — matches
+			// mVUclamp1's semantics (see microVU_Clamp-arm64.inl).
+			if (CHECK_VU_OVERFLOW(mVU.index))
+			{
+				armAsm->Ldr(RQSCRATCH, mVUglobMem(&mVUglob.maxvals[0]));
+				armAsm->Fminnm(sFt, sFt, a64::SRegister(RQSCRATCH.GetCode()));
+			}
+
+			armAsm->Fsqrt(sFt, sFt);
+			if (flush)
+			{
+				// eeSqrtBits returns a bare +0 for a zero exponent field, dropping
+				// the operand's sign with it -- which the |Ft| above already did.
+				armAsm->Umov(gprT1.W(), Ft.V4S(), 0);
+				armAsm->Tst(gprT2.W(), kEeExpMask);
+				armAsm->Csel(gprT1.W(), a64::wzr, gprT1.W(), a64::eq);
+				armAsm->Ins(Ft.V4S(), 0, gprT1.W());
+			}
+		}
 		writeQreg(Ft, mVUinfo.writeQ);
 
 		if (mVU.cop2)
@@ -158,15 +267,25 @@ mVUop(mVU_RSQRT)
 		armAsm->And(Ft.V16B(), Ft.V16B(), RQSCRATCH.V16B());
 		armAsm->Bind(&notNeg);
 
-		armAsm->Fsqrt(sFt, sFt);
+		// The radicand's word, before Fsqrt takes it: the divisor test is on ft
+		// itself, as _vuRSQRT's is. eeSqrtBits maps a zero exponent field to +0,
+		// so a denormal radicand is a zero divisor where a host Fsqrt's is not.
+		const bool exact = CHECK_VU_EXACT(mVU.index);
+		const bool flush = !exact && mVUneedsSoftwareFlush(mVU);
+		const bool consoleQ = CHECK_VU_SIGN_OVERFLOW(mVU.index);
+		armAsm->Umov(gprT2.W(), Ft.V4S(), 0);
+		if (!exact)
+			armAsm->Fsqrt(sFt, sFt);
 
-		// Test if sqrt(Ft) is zero (NaN takes the not-zero branch — matches Fcmeq path).
-		armAsm->Fcmp(sFt, 0.0);
+		// A NaN's exponent is 255, so it takes the not-zero branch as the Fcmp
+		// this replaces did.
+		armAsm->Tst(gprT2.W(), kEeExpMask);
 		a64::Label sqrtNotZero, rsqrtDone;
 		armAsm->B(&sqrtNotZero, a64::ne);
 
 		// sqrt(Ft) is zero -- check Fs
-		armAsm->Fcmp(sFs, 0.0);
+		armAsm->Umov(gprT1.W(), Fs.V4S(), 0);
+		armAsm->Tst(gprT1.W(), kEeExpMask);
 		a64::Label fsNotZero2;
 		armAsm->B(&fsNotZero2, a64::ne);
 
@@ -183,16 +302,49 @@ mVUop(mVU_RSQRT)
 		mVUldrField(mVU, gprT1, &mVU.divFlag);
 		armAsm->Orr(gprT1.W(), gprT1.W(), gprT2.W());
 		mVUstrField(mVU, gprT1, &mVU.divFlag);
-		// Result = sign(Fs) | fmax
-		armAsm->Ldr(t1, mVUglobMem(&mVUglob.signbit[0]));
-		armAsm->And(Fs.V16B(), Fs.V16B(), t1.V16B());
-		armAsm->Ldr(t1, mVUglobMem(&mVUglob.maxvals[0]));
+		// Q = sign(Fs) | ceiling; mVU_DIV's zero path has the mode.
+		if (consoleQ)
+		{
+			armAsm->Mvni(t1.V4S(), 0x80, a64::LSL, 24);
+		}
+		else
+		{
+			armAsm->Ldr(t1, mVUglobMem(&mVUglob.signbit[0]));
+			armAsm->And(Fs.V16B(), Fs.V16B(), t1.V16B());
+			armAsm->Ldr(t1, mVUglobMem(&mVUglob.maxvals[0]));
+		}
 		armAsm->Orr(Fs.V16B(), Fs.V16B(), t1.V16B());
 		armAsm->B(&rsqrtDone);
 
 		armAsm->Bind(&sqrtNotZero);
-		armAsm->Fdiv(sFs, sFs, sFt);
-		mVUclamp1(mVU, Fs, t1, 8, true);
+		// As mVU_DIV, with the sign taken from the dividend alone: the divisor
+		// is a root, and the model's eeSqrtBits leaves it non-negative.
+		if (exact)
+		{
+			// One call rather than two: the root is an ordinary single with
+			// nowhere to live across a second, and RecipSqrt is the pair.
+			armAsm->Umov(RWARG1, Fs.V4S(), 0);
+			armAsm->Umov(RWARG2, Ft.V4S(), 0);
+			mVUemitModelCall(mVU, mVUModelStubRecipSqrt);
+			armAsm->Ins(Fs.V4S(), 0, RWARG1);
+		}
+		else
+		{
+			if (flush)
+				armAsm->Umov(gprT2.W(), Fs.V4S(), 0);
+			armAsm->Fdiv(sFs, sFs, sFt);
+			mVUclamp1(mVU, Fs, t1, 8, true);
+			if (flush)
+			{
+				armAsm->Umov(gprT1.W(), Fs.V4S(), 0);
+				armAsm->And(gprT3.W(), gprT1.W(), 0x80000000);
+				armAsm->Tst(gprT1.W(), kEeExpMask);
+				armAsm->Csel(gprT1.W(), gprT3.W(), gprT1.W(), a64::eq);
+				armAsm->Tst(gprT2.W(), kEeExpMask);
+				armAsm->Csel(gprT1.W(), gprT3.W(), gprT1.W(), a64::eq);
+				armAsm->Ins(Fs.V4S(), 0, gprT1.W());
+			}
+		}
 
 		armAsm->Bind(&rsqrtDone);
 		writeQreg(Fs, mVUinfo.writeQ);
@@ -272,6 +424,30 @@ static __fi void mVUwritePQresult(const a64::VRegister& src, bool writeP)
 	armAsm->Ins(qmmPQ.V4S(), targetLane, src.V4S(), 0);
 }
 
+/*	The EFU at vuClampMode 4: one call for the whole op (VuEfuModel.h). Besides
+	exactness it buys raw operand words -- no mVUclamp3 ahead of the arithmetic,
+	whose ceiling sits a binade below the range the EFU works in, and no absclip
+	ahead of the two square roots, which the model applies itself.
+
+	`lanes` names the VF lanes the op reads, in argument order; the scalar forms
+	pass {0}, allocReg's single-bit mask having already shuffled fsf's lane down
+	to it. */
+static __fi void mVUemitEfuModel(mV, int stub, int xyzw, std::initializer_list<int> lanes)
+{
+	const a64::Register arg[4] = {RWARG1, RWARG2, RWARG3, RWARG4};
+	pxAssert(lanes.size() <= std::size(arg));
+
+	const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, xyzw);
+	int i = 0;
+	for (int lane : lanes)
+		armAsm->Umov(arg[i++], Fs.V4S(), lane);
+
+	mVUemitModelCall(mVU, stub);
+	armAsm->Ins(Fs.V4S(), 0, RWARG1);
+	mVUwritePQresult(Fs, mVUinfo.writeP);
+	mVU.regAlloc->clearNeeded(Fs);
+}
+
 // sumXYZ: dst[0] = Fs.x*Fs.x + Fs.y*Fs.y + Fs.z*Fs.z. Trashes Fs.
 // Matches x86 DPPS 0x71 + MOVSS semantics. AArch64 NEON has no FADDV
 // across-vector reduction for floats, so fall back to two FADDP passes
@@ -292,8 +468,8 @@ static __fi void mVU_sumXYZ_arm(const a64::VRegister& dst, const a64::VRegister&
 // All scalar math operates on lane 0 of `pq` (a scratch, NOT qmmPQ).
 #define EATANhelper_arm(addr) \
 	do { \
-		NEON_MULSS(mVU, t2, Fs); \
-		NEON_MULSS(mVU, t2, Fs); \
+		NEON_MULSS_Series(mVU, t2, Fs); \
+		NEON_MULSS_Series(mVU, t2, Fs); \
 		mVUmovAPSReg(t1, t2); \
 		mVUmulSSConst(t1, (addr)); \
 		NEON_ADDSS(mVU, pq, t1); \
@@ -302,24 +478,30 @@ static __fi void mVU_sumXYZ_arm(const a64::VRegister& dst, const a64::VRegister&
 // The odd-power atan series, x*c1 + x^3*c3 + ... + x^15*c15 + pi/4.
 //
 // mVU_Globals (microVU_Misc.h) stores the eight coefficients in ascending
-// power order but under permuted NAMES -- T1, T5, T2, T3, T4, T6, T7, T8 are
-// c1, c3, c5, c7, c9, c11, c13, c15 respectively. Calling the helpers in
-// name order therefore pairs four of them with the wrong power of x: c5 lands
-// on x^3, c7 on x^5, c9 on x^7 and c3 on x^9. Upstream x86 does exactly that
-// (microVU_Lower.inl) and is measurably wrong for it -- up to 919642 ULP
-// against the ps2autotests EFU capture, worst on the largest reduced
-// arguments. Order by POWER, not by name; the interpreter's eatanconst[]
-// (_vuCalculateEATAN in VUops.cpp) is the same nine values in this order.
+// power order, and since upstream's rename they are NAMED in that order too --
+// T1..T8 are c1, c3, c5, c7, c9, c11, c13, c15. Name order and power order now
+// agree, so the helpers are called in plain ascending order.
+//
+// They did not always agree. Four names used to sit on the wrong slot (T5 held
+// c3, T2 held c5, and so on), so calling in name order paired c5 with x^3, c7
+// with x^5, c9 with x^7 and c3 with x^9 -- worth up to 919642 ULP against the
+// ps2autotests EFU capture, worst on the largest reduced arguments. We fixed it
+// here by ordering the calls by POWER; upstream later fixed the same defect by
+// relabelling the struct. The values never moved, so this function emits the
+// identical instruction sequence either way -- but the two fixes CANCEL if both
+// are applied naively, which is why the call order below changed when upstream's
+// rename was merged. The interpreter's eatanconst[] (_vuCalculateEATAN in
+// VUops.cpp) is the same nine values in this order.
 static __fi void mVU_EATAN_arm(mV, const a64::VRegister& pq, const a64::VRegister& Fs,
 	const a64::VRegister& t1, const a64::VRegister& t2)
 {
 	armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
 	mVUmulSSConst(pq, &mVUglob.T1[0]); // x   * c1
 	mVUmovAPSReg(t2, Fs);
-	EATANhelper_arm(&mVUglob.T5[0]);   // x^3 * c3
-	EATANhelper_arm(&mVUglob.T2[0]);   // x^5 * c5
-	EATANhelper_arm(&mVUglob.T3[0]);   // x^7 * c7
-	EATANhelper_arm(&mVUglob.T4[0]);   // x^9 * c9
+	EATANhelper_arm(&mVUglob.T2[0]);   // x^3 * c3
+	EATANhelper_arm(&mVUglob.T3[0]);   // x^5 * c5
+	EATANhelper_arm(&mVUglob.T4[0]);   // x^7 * c7
+	EATANhelper_arm(&mVUglob.T5[0]);   // x^9 * c9
 	EATANhelper_arm(&mVUglob.T6[0]);   // x^11 * c11
 	EATANhelper_arm(&mVUglob.T7[0]);   // x^13 * c13
 	EATANhelper_arm(&mVUglob.T8[0]);   // x^15 * c15
@@ -339,21 +521,29 @@ mVUop(mVU_EATAN)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
-		const a64::VRegister& pq = mVU.regAlloc->allocReg(); // scratch P accumulator
-		const a64::VRegister& t1 = mVU.regAlloc->allocReg();
-		const a64::VRegister& t2 = mVU.regAlloc->allocReg();
-		// pq[0] = Fs[0] + 1; Fs[0] -= 1; Fs = (Fs-1)/(Fs+1)
-		armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
-		mVUsubSSConst(Fs, &mVUglob.one[0]);
-		mVUaddSSConst(pq, &mVUglob.one[0]);
-		NEON_DIVSS(mVU, Fs, pq);
-		mVU_EATAN_arm(mVU, pq, Fs, t1, t2);
-		mVUwritePQresult(pq, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
-		mVU.regAlloc->clearNeeded(t1);
-		mVU.regAlloc->clearNeeded(t2);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuAtan,
+				(1 << (3 - _Fsf_)), {0});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
+			const a64::VRegister& pq = mVU.regAlloc->allocReg(); // scratch P accumulator
+			const a64::VRegister& t1 = mVU.regAlloc->allocReg();
+			const a64::VRegister& t2 = mVU.regAlloc->allocReg();
+			// pq[0] = Fs[0] + 1; Fs[0] -= 1; Fs = (Fs-1)/(Fs+1)
+			armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
+			mVUsubSSConst(Fs, &mVUglob.one[0]);
+			mVUaddSSConst(pq, &mVUglob.one[0]);
+			NEON_DIVSS(mVU, Fs, pq);
+			mVU_EATAN_arm(mVU, pq, Fs, t1, t2);
+			mVUwritePQresult(pq, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+			mVU.regAlloc->clearNeeded(t1);
+			mVU.regAlloc->clearNeeded(t2);
+		}
 		mVU.profiler.EmitOp(opEATAN);
 	}
 	pass3 { mVUlog("EATAN P"); }
@@ -372,22 +562,30 @@ mVUop(mVU_EATANxy)
 	}
 	pass2
 	{
-		const a64::VRegister& t1 = mVU.regAlloc->allocReg(_Fs_, 0, 0xf);
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg();
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		const a64::VRegister& t2 = mVU.regAlloc->allocReg();
-		// x86: PSHUFD(Fs, t1, 0x01) broadcasts t1.y — only lane 0 is read later.
-		armAsm->Ins(Fs.V4S(), 0, t1.V4S(), 1);
-		armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);      // pq[0] = Fs[0]   (= VF.y)
-		NEON_SUBSS(mVU, Fs, t1);                    // Fs[0] = y - x
-		NEON_ADDSS(mVU, t1, pq);                    // t1[0] = x + y
-		NEON_DIVSS(mVU, Fs, t1);                    // Fs[0] = (y-x)/(y+x)
-		mVU_EATAN_arm(mVU, pq, Fs, t1, t2);
-		mVUwritePQresult(pq, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
-		mVU.regAlloc->clearNeeded(t1);
-		mVU.regAlloc->clearNeeded(t2);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuAtanRatio,
+				0xf, {0, 1});
+		}
+		else
+		{
+			const a64::VRegister& t1 = mVU.regAlloc->allocReg(_Fs_, 0, 0xf);
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg();
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			const a64::VRegister& t2 = mVU.regAlloc->allocReg();
+			// x86: PSHUFD(Fs, t1, 0x01) broadcasts t1.y — only lane 0 is read later.
+			armAsm->Ins(Fs.V4S(), 0, t1.V4S(), 1);
+			armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);      // pq[0] = Fs[0]   (= VF.y)
+			NEON_SUBSS(mVU, Fs, t1);                    // Fs[0] = y - x
+			NEON_ADDSS(mVU, t1, pq);                    // t1[0] = x + y
+			NEON_DIVSS(mVU, Fs, t1);                    // Fs[0] = (y-x)/(y+x)
+			mVU_EATAN_arm(mVU, pq, Fs, t1, t2);
+			mVUwritePQresult(pq, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+			mVU.regAlloc->clearNeeded(t1);
+			mVU.regAlloc->clearNeeded(t2);
+		}
 		mVU.profiler.EmitOp(opEATANxy);
 	}
 	pass3 { mVUlog("EATANxy P"); }
@@ -406,21 +604,29 @@ mVUop(mVU_EATANxz)
 	}
 	pass2
 	{
-		const a64::VRegister& t1 = mVU.regAlloc->allocReg(_Fs_, 0, 0xf);
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg();
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		const a64::VRegister& t2 = mVU.regAlloc->allocReg();
-		armAsm->Ins(Fs.V4S(), 0, t1.V4S(), 2);      // Fs[0] = VF.z
-		armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
-		NEON_SUBSS(mVU, Fs, t1);                    // z - x
-		NEON_ADDSS(mVU, t1, pq);                    // z + x
-		NEON_DIVSS(mVU, Fs, t1);
-		mVU_EATAN_arm(mVU, pq, Fs, t1, t2);
-		mVUwritePQresult(pq, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
-		mVU.regAlloc->clearNeeded(t1);
-		mVU.regAlloc->clearNeeded(t2);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuAtanRatio,
+				0xf, {0, 2});
+		}
+		else
+		{
+			const a64::VRegister& t1 = mVU.regAlloc->allocReg(_Fs_, 0, 0xf);
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg();
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			const a64::VRegister& t2 = mVU.regAlloc->allocReg();
+			armAsm->Ins(Fs.V4S(), 0, t1.V4S(), 2);      // Fs[0] = VF.z
+			armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
+			NEON_SUBSS(mVU, Fs, t1);                    // z - x
+			NEON_ADDSS(mVU, t1, pq);                    // z + x
+			NEON_DIVSS(mVU, Fs, t1);
+			mVU_EATAN_arm(mVU, pq, Fs, t1, t2);
+			mVUwritePQresult(pq, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+			mVU.regAlloc->clearNeeded(t1);
+			mVU.regAlloc->clearNeeded(t2);
+		}
 		mVU.profiler.EmitOp(opEATANxz);
 	}
 	pass3 { mVUlog("EATANxz P"); }
@@ -430,7 +636,7 @@ mVUop(mVU_EATANxz)
 // Matches the x86 eexpHelper macro.
 #define eexpHelper_arm(addr) \
 	do { \
-		NEON_MULSS(mVU, t2, Fs); \
+		NEON_MULSS_Series(mVU, t2, Fs); \
 		mVUmovAPSReg(t1, t2); \
 		mVUmulSSConst(t1, (addr)); \
 		NEON_ADDSS(mVU, pq, t1); \
@@ -449,34 +655,42 @@ mVUop(mVU_EEXP)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		const a64::VRegister& t1 = mVU.regAlloc->allocReg();
-		const a64::VRegister& t2 = mVU.regAlloc->allocReg();
-		armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);   // pq = Fs
-		mVUmulSSConst(pq, &mVUglob.E1[0]);   // pq *= E1
-		mVUaddSSConst(pq, &mVUglob.one[0]);  // pq += 1
-		mVUmovAPSReg(t1, Fs);
-		NEON_MULSS(mVU, t1, Fs);             // t1 = Fs^2
-		mVUmovAPSReg(t2, t1);                // t2 = Fs^2
-		mVUmulSSConst(t1, &mVUglob.E2[0]);
-		NEON_ADDSS(mVU, pq, t1);
-		eexpHelper_arm(&mVUglob.E3[0]);
-		eexpHelper_arm(&mVUglob.E4[0]);
-		eexpHelper_arm(&mVUglob.E5[0]);
-		NEON_MULSS(mVU, t2, Fs);
-		mVUmulSSConst(t2, &mVUglob.E6[0]);
-		NEON_ADDSS(mVU, pq, t2);
-		NEON_MULSS(mVU, pq, pq);
-		NEON_MULSS(mVU, pq, pq);
-		// pq[0] = 1 / pq[0]^4
-		armAsm->Ldr(a64::SRegister(t2.GetCode()), mVUglobMem(&mVUglob.one[0]));
-		NEON_DIVSS(mVU, t2, pq);
-		mVUwritePQresult(t2, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
-		mVU.regAlloc->clearNeeded(t1);
-		mVU.regAlloc->clearNeeded(t2);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuExp,
+				(1 << (3 - _Fsf_)), {0});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			const a64::VRegister& t1 = mVU.regAlloc->allocReg();
+			const a64::VRegister& t2 = mVU.regAlloc->allocReg();
+			armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);   // pq = Fs
+			mVUmulSSConst(pq, &mVUglob.E1[0]);   // pq *= E1
+			mVUaddSSConst(pq, &mVUglob.one[0]);  // pq += 1
+			mVUmovAPSReg(t1, Fs);
+			NEON_MULSS_Series(mVU, t1, Fs);             // t1 = Fs^2
+			mVUmovAPSReg(t2, t1);                // t2 = Fs^2
+			mVUmulSSConst(t1, &mVUglob.E2[0]);
+			NEON_ADDSS(mVU, pq, t1);
+			eexpHelper_arm(&mVUglob.E3[0]);
+			eexpHelper_arm(&mVUglob.E4[0]);
+			eexpHelper_arm(&mVUglob.E5[0]);
+			NEON_MULSS_Series(mVU, t2, Fs);
+			mVUmulSSConst(t2, &mVUglob.E6[0]);
+			NEON_ADDSS(mVU, pq, t2);
+			NEON_MULSS_Series(mVU, pq, pq);
+			NEON_MULSS_Series(mVU, pq, pq);
+			// pq[0] = 1 / pq[0]^4
+			armAsm->Ldr(a64::SRegister(t2.GetCode()), mVUglobMem(&mVUglob.one[0]));
+			NEON_DIVSS(mVU, t2, pq);
+			mVUwritePQresult(t2, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+			mVU.regAlloc->clearNeeded(t1);
+			mVU.regAlloc->clearNeeded(t2);
+		}
 		mVU.profiler.EmitOp(opEEXP);
 	}
 	pass3 { mVUlog("EEXP P"); }
@@ -495,13 +709,21 @@ mVUop(mVU_ELENG)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		mVU_sumXYZ_arm(pq, Fs);
-		armAsm->Fsqrt(a64::SRegister(pq.GetCode()), a64::SRegister(pq.GetCode()));
-		mVUwritePQresult(pq, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuLength,
+				_X_Y_Z_W, {0, 1, 2});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			mVU_sumXYZ_arm(pq, Fs);
+			armAsm->Fsqrt(a64::SRegister(pq.GetCode()), a64::SRegister(pq.GetCode()));
+			mVUwritePQresult(pq, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+		}
 		mVU.profiler.EmitOp(opELENG);
 	}
 	pass3 { mVUlog("ELENG P"); }
@@ -520,17 +742,25 @@ mVUop(mVU_ERCPR)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		// Fs is reused after pq is filled (Fs[0] := 1.0, then 1/pq[0]). Guard
-		// the bound-vs-scratch allocator invariant in debug builds.
-		pxAssert(Fs.GetCode() != pq.GetCode());
-		armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);               // pq[0] = Fs[0]
-		armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0])); // Fs[0] = 1.0
-		NEON_DIVSS(mVU, Fs, pq);                              // Fs[0] = 1 / pq[0]
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuRecip,
+				(1 << (3 - _Fsf_)), {0});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			// Fs is reused after pq is filled (Fs[0] := 1.0, then 1/pq[0]). Guard
+			// the bound-vs-scratch allocator invariant in debug builds.
+			pxAssert(Fs.GetCode() != pq.GetCode());
+			armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);               // pq[0] = Fs[0]
+			armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0])); // Fs[0] = 1.0
+			NEON_DIVSS(mVU, Fs, pq);                              // Fs[0] = 1 / pq[0]
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+		}
 		mVU.profiler.EmitOp(opERCPR);
 	}
 	pass3 { mVUlog("ERCPR P"); }
@@ -549,18 +779,26 @@ mVUop(mVU_ERLENG)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		// pq is filled from Fs (sumXYZ) then Fs[0] := 1.0 — Fs and pq must
-		// be different NEON registers. mVU_sumXYZ_arm squares Fs in-place.
-		pxAssert(Fs.GetCode() != pq.GetCode());
-		mVU_sumXYZ_arm(pq, Fs);
-		armAsm->Fsqrt(a64::SRegister(pq.GetCode()), a64::SRegister(pq.GetCode()));
-		armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0]));
-		NEON_DIVSS(mVU, Fs, pq);
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuRecipLength,
+				_X_Y_Z_W, {0, 1, 2});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			// pq is filled from Fs (sumXYZ) then Fs[0] := 1.0 — Fs and pq must
+			// be different NEON registers. mVU_sumXYZ_arm squares Fs in-place.
+			pxAssert(Fs.GetCode() != pq.GetCode());
+			mVU_sumXYZ_arm(pq, Fs);
+			armAsm->Fsqrt(a64::SRegister(pq.GetCode()), a64::SRegister(pq.GetCode()));
+			armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0]));
+			NEON_DIVSS(mVU, Fs, pq);
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+		}
 		mVU.profiler.EmitOp(opERLENG);
 	}
 	pass3 { mVUlog("ERLENG P"); }
@@ -579,15 +817,23 @@ mVUop(mVU_ERSADD)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		pxAssert(Fs.GetCode() != pq.GetCode());
-		mVU_sumXYZ_arm(pq, Fs);
-		armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0]));
-		NEON_DIVSS(mVU, Fs, pq);
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuRecipSquareSum,
+				_X_Y_Z_W, {0, 1, 2});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			pxAssert(Fs.GetCode() != pq.GetCode());
+			mVU_sumXYZ_arm(pq, Fs);
+			armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0]));
+			NEON_DIVSS(mVU, Fs, pq);
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+		}
 		mVU.profiler.EmitOp(opERSADD);
 	}
 	pass3 { mVUlog("ERSADD P"); }
@@ -606,17 +852,25 @@ mVUop(mVU_ERSQRT)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		pxAssert(Fs.GetCode() != pq.GetCode());
-		armAsm->Ldr(RQSCRATCH, mVUglobMem(&mVUglob.absclip[0]));
-		armAsm->And(Fs.V16B(), Fs.V16B(), RQSCRATCH.V16B());
-		armAsm->Fsqrt(a64::SRegister(pq.GetCode()), a64::SRegister(Fs.GetCode()));
-		armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0]));
-		NEON_DIVSS(mVU, Fs, pq);
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuRecipSqrt,
+				(1 << (3 - _Fsf_)), {0});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			pxAssert(Fs.GetCode() != pq.GetCode());
+			armAsm->Ldr(RQSCRATCH, mVUglobMem(&mVUglob.absclip[0]));
+			armAsm->And(Fs.V16B(), Fs.V16B(), RQSCRATCH.V16B());
+			armAsm->Fsqrt(a64::SRegister(pq.GetCode()), a64::SRegister(Fs.GetCode()));
+			armAsm->Ldr(a64::SRegister(Fs.GetCode()), mVUglobMem(&mVUglob.one[0]));
+			NEON_DIVSS(mVU, Fs, pq);
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+		}
 		mVU.profiler.EmitOp(opERSQRT);
 	}
 	pass3 { mVUlog("ERSQRT P"); }
@@ -635,10 +889,18 @@ mVUop(mVU_ESADD)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
-		mVU_sumXYZ_arm(Fs, Fs);
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuSquareSum,
+				_X_Y_Z_W, {0, 1, 2});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
+			mVU_sumXYZ_arm(Fs, Fs);
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+		}
 		mVU.profiler.EmitOp(opESADD);
 	}
 	pass3 { mVUlog("ESADD P"); }
@@ -657,38 +919,46 @@ mVUop(mVU_ESIN)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
-		const a64::VRegister& pq = mVU.regAlloc->allocReg();
-		const a64::VRegister& t1 = mVU.regAlloc->allocReg();
-		const a64::VRegister& t2 = mVU.regAlloc->allocReg();
-		// pq = X
-		armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
-		NEON_MULSS(mVU, Fs, Fs);                 // Fs = X^2
-		mVUmovAPSReg(t1, Fs);                    // t1 = X^2
-		NEON_MULSS(mVU, Fs, pq);                 // Fs = X^3
-		mVUmovAPSReg(t2, Fs);                    // t2 = X^3
-		mVUmulSSConst(Fs, &mVUglob.S2[0]);       // Fs = s2 * X^3
-		NEON_ADDSS(mVU, pq, Fs);                 // pq = X + s2*X^3
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuSin,
+				(1 << (3 - _Fsf_)), {0});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
+			const a64::VRegister& pq = mVU.regAlloc->allocReg();
+			const a64::VRegister& t1 = mVU.regAlloc->allocReg();
+			const a64::VRegister& t2 = mVU.regAlloc->allocReg();
+			// pq = X
+			armAsm->Ins(pq.V4S(), 0, Fs.V4S(), 0);
+			NEON_MULSS_Series(mVU, Fs, Fs);                 // Fs = X^2
+			mVUmovAPSReg(t1, Fs);                    // t1 = X^2
+			NEON_MULSS_Series(mVU, Fs, pq);                 // Fs = X^3
+			mVUmovAPSReg(t2, Fs);                    // t2 = X^3
+			mVUmulSSConst(Fs, &mVUglob.S2[0]);       // Fs = s2 * X^3
+			NEON_ADDSS(mVU, pq, Fs);                 // pq = X + s2*X^3
 
-		NEON_MULSS(mVU, t2, t1);                 // t2 = X^5
-		mVUmovAPSReg(Fs, t2);
-		mVUmulSSConst(Fs, &mVUglob.S3[0]);       // Fs = s3*X^5
-		NEON_ADDSS(mVU, pq, Fs);
+			NEON_MULSS_Series(mVU, t2, t1);                 // t2 = X^5
+			mVUmovAPSReg(Fs, t2);
+			mVUmulSSConst(Fs, &mVUglob.S3[0]);       // Fs = s3*X^5
+			NEON_ADDSS(mVU, pq, Fs);
 
-		NEON_MULSS(mVU, t2, t1);                 // t2 = X^7
-		mVUmovAPSReg(Fs, t2);
-		mVUmulSSConst(Fs, &mVUglob.S4[0]);       // Fs = s4*X^7
-		NEON_ADDSS(mVU, pq, Fs);
+			NEON_MULSS_Series(mVU, t2, t1);                 // t2 = X^7
+			mVUmovAPSReg(Fs, t2);
+			mVUmulSSConst(Fs, &mVUglob.S4[0]);       // Fs = s4*X^7
+			NEON_ADDSS(mVU, pq, Fs);
 
-		NEON_MULSS(mVU, t2, t1);                 // t2 = X^9
-		mVUmulSSConst(t2, &mVUglob.S5[0]);       // t2 = s5*X^9
-		NEON_ADDSS(mVU, pq, t2);
+			NEON_MULSS_Series(mVU, t2, t1);                 // t2 = X^9
+			mVUmulSSConst(t2, &mVUglob.S5[0]);       // t2 = s5*X^9
+			NEON_ADDSS(mVU, pq, t2);
 
-		mVUwritePQresult(pq, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(pq);
-		mVU.regAlloc->clearNeeded(t1);
-		mVU.regAlloc->clearNeeded(t2);
+			mVUwritePQresult(pq, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(pq);
+			mVU.regAlloc->clearNeeded(t1);
+			mVU.regAlloc->clearNeeded(t2);
+		}
 		mVU.profiler.EmitOp(opESIN);
 	}
 	pass3 { mVUlog("ESIN P"); }
@@ -707,12 +977,20 @@ mVUop(mVU_ESQRT)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
-		armAsm->Ldr(RQSCRATCH, mVUglobMem(&mVUglob.absclip[0]));
-		armAsm->And(Fs.V16B(), Fs.V16B(), RQSCRATCH.V16B());
-		armAsm->Fsqrt(a64::SRegister(Fs.GetCode()), a64::SRegister(Fs.GetCode()));
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuSqrt,
+				(1 << (3 - _Fsf_)), {0});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, (1 << (3 - _Fsf_)));
+			armAsm->Ldr(RQSCRATCH, mVUglobMem(&mVUglob.absclip[0]));
+			armAsm->And(Fs.V16B(), Fs.V16B(), RQSCRATCH.V16B());
+			armAsm->Fsqrt(a64::SRegister(Fs.GetCode()), a64::SRegister(Fs.GetCode()));
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+		}
 		mVU.profiler.EmitOp(opESQRT);
 	}
 	pass3 { mVUlog("ESQRT P"); }
@@ -731,18 +1009,26 @@ mVUop(mVU_ESUM)
 	}
 	pass2
 	{
-		const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
-		const a64::VRegister& t1 = mVU.regAlloc->allocReg();
-		// x86: PSHUFD(t1, Fs, 0x1b) reverses lanes: t1 = [Fs[3], Fs[2], Fs[1], Fs[0]]
-		armAsm->Rev64(t1.V4S(), Fs.V4S());               // t1 = [Fs[1], Fs[0], Fs[3], Fs[2]]
-		armAsm->Ext(t1.V16B(), t1.V16B(), t1.V16B(), 8); // rotate: [Fs[3], Fs[2], Fs[1], Fs[0]]
-		NEON_ADDPS(mVU, Fs, t1);                         // Fs = Fs + reverse(Fs) — lane 0 holds (x+w)
-		// x86: PSHUFD(t1, Fs, 0x01) — only lane 0 used: t1[0] = Fs[1] (= y+z)
-		armAsm->Ins(t1.V4S(), 0, Fs.V4S(), 1);
-		NEON_ADDSS(mVU, Fs, t1);                         // Fs[0] = x+y+z+w
-		mVUwritePQresult(Fs, mVUinfo.writeP);
-		mVU.regAlloc->clearNeeded(Fs);
-		mVU.regAlloc->clearNeeded(t1);
+		if (CHECK_VU_EXACT(mVU.index))
+		{
+			mVUemitEfuModel(mVU, mVUModelStubEfuSum,
+				_X_Y_Z_W, {0, 1, 2, 3});
+		}
+		else
+		{
+			const a64::VRegister& Fs = mVU.regAlloc->allocReg(_Fs_, 0, _X_Y_Z_W);
+			const a64::VRegister& t1 = mVU.regAlloc->allocReg();
+			// x86: PSHUFD(t1, Fs, 0x1b) reverses lanes: t1 = [Fs[3], Fs[2], Fs[1], Fs[0]]
+			armAsm->Rev64(t1.V4S(), Fs.V4S());               // t1 = [Fs[1], Fs[0], Fs[3], Fs[2]]
+			armAsm->Ext(t1.V16B(), t1.V16B(), t1.V16B(), 8); // rotate: [Fs[3], Fs[2], Fs[1], Fs[0]]
+			NEON_ADDPS(mVU, Fs, t1);                         // Fs = Fs + reverse(Fs) — lane 0 holds (x+w)
+			// x86: PSHUFD(t1, Fs, 0x01) — only lane 0 used: t1[0] = Fs[1] (= y+z)
+			armAsm->Ins(t1.V4S(), 0, Fs.V4S(), 1);
+			NEON_ADDSS(mVU, Fs, t1);                         // Fs[0] = x+y+z+w
+			mVUwritePQresult(Fs, mVUinfo.writeP);
+			mVU.regAlloc->clearNeeded(Fs);
+			mVU.regAlloc->clearNeeded(t1);
+		}
 		mVU.profiler.EmitOp(opESUM);
 	}
 	pass3 { mVUlog("ESUM P"); }
@@ -909,7 +1195,7 @@ mVUop(mVU_FMOR)
 
 mVUop(mVU_FSAND)
 {
-	pass1 { mVUanalyzeSflag(mVU, _It_); }
+	pass1 { mVUanalyzeSflag(mVU, _It_); mVUvuAotOnStatusReader(mVU, _Imm12_); }
 	pass2
 	{
 		if (_Imm12_ & 0x0c30) DevCon.WriteLn(Color_Green, "mVU_FSAND: Checking I/D/IS/DS Flags");
@@ -934,7 +1220,7 @@ mVUop(mVU_FSAND)
 
 mVUop(mVU_FSOR)
 {
-	pass1 { mVUanalyzeSflag(mVU, _It_); }
+	pass1 { mVUanalyzeSflag(mVU, _It_); mVUvuAotOnStatusReader(mVU, _Imm12_); }
 	pass2
 	{
 		const a64::Register& reg = mVU.regAlloc->allocGPR(-1, _It_, mVUlow.backupVI);
@@ -953,7 +1239,7 @@ mVUop(mVU_FSOR)
 
 mVUop(mVU_FSEQ)
 {
-	pass1 { mVUanalyzeSflag(mVU, _It_); }
+	pass1 { mVUanalyzeSflag(mVU, _It_); mVUvuAotOnStatusReader(mVU, _Imm12_); }
 	pass2
 	{
 		if (_Imm12_ & 0x0c30) DevCon.WriteLn(Color_Green, "mVU_FSEQ: Checking I/D/IS/DS Flags");

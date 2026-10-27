@@ -12,18 +12,24 @@
 #include <unordered_map>
 #include <vector>
 #include <arm_neon.h>
+#include <cstring>
 #include "Common.h"
 #include "VU.h"
 #include "MTVU.h"
 #include "GS.h"
 #include "Gif_Unit.h"
 #include "iR5900-arm64.h"
+#include "EECycleRate.h"
 #include "R5900OpcodeTables.h"
 #include "common/Perf.h"
 
 #include "microVU_Misc-arm64.h"
-#include "MvuObservedEntries.h"
+#include "VuFmacFlags-arm64.h"
+#include "EeFpuModelCall-arm64.h"
+#include "VuEfuModel.h"
+#include "VuMulBand.h"
 #include "microVU_Persist-arm64.h"
+#include "vuaot/VuAotMvuTrace.h"
 
 #ifndef XXH_versionNumber
 #define XXH_STATIC_LINKING_ONLY 1
@@ -100,44 +106,146 @@
 //       of the accumulate; only shapes compiled under vuClampMode:2 change.
 //  18 — RSQRT's zero path ORs its D/I into divFlag instead of assigning over
 //       it, so the sign test's I survives. Only RSQRT changes shape.
-//  19 — mVU: fold the clone-write copy into the operand clamp (ARMSX2 ec48b37975)
-//  20 — mVU: hold the clamp bounds in registers (ARMSX2 b5922d1beb)
-//  21 — mVU: ILW's lane offset is added at the address's own width (ARMSX2 fe5fa851cd)
-//  22 — VU: LQD and SQD step the address off a vi00 base too (ARMSX2 b83409ff56)
-//  23 — VU: ILW's dest field names one lane through a two-bit code (ARMSX2 30af63c447)
-//  24 — mVU: raise the E-bit interrupt in front of the exit path (ARMSX2 f6f8e0f021)
-//  25 — mVU: the options sentinel records every setting the emitters read (ARMSX2 ebee76977d)
-//  26 — mVU: CLIP folds its six comparison lanes with one UZP1 and an ADDV (ARMSX2 bce6f12ede)
-//  27 — mVU: block-start VF preloads load in pairs (ARMSX2 3c0e4b5faf)
-//  28 — mVU: a three-lane write keeps its own register (ARMSX2 9b13ef70c0)
-//  29 — mVU: the flag queue reorder opens with the shuffle that fits (ARMSX2 a9bb7f2ae0)
-//  30 — mVU: the single-lane clamp writes its lane once (ARMSX2 aa3b569316)
-//  31 — mVU: the sign clamp loads its row's two bounds together (ARMSX2 2fbaa68522)
-//  32 — mVU: every clamped operand folds the copy in front of it (ARMSX2 a52c0a4529)
-//  33 — mVU: the accumulate's copy of ACC folds too (ARMSX2 6d79d1b655)
-//  34 — mVU: the cycle-budget break is one shared stub (ARMSX2 5caa0c7d7b)
-//  35 — microVU: the full-width sign clamp reads the resident clamp bounds (ARMSX2 dda92c27a1)
-//  36 — mVU: a single-lane clone rotates straight out of the cached register (ARMSX2 b3ad0eb6b2)
-//  37 — mVU: the arithmetic step reads the register a clone was copied from (ARMSX2 b29cb14d7e)
-//  38 — mVU: MAX and MINI against VF0 are one integer max or min (ARMSX2 127e81506d)
-//  39 — mVU: VI arithmetic reads its source register and folds its immediate (ARMSX2 057f5cb289)
-//  40 — mVU: the status update clears the non-sticky field in one AND (ARMSX2 b3122525c3)
-//  41 — VU1: reach data memory from the pinned state pointer (ARMSX2 8b97db61ae)
-//  42 — mVU: a VU1 load or store reads its base VI where it is cached (ARMSX2 06cab3b1f4)
-//  43 — mVU: IBEQ/IBNE fold vi00 and test the low halfword in the tail (ARMSX2 2a054d6977)
-//  44 — mVU: FCOR is one BICS of the bits its immediate leaves clear (ARMSX2 795632e9a3)
-//  45 — mVU: single-lane and Q multiplies read their operand lane by element (ARMSX2 c7e7ec99a2)
-//  46 — mVU: the OP ops permute their multiplicands from the cached registers (ARMSX2 748d8d9e0f)
-//  47 — mVU: a single-lane op clamps its scalar destination full width (ARMSX2 3d28f68aea)
-//  48 — mVU: CLIP reads its operands where they are cached (ARMSX2 b637c589f4)
-//  49 — mVU: micro mode addresses VU data memory off a pinned x29 (ARMSX2 262e85b8c6)
-//  50 — mVU: a full-width ACC write keeps its result in the register it was made in (ARMSX2 2a8ff44243)
-//  51 — mVU: drop the multiply by VF0.w behind an FMINNM/FMAXNM operand clamp (ARMSX2 ca92bed7fb)
-//  52 — mVU: IBEQ/IBNE XOR the cached Is in place (ARMSX2 348bb28f21)
-//  53 — mVU: single-lane MOVE and MR32 insert into a cached destination (ARMSX2 fac807db26)
-//  54 — mVU: an E-bit conditional branch does not reorder flags for a successor (ARMSX2 86a94fa3ca)
-//  55 — mVU: a write with an empty destination field leaves a temp slot, not a clean copy (ARMSX2 eb205ba48b)
-static constexpr u32 kMvuCompilerAbiVersion = 55;
+//  19 — the console-exact VU models. Every divide-unit block changes shape at
+//       any mode: the zero-divisor Q is built with one MVNI, the zero tests
+//       read the exponent field, and the denormal flush is emitted only where
+//       the unit's own FPCR clears FZ. So does every FMAC: macWeights gains a
+//       variant dimension, moving every weight load's [x25, #imm], and the I
+//       immediate is stored unclamped. At vuClampMode 4 a flag-writing multiply
+//       adds its MAC U predicate ahead of the operand clamp, every FMAC adds
+//       MAC O and the 0x7FFFFFFF substitution it feeds (so a flag-dead FMAC
+//       changes shape too), ADD and SUB mask their operands through the guard
+//       mask, and the divide unit and all thirteen EFU ops become out-of-line
+//       model calls.
+//  20 — the zero-divisor Q is 0x7FFFFFFF from vuClampMode 3 and maxvals below,
+//       so DIV and RSQRT carry the signbit/maxvals pair again at modes 0-2.
+//  21 — an operand clamp reads the register a clone-write copy was about to
+//       fill and the copy goes, so a clamped FMAC on a cached VF is a word
+//       shorter.
+//  22 — the clamp bounds are register-resident: every mVUclamp1 drops its two
+//       Ldrs, the block gains an Ldp at its entry, and q25/q26 leave the VF
+//       pool in micro mode as well, moving what the allocator hands out.
+//  23 — the EE FPU / EFU model calls reach their target through a stub in
+//       mVU.cache instead of spilling at the site, so every block carrying
+//       one is 22 instructions shorter and records a stub fixup id.
+//  24 — ILW and ILWR add their lane offset to the address at the width
+//       mVUaddrFix answered in, so VU0's window onto VU1's registers no
+//       longer loses the top half of its offset.
+//  25 — VU1's data memory is a fixed distance from gprVUState, so a VU1 load
+//       or store drops its VURegs::Mem load and carries the distance in its
+//       own displacement; a constant address off vi00 drops the whole chain.
+//  26 — LQD and SQD off a vi00 base take the same pre-decrement as every
+//       other base, so on VU1 they lose the fixed address the else-clause
+//       answered and gain the step and mVUaddrFix.
+//  27 — ILW and ILWR read the lane their dest field's two-bit code names
+//       rather than the first bit set in it, so every multi-lane field but
+//       xy, xz, yzw and xyzw carries a different offset.
+//  28 — a VU1 program ending on the E bit under MTVU branches to an exit
+//       entry that raises the interrupt, so each of those ends loses the
+//       four instructions an absolute call to mVUEBit took.
+//  29 — no emitted shape changes; the options sentinel now records
+//       THREAD_VU1, and the bump evicts the caches recorded while it could
+//       not tell an MTVU run from a run without it.
+//  30 — CLIP packs its six comparison results with one UZP1 and a weighted
+//       ADDV instead of moving each lane to a GPR, so the op loses nine
+//       instructions and mVUglob gains the weight vector they read.
+//  31 — block-start VF preloads are queued and emitted together, so a pair
+//       one VF apart loads with one Ldp and the VI preloads no longer sit
+//       between them.
+//  32 — a three-lane partial write keeps its own slot and takes the one lane
+//       it did not write from the other cached copy, one Ins in place of the
+//       two mVUmergeRegs emitted in the other direction.
+//  33 — the block-link flag queue reorder opens with whichever whole-vector
+//       shuffle gets the most lanes right rather than always a copy, and an
+//       identity reorder no longer loads and stores the queue unchanged.
+//  34 — the single-lane result clamp chains both bounds through the scratch
+//       and writes lane 0 once, dropping the writeback between them.
+//  35 — the sign-preserving clamp's two bounds sit next to each other in
+//       mVUglob, so the row it selects arrives in one Ldp rather than a load
+//       in front of each min.
+//  36 — an FMAC body takes the clone-write fold for every operand it clamps
+//       before it emits any of the clamps, so the second and third operand's
+//       copies fold as well as the first's.
+//  37 — the accumulator copy a two-step FMAC makes for its own accumulate is
+//       offered to that fold too, which takes it wherever the step's clamp
+//       rewrites every lane of it.
+//  38 — mVUtestCycles' budget-break exit is one shared stub reached by B,
+//       carrying the block pointer and the resume PC, instead of the block
+//       pointer, a call and mVUendProgram(0) inline in every block.
+//  39 — the sign-preserving clamp's all-lane row reads qmmClampMax and
+//       qmmClampMin rather than loading the same two bounds from mVUglob, so
+//       each full-width operand clamp loses its Ldp.
+//  40 — a single-lane clone of a lane other than x rotates straight out of the
+//       cached register with one EXT, rather than copying it and rotating the copy.
+//  41 — an FMAC's arithmetic reads the register a clone-write copy was made
+//       from when that copy is the last word emitted, and the copy goes: the
+//       step writes every lane of the destination, so the copy was dead weight.
+//  42 — MAX and MINI with VF0 on either side are one SMAX or SMIN on the raw
+//       words instead of the eight-instruction sign-magnitude transform and
+//       select.
+//  43 — VI arithmetic writing a different VI reads the source's register
+//       rather than the copy allocGPR made of it, and IADDIU/ISUBIU take their
+//       immediate in the add or subtract rather than through gprT1.
+//  44 — the status update clears the non-sticky field with one AND that reads
+//       the previous instance's register, rather than a Mov and an AND of the copy.
+//  45 — a VU1 load or store forms its address from the base VI where it is
+//       cached, so the copy into gprT1 and the sign or zero extension in front
+//       of the UBFIZ go. VU0 is unchanged.
+//  46 — IBEQ/IBNE against vi00 move the other operand instead of loading vi00
+//       and XORing it in, and their carried condition is tested on its low
+//       halfword (TST #0xffff) instead of being narrowed with UXTH and compared.
+//  47 — FCOR tests the clip bits its immediate leaves clear with MOV, BICS and
+//       CSET instead of materialising the immediate, ORing, adding one and
+//       shifting out bit 24.
+//  48 — the AX-14 by-element multiply also serves single-lane destinations, as a
+//       scalar FMUL by element, and Q, reading its instance's lane of qmmPQ, so
+//       neither broadcasts its operand into a temp first.
+//  49 — OPMULA and OPMSUB permute their multiplicands into temps straight from
+//       the cached registers with EXT and one INS, and build lane w only when
+//       the dest field writes it.
+//  50 — the operand clamp of a single-lane op's scalar destination runs full
+//       width, since the scalar arithmetic that follows zeroes lanes 1-3: no
+//       scratch round trip, and its clone-write copy folds.
+//  51 — CLIP reads Fs and Ft where they are cached, broadcasting Ft.w into a
+//       temp with one DUP and building -x in a temp of its own, so neither
+//       operand is cloned.
+//  52 — DIV's zero tests are one FCMP against 0.0 when the VU FPCR has FZ,
+//       instead of moving the word out and testing its exponent field.
+//  53 — micro mode pins the VU's data memory in x29 at dispatch, so a load or
+//       store with its byte index in hand is one [x29, index] access, and a VU0
+//       address off vi00 is a displacement off x29 instead of a pointer load.
+//  54 — a full-width ACC write (ADDA, SUBA, MULA and their bc/i/q forms at
+//       xyzw) leaves its result in Fs's clone and binds that register as ACC,
+//       instead of copying it into an ACC register of its own.
+//  55 — a broadcast multiply by VF0.w of an Fs just clamped with FMINNM/FMAXNM
+//       under an FZ FPCR is the identity and is not emitted.
+//  56 — IBEQ/IBNE between two VIs XOR the cached Is straight into the condition
+//       register instead of copying it there first.
+//  57 — below clampE a single-lane y/z/w FMAC computes its lane in place, full
+//       width, in an allocReg natural slot, instead of rotating Fs, Ft and ACC to
+//       lane 0 for scalar arithmetic and ACC back; mVUglob gains the lane-indexed
+//       single-scalar flag weights.
+//  58 — single-lane MOVE and MR32 into a destination cached whole insert the
+//       lane into that copy with one INS instead of a lane-0 slot and a merge.
+//  59 — a conditional branch carrying the E bit (and no M bit) no longer reorders
+//       the flag instances for a successor that never runs.
+//  60 — VU0's access to VU1's register window (mVUaddrFix) tells the vu-aot tier when it
+//       addresses VU1's STATUS quadword: without MTVU it now compares the window index and
+//       calls the transfer thunk for that one quadword, and the thunk saves every
+//       caller-saved register and passes the address to its C function.
+//  61 — that hook is emitted only while the vu-aot tier is wanted (EnableVUAot and what it needs);
+//       with it off VU0's window sequence is version 59's again. The options sentinel of VU0
+//       carries the choice (vu0WindowHook).
+//  62 — an allocReg write with an empty field (xyzw == 0) leaves a temp slot, not
+//       one recorded as an unmodified copy of the register it was told to write.
+//  63 — recorded programs are relocatable across processes (ASLR): image and
+//       data-arena addresses are fixups (region + offset), an address
+//       materialized as an immediate is a MOVZ/MOVK run up to its top halfword
+//       (a block pointer's run was always four), and a recorded B.cond across
+//       chunks keeps its short form. Payload format version 2. (The
+//       vu-progcache-aslr branch numbered this 40, from master's count; the
+//       vu-aot branch was at 62 when the two met.)
+static constexpr u32 kMvuCompilerAbiVersion = 63;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
@@ -216,6 +324,7 @@ static_assert(sizeof(microRegInfo) == 96, "microRegInfo was not 96 bytes");
 
 struct microProgram;
 struct MvuPersistLog;
+struct VuAotProgramState;
 struct microJumpCache
 {
 	microJumpCache() : prog(NULL), x86ptrStart(NULL), hostEntry(NULL) {}
@@ -430,20 +539,29 @@ struct microProgram
 	// non-owning references. Single-threaded per VU, so plain s32.
 	s32           refcount;
 
-	// Set of microMem byte offsets the dispatcher has handed off into this
-	// program. Initialized at mVUcreateProg with the creator's startPC;
-	// mVUsearchProg accumulates additional entries seen during the program's
-	// lifetime. `version` lets callers detect "new entry since last compile"
-	// cheaply (compare vs the version snapshotted by the most recent
-	// SaveProgram).
-	MvuObservedEntries observed;
-
 	// Recorded block-graph snapshot (chunks + fixups) for this program, built
 	// by the emit-time recorder in microVU_Persist-arm64.inl. Null when
 	// recording is disabled or nothing was recorded. Owned here; freed via
 	// mVUPersist::OnProgramDeleted from mVUdeleteProg. (microProgram is
 	// memset-constructed in mVUcreateProg, so a raw pointer is the right shape.)
 	MvuPersistLog* persist;
+
+	// vu-aot live tier (microVU_VuAot-arm64.inl). `vuAotRuns` counts the
+	// dispatches of this program while the tier is on, `vuAotJumpRuns` the
+	// JR/JALR slow-path entries (the jump cache missed) that resolved to it;
+	// `vuaot` is the tier's state for it, null until the program is tiered up
+	// (so non-null means tiered). All stay zero with EnableVUAot off.
+	u32 vuAotRuns;
+	u32 vuAotJumpRuns;
+	VuAotProgramState* vuaot;
+	// Times a vu-aot region of this program took the budget bail: [0] at an entry from
+	// microVU, [1] at a loop head (written by the region's own bail code, which reaches
+	// the program through the bail record).
+	u64 vuAotBails[2];
+	// VU1 dispatches and VU1 cycles when the program was created or loaded (how long it waited for
+	// its first region).
+	u64 vuAotBornAt;
+	u64 vuAotBornCycle;
 };
 
 typedef std::deque<microProgram*> microProgramList;
@@ -459,14 +577,6 @@ struct microProgManager
 	microIR<mProgSize> IRinfo;
 	microProgramList*  prog [mProgSize/2];
 	microProgramQuick  quick[mProgSize/2];
-	// Occupancy list for quick[]: mVUclear's range-aware invalidation walks
-	// only these indices (a handful of live programs) instead of scanning all
-	// mProgSize/2 slots on every micro-mem write. Overflow (> max entries)
-	// falls back to the full scan. Zeroed with the enclosing struct.
-	static constexpr u32 kQuickListMax = 16;
-	u16 quickList[kQuickListMax];
-	u32 quickListCount;
-	u32 quickListOverflow;
 	microProgram*      cur;
 	int                total;
 	int                isSame;
@@ -476,6 +586,15 @@ struct microProgManager
 	u8*                x86start; // Start of rec-cache
 	u8*                x86end;   // Reset threshold — mVUcacheSafeZone MB below the physical rec-region end
 	microRegInfo       lpState;
+	// One bit per quick[] slot that holds a program: bit (i % 64) of word
+	// (i / 64) is set iff quick[i].prog != NULL. mVUclear runs on every
+	// micro-memory write and only has work for occupied slots, of which a
+	// game has a handful out of 2048, so it walks these bits instead of the
+	// array. Set where a search installs a program into an empty slot
+	// (mVUquickInstall), cleared where a slot is nulled (mVUclear, mVUreset).
+	// Any new writer of quick[].prog must keep it in step: a set slot with
+	// no bit survives every later write to its program's code.
+	u64                quickOcc[mProgSize / 2 / 64];
 };
 
 // Safe-Zone (megabytes): the gap between prog.x86end (mVUcleanUp's
@@ -513,6 +632,31 @@ void mVUunpack_xyzw(const a64::VRegister& dstreg, const a64::VRegister& srcreg, 
 //------------------------------------------------------------------
 // microVU Main Structure
 //------------------------------------------------------------------
+
+// The EE FPU / EFU model seam (EeFpuModelCall-arm64.h), emitted once per
+// target and reached by a bl.
+enum : int
+{
+	mVUModelStubDivide,
+	mVUModelStubSqrtBits,
+	mVUModelStubRecipSqrt,
+	mVUModelStubMulShortTailBand,
+	mVUModelStubEfuSum,
+	mVUModelStubEfuSquareSum,
+	mVUModelStubEfuRecipSquareSum,
+	mVUModelStubEfuLength,
+	mVUModelStubEfuRecipLength,
+	mVUModelStubEfuRecip,
+	mVUModelStubEfuSqrt,
+	mVUModelStubEfuRecipSqrt,
+	mVUModelStubEfuSin,
+	mVUModelStubEfuExp,
+	mVUModelStubEfuAtan,
+	mVUModelStubEfuAtanRatio,
+	mVUModelStubCount
+};
+
+EeFpuModelCallee mVUModelStubTarget(int stub, int vuIndex);
 
 struct microVU
 {
@@ -629,6 +773,9 @@ struct microVU
 	u8* endProgramFlagsA; // non-Ebit exits (isEbit == 0 || isEbit == 3)
 	u8* endProgramFlagsB; // Ebit exits (isEbit && isEbit != 3)
 	u8* resumePtrXG;
+
+	// mVUModelStubTarget entries.
+	u8* modelStubs[mVUModelStubCount];
 
 	// Compile-time only (never read by emitted code): pool GPR index holding
 	// the live IBcc condition value between the branch op and condBranch's
@@ -760,6 +907,24 @@ public:
 		return count;
 	}
 #endif
+	// Every block, quick list then full list, in registration order.
+	template <typename F>
+	void forEachBlock(F&& f)
+	{
+		for (microBlockLink* l = qBlockList; l; l = l->next)
+			f(l->block);
+		for (microBlockLink* l = fBlockList; l; l = l->next)
+			f(l->block);
+	}
+	// Every block in the order a search that needs no exact match tries them:
+	// registration order, both lists together (vu-aot's background jobs search
+	// a copy of the graph by the same rules).
+	template <typename F>
+	void forEachInSearchOrder(F&& f)
+	{
+		for (const microBlockLinkRef& ref : quickLookup)
+			f(*ref.pBlock);
+	}
 	microBlockManager()
 	{
 		qListI = fListI = 0;
@@ -903,7 +1068,9 @@ alignas(16) extern microVU microVU1;
 extern void DumpVUState(u32 n, u32 pc);
 
 extern void mVUclear(mV, u32, u32);
-extern void mVUreset(microVU& mVU, bool resetReserve);
+// `vu1Idle`: the caller is the thread that runs VU1, between two runs, so there is no program to
+// finish first (the MTVU branch of mVUreset finishes a VU1 run in progress, for resets from the EE thread).
+extern void mVUreset(microVU& mVU, bool resetReserve, bool vu1Idle = false);
 extern void* mVUblockFetch(microVU& mVU, u32 startPC, uptr pState);
 extern void* mVUcompile(microVU& mVU, u32 startPC, uptr pState);
 _mVUt extern void* mVUcompileJIT(u32 startPC, uptr ptr);
@@ -926,6 +1093,49 @@ extern void* mVUexecuteVU1(u32 startPC, u32 cycles);
 // path.
 extern void* mVUlookupProg_VU0(u32 startPC, u32 cycles);
 extern void* mVUlookupProg_VU1(u32 startPC, u32 cycles);
+
+// vu-aot live tier (microVU_VuAot-arm64.inl). Every function here is inert
+// with EnableVUAot off: the dispatcher calls the plain lookup above, and the
+// compile hooks are never handed out.
+//   - mVUvuAotSyncConfig(): decides, from the config, whether the tier runs.
+//     Called at init and at every reset, before the dispatchers are emitted.
+//   - mVUlookupProgTier_VU1: mVUlookupProg_VU1 plus the run counter; the
+//     dispatcher calls it instead when the tier is on.
+//   - mVUvuAotAfterSearch: the slow path's chance to tier a program up.
+//   - mVUvuAotAfterJump: the same for a JR/JALR the jump cache did not know.
+//   - mVUvuAotLiveHooks: the compile hooks for a tiered-up program.
+extern void  mVUvuAotSyncConfig(microVU& mVU);
+extern bool  mVUvuAotEnabled();
+// Whether microVU0 emits the sticky tripwire's hook on VU1's STATUS quadword of its register window
+// (mVUaddrFix): the tier wanted by the config, latched at VU0's last init or reset.
+extern bool  mVUvuAotVU0WindowHook();
+extern bool  mVUvuAotPending();
+extern void* mVUlookupProgTier_VU1(u32 startPC, u32 cycles);
+extern void* mVUvuAotAfterSearch(microVU& mVU, u32 startPC, uptr pState, void* result);
+extern void* mVUvuAotAfterJump(microVU& mVU, u32 startPC, uptr pState, void* result);
+extern void  mVUvuAotLiveHooks(microVU& mVU, vuaot::VuAotRegionHook& region, void*& regionUser,
+	vuaot::VuAotBodyHook& body, void*& bodyUser);
+extern void  mVUvuAotOnProgramDeleted(microProgram& prog);
+// A program was just created, or loaded from the disk cache, for the image in micro memory (from
+// mVUsearchProg, before it is installed in a quick slot): with the program cache on, the tier reads
+// its saved plan and sends the jobs it describes to the worker.
+extern void  mVUvuAotOnProgramReady(microVU& mVU, microProgram& prog);
+// Before a reset or close frees the programs: every program whose plan changed since its sidecar was
+// written goes to the program cache's writer.
+extern void  mVUvuAotSaveAll(microVU& mVU);
+extern void  mVUvuAotOnJumpMiss(microVU& mVU);
+extern void  mVUvuAotOnBail();
+extern void  mVUvuAotOnClose(microVU& mVU);
+// The sticky-STATUS tripwire (section 9ad): a sticky reader microVU has just compiled (FSAND, FSEQ
+// or FSOR with `imm12`), a program being created over the micro image in memory, and VU1's run
+// entry, where the regions that dropped the sticky byte are rebuilt once the tripwire has gone off.
+extern void  mVUvuAotOnStatusReader(microVU& mVU, u32 imm12);
+extern void  mVUvuAotOnNewProgram(microVU& mVU);
+extern void  mVUvuAotRebuildIfDue();
+// The run that opens and closes a compile of VU1 code: the tier drops its
+// per-compile analysis state when the outermost one ends.
+extern void  mVUvuAotCompileBegin(microVU& mVU);
+extern void  mVUvuAotCompileEnd(microVU& mVU);
 
 // Content-hash plumbing (xxhash3-128 program identity).
 //   - mVUbuildOptionsSentinel populates mVU.optionsSentinel from the current
@@ -968,6 +1178,15 @@ __fi void* mVUentryGet(microVU& mVU, microBlockManager* block, u32 startPC, uptr
 }
 
 //------------------------------------------------------------------
+void mVUGenerateModelStubs(microVU& mVU);
+
+__fi static void mVUemitModelCall(microVU& mVU, int stub)
+{
+	pxAssert(stub >= 0 && stub < mVUModelStubCount);
+	pxAssert(mVU.modelStubs[stub]); // generated with the dispatchers, at every reset
+	armEmitCall(mVU.modelStubs[stub]);
+}
+
 // ARM64 helper .inl files + shared analysis/tables
 //------------------------------------------------------------------
 #include "microVU_Clamp-arm64.inl"

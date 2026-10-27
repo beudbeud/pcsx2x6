@@ -468,6 +468,18 @@ void normJumpCompile(mV, microFlagCycles& mFC, bool isEvilJump)
 // constructed once per mVUreset over the whole post-dispatcher cache range.
 static thread_local ptrdiff_t s_mVUblockStartOffset = 0;
 
+// The write scope covers exactly the persistent MA's buffer span
+// [x86start, physical region end]: every byte a session emits lands in
+// there. Range form, not the whole-arena BeginCodeWrite: in iOS Legacy
+// mode the whole-arena EndCodeWrite RX-flips the entire arena on close,
+// which killed any EE emit window open on the other thread (Legacy range
+// windows bypass the refcount). Toggle modes fall through to the same
+// refcounted whole-region toggle as before; dual-mapping is a no-op.
+static size_t mVUcodeCacheWriteSpan(microVU& mVU)
+{
+	return static_cast<size_t>(mVU.prog.x86end - mVU.prog.x86start) + (mVUcacheSafeZone * _1mb);
+}
+
 static void mVUopenCodeCache(microVU& mVU)
 {
 	// Nested call (same thread re-enters before its outer close): no-op.
@@ -476,7 +488,7 @@ static void mVUopenCodeCache(microVU& mVU)
 
 	pxAssert(mVU.jitAsm); // mVUreset must have built it.
 
-	HostSys::BeginCodeWrite();
+	HostSys::BeginCodeWriteRange(mVU.prog.x86start, mVUcodeCacheWriteSpan(mVU));
 	// armAsmPtr MUST equal the MA's buffer base (= mVU.prog.x86start) for
 	// armGetCurrentCodePointer() to return the real write position:
 	//   armGetCurrentCodePointer() = armAsmPtr + armAsm->GetCursorOffset()
@@ -527,10 +539,10 @@ static void mVUcloseCodeCache(microVU& mVU)
 
 	// Persisted-JIT recorder: finalize (or drop) the chunk. Runs after
 	// FinalizeCode so the captured bytes include any literal pool.
-	mVUPersist::EndEpisode(mVU, codeStart + codeSize);
+	mVUPersist::EndEpisode(mVU, codeStart, codeStart + codeSize);
 
 	armAsm = nullptr; // unbind; do not delete (persistent)
-	HostSys::EndCodeWrite();
+	HostSys::EndCodeWriteRange(mVU.prog.x86start, mVUcodeCacheWriteSpan(mVU));
 	if (codeSize > 0)
 	{
 		HostSys::FlushInstructionCache(codeStart, codeSize);
@@ -580,8 +592,17 @@ _mVUt void* mVUcompileJIT(u32 startPC, uptr ptr)
 		if (jc.prog && jc.prog == mVU.prog.quick[startPC / 8].prog)
 			return jc.hostEntry;
 
+		// A jump the cache did not know: the vu-aot tier counts these to see
+		// when a tiered program has met a target its regions do not hold.
+		if constexpr (vuIndex == 1)
+			mVUvuAotOnJumpMiss(mVU);
+
 		mVUopenCodeCache(mVU);
 		void* v = mVUsearchProg<vuIndex>(startPC, (uptr)&pBlock->pStateEnd);
+		// A program microVU only ever reaches through a JR/JALR (an overlay the
+		// dispatcher never enters) is counted, and tiered up, here.
+		if constexpr (vuIndex == 1)
+			v = mVUvuAotAfterJump(mVU, startPC, (uptr)&pBlock->pStateEnd, v);
 		mVUcloseCodeCache(mVU);
 
 		jc.prog = mVU.prog.quick[startPC / 8].prog;
@@ -593,6 +614,8 @@ _mVUt void* mVUcompileJIT(u32 startPC, uptr ptr)
 	{
 		mVUopenCodeCache(mVU);
 		void* v = mVUsearchProg<vuIndex>(startPC, ptr);
+		if constexpr (vuIndex == 1)
+			v = mVUvuAotAfterJump(mVU, startPC, ptr, v);
 		mVUcloseCodeCache(mVU);
 		return v;
 	}
