@@ -108,7 +108,8 @@
 //  24 — mVU: raise the E-bit interrupt in front of the exit path (ARMSX2 f6f8e0f021)
 //  25 — mVU: the options sentinel records every setting the emitters read (ARMSX2 ebee76977d)
 //  26 — mVU: CLIP folds its six comparison lanes with one UZP1 and an ADDV (ARMSX2 bce6f12ede)
-static constexpr u32 kMvuCompilerAbiVersion = 26;
+//  27 — mVU: block-start VF preloads load in pairs (ARMSX2 3c0e4b5faf)
+static constexpr u32 kMvuCompilerAbiVersion = 27;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
