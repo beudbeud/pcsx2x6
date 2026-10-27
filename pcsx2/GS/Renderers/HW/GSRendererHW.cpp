@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "GS/Renderers/HW/GSRendererHW.h"
+#include "GS/Renderers/HW/GSHwHack.h"
 #include "GS/Renderers/HW/GSTextureReplacements.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
@@ -61,6 +62,10 @@ void GSRendererHW::PurgeTextureCache(bool sources, bool targets, bool hash_cache
 
 void GSRendererHW::ReadbackTextureCache()
 {
+	// A pending OI_RidgeRacerV grade lands before any transfer reads or overwrites the frame.
+	if (m_oi == &GSHwHack::OI_RidgeRacerV)
+		GSHwHack::OI_RidgeRacerVFlush(*this);
+
 	DrainBackQueue();
 	g_texture_cache->ReadbackAll();
 }
@@ -100,6 +105,9 @@ void GSRendererHW::UpdateSettings(const Pcsx2Config::GSOptions& old_config)
 
 void GSRendererHW::VSync(u32 field, bool registers_written, bool idle_frame)
 {
+	if (m_oi == &GSHwHack::OI_RidgeRacerV)
+		GSHwHack::OI_RidgeRacerVFlush(*this);
+
 	if (GSConfig.LoadTextureReplacements)
 		GSTextureReplacements::ProcessAsyncLoadedTextures();
 
@@ -2311,6 +2319,10 @@ void GSRendererHW::HandleManualDeswizzle()
 
 void GSRendererHW::InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r)
 {
+	// A pending OI_RidgeRacerV grade lands before any transfer reads or overwrites the frame.
+	if (m_oi == &GSHwHack::OI_RidgeRacerV)
+		GSHwHack::OI_RidgeRacerVFlush(*this);
+
 	// printf("HW: [%d] InvalidateVideoMem %d,%d - %d,%d %05x (%d)\n", static_cast<int>(g_perfmon.GetFrame()), r.left, r.top, r.right, r.bottom, static_cast<int>(BITBLTBUF.DBP), static_cast<int>(BITBLTBUF.DPSM));
 
 	// This is gross, but if the EE write loops, we need to split it on the 2048 border.
@@ -2348,6 +2360,10 @@ void GSRendererHW::InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 
 void GSRendererHW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r, bool clut)
 {
+	// A pending OI_RidgeRacerV grade lands before any transfer reads or overwrites the frame.
+	if (m_oi == &GSHwHack::OI_RidgeRacerV)
+		GSHwHack::OI_RidgeRacerVFlush(*this);
+
 	// printf("HW: [%d] InvalidateLocalMem %d,%d - %d,%d %05x (%d)\n", static_cast<int>(g_perfmon.GetFrame()), r.left, r.top, r.right, r.bottom, static_cast<int>(BITBLTBUF.SBP), static_cast<int>(BITBLTBUF.SPSM));
 
 	if (clut)
@@ -2378,6 +2394,10 @@ void GSRendererHW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 
 void GSRendererHW::Move()
 {
+	// A pending OI_RidgeRacerV grade lands before any transfer reads or overwrites the frame.
+	if (m_oi == &GSHwHack::OI_RidgeRacerV)
+		GSHwHack::OI_RidgeRacerVFlush(*this);
+
 	if (m_mv && m_mv(*this))
 	{
 		// Handled by HW hack.
@@ -2851,6 +2871,11 @@ void GSRendererHW::Draw()
 	// which can cause invalid targets to be created, so might as well skip it.
 	if (GSVector4i(m_vt.m_min.p.xyxy(m_vt.m_max.p)).eq(GSVector4i::zero()) && m_vt.m_eq.rgba == 0xffff && 
 		m_vt.m_max.c.rgba32() == 0 && m_draw_env->PRIM.PRIM == GS_POINTLIST && m_env.PRIM.PRIM != GS_POINTLIST)
+		return;
+
+	// Ridge Racer V's per-page colour correction is mostly channel shuffles, which leave below
+	// before the beforeDraw hook runs: give that hack the first look.
+	if (m_oi == &GSHwHack::OI_RidgeRacerV && !GSHwHack::OI_RidgeRacerV(*this, nullptr, nullptr, nullptr))
 		return;
 
 	// Channel shuffles repeat lots of draws. Get out early if we can.

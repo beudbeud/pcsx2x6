@@ -655,6 +655,16 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 			m_shader_cache.GetProgram(&m_date.primid_ps[i], m_convert.vs, ps);
 			m_date.primid_ps[i].SetFormattedName("PrimID Destination Alpha Init %d", i);
 		}
+
+		// ChannelGrade (OI_RidgeRacerV). Optional: without it the game keeps its own per-page draws.
+		const std::string grade_ps(GetShaderSource("ps_channel_grade", GL_FRAGMENT_SHADER, *convert_glsl, {}));
+		if (m_shader_cache.GetProgram(&m_channel_grade, m_convert.vs, grade_ps))
+		{
+			m_channel_grade.SetName("Channel Grade");
+			m_channel_grade_row[0] = m_channel_grade.RegisterUniform("GradeRow0");
+			m_channel_grade_row[1] = m_channel_grade.RegisterUniform("GradeRow1");
+			m_channel_grade_row[2] = m_channel_grade.RegisterUniform("GradeRow2");
+		}
 	}
 
 	// ****************************************************************
@@ -1046,6 +1056,10 @@ void GSDeviceOGL::SetSwapInterval()
 void GSDeviceOGL::DestroyResources()
 {
 	m_shader_cache.Close();
+
+	delete m_channel_grade_lut;
+	m_channel_grade_lut = nullptr;
+	m_channel_grade.Destroy();
 
 	if (m_palette_ss != 0)
 		glDeleteSamplers(1, &m_palette_ss);
@@ -2114,6 +2128,34 @@ void GSDeviceOGL::DoStretchRect(GSTexture* sTex, const GSVector4& sRect, GSTextu
 	// Draw
 	// ************************************
 	DrawStretchRect(sRect, dRect, dTex->GetSize());
+}
+
+bool GSDeviceOGL::ChannelGrade(GSTexture* rt, const GSVector4i& rect, const u32* lut, const int mat[3][3])
+{
+	if (!m_channel_grade.IsValid() || !rt || rect.rempty())
+		return false;
+
+	if (!m_channel_grade_lut)
+		m_channel_grade_lut = CreateTexture(256, 1, 1, GSTexture::Format::Color);
+	if (!m_channel_grade_lut)
+		return false;
+	m_channel_grade_lut->Update(GSVector4i(0, 0, 256, 1), lut, 256 * sizeof(u32));
+
+	// The pass reads the frame it rewrites: grade from a copy of the rectangle, at the same coordinates.
+	GSTexture* src = CreateTexture(rt->GetWidth(), rt->GetHeight(), 1, GSTexture::Format::Color, true);
+	if (!src)
+		return false;
+	CopyRect(rt, src, rect, rect.x, rect.y);
+
+	m_channel_grade.Bind();
+	for (int k = 0; k < 3; k++)
+		m_channel_grade.Uniform4i(m_channel_grade_row[k], mat[k][0], mat[k][1], mat[k][2], 0);
+	PSSetShaderResource(1, m_channel_grade_lut);
+
+	const GSVector4 size = GSVector4(rt->GetSize()).xyxy();
+	DoStretchRect(src, GSVector4(rect) / size, rt, GSVector4(rect), m_channel_grade, Filter::Nearest);
+	Recycle(src);
+	return true;
 }
 
 void GSDeviceOGL::PresentRect(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, PresentShader shader, float shaderTime, Filter filter)

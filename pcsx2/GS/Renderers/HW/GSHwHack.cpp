@@ -5,8 +5,13 @@
 #include "GS/Renderers/HW/GSHwHack.h"
 #include "GS/GSGL.h"
 #include "GS/GSUtil.h"
+#include "GS/GSPerfMon.h"
+#include "common/Console.h"
 
 #include <cmath>
+#include <climits>
+#include <cstring>
+#include <cstdlib>
 
 static bool s_nativeres;
 
@@ -1264,6 +1269,165 @@ bool GSHwHack::OI_SmashCourt(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GSTe
 	return true;
 }
 
+// OI_RidgeRacerV's state across draws: the sequence being replaced and what the grade needs.
+static struct
+{
+	bool pending = false;
+	u32 scratch = 0xFFFFFFFFu;
+	u32 fbp = 0, fbw = 0;
+	GSVector4i rect = GSVector4i::zero();
+	alignas(16) u32 lut[256] = {};
+	int mat[3][3] = {};
+} s_rrv;
+
+bool GSHwHack::OI_RidgeRacerV(GSRendererHW& r, GSTexture* rt, GSTexture* ds, GSTextureCache::Source* t)
+{
+	// The game colour-corrects the finished frame in place, one 64x32 page at a time: six sprite
+	// draws read the page back as 8-bit indices (one colour channel per 64-wide column of a scratch
+	// buffer, through a palette), then three sprites write the three columns back over the page, the
+	// first opaque and the other two additive. ~150 pages x 9 draws, every one switching the bound
+	// target (~150 render passes per frame). Traced: one CT32 palette (a grey contrast curve) for the
+	// three channels, and each composition modulates its column by a vertex colour, so the whole effect
+	// is out = sat(sum_k (pal[channel_k] * row_k) >> 7). The draws are skipped, the palette and rows
+	// captured, and the grade is applied once over the covered rectangle when the sequence ends
+	// (OI_RidgeRacerVFlush: next unrelated draw, or vsync).
+	// Called from the top of GSRendererHW::Draw (the conversions are channel shuffles, which never
+	// reach the usual beforeDraw call site), so the draw rectangle comes from the vertex bounds.
+	if (!RPRIM->TME || r.m_vt.m_primclass != GS_SPRITE_CLASS)
+	{
+		OI_RidgeRacerVFlush(r);
+		return true;
+	}
+	const int x0 = static_cast<int>(r.m_vt.m_min.p.x), y0 = static_cast<int>(r.m_vt.m_min.p.y);
+	const int x1 = static_cast<int>(r.m_vt.m_max.p.x), y1 = static_cast<int>(r.m_vt.m_max.p.y);
+	const int w = x1 - x0, h = y1 - y0;
+
+	// PCSX2_RRV_TRACE=1: the registers the faithful single-pass version needs (palettes, blend, masks).
+	static const bool s_trace = std::getenv("PCSX2_RRV_TRACE") != nullptr;
+	if (s_trace)
+	{
+		static int s_left = -1, s_frames = 0, s_frame = -1, s_conv = 0, s_comp = 0;
+		static int s_ux0 = 9999, s_uy0 = 9999, s_ux1 = -1, s_uy1 = -1;
+		static u32 s_hash[3][8];
+		static int s_nhash[3];
+		const bool conv = RTEX0.PSM == PSMT8 && !RPRIM->ABE && RFRAME.FBW == 10 && RTEX0.TBW == 20 && r.m_vertex->tail >= 32;
+		const bool comp = RTEX0.PSM == PSMCT32 && r.m_vertex->tail == 2 && w <= 64 && h <= 32 && RFRAME.Block() == 0 && RTEX0.TBW == 10;
+		if (g_perfmon.GetFrame() != s_frame)
+		{
+			if (s_frame >= 0 && s_conv && s_frames < 6)
+			{
+				s_frames++;
+				Console.WriteLn("RRVTRACE frame: conv=%d comp=%d union=%d,%d-%d,%d clut hashes per column: %d %d %d", s_conv, s_comp,
+					s_ux0, s_uy0, s_ux1, s_uy1, s_nhash[0], s_nhash[1], s_nhash[2]);
+			}
+			s_frame = g_perfmon.GetFrame();
+			s_conv = s_comp = 0; s_ux0 = s_uy0 = 9999; s_ux1 = s_uy1 = -1; s_nhash[0] = s_nhash[1] = s_nhash[2] = 0;
+		}
+		if (conv)
+		{
+			s_conv++;
+			if (s_left < 0)
+				s_left = 24;
+			r.m_mem.m_clut.Read32(RTEX0, r.m_draw_env->TEXA);
+			const u32* clut = r.m_mem.m_clut;
+			u32 hsh = 2166136261u;
+			for (int i = 0; i < 256; i++)
+				hsh = (hsh ^ clut[i]) * 16777619u;
+			const int col = std::clamp(x0 / 64, 0, 2);
+			bool seen = false;
+			for (int i = 0; i < s_nhash[col]; i++)
+				seen |= (s_hash[col][i] == hsh);
+			if (!seen && s_nhash[col] < 8)
+				s_hash[col][s_nhash[col]++] = hsh;
+			if (s_left > 0)
+				Console.WriteLn("RRVTRACE   clut col%d hash=%08x [0]=%08x [1]=%08x [64]=%08x [128]=%08x [192]=%08x [255]=%08x", col, hsh,
+					clut[0], clut[1], clut[64], clut[128], clut[192], clut[255]);
+		}
+		if (comp)
+		{
+			s_comp++;
+			s_ux0 = std::min(s_ux0, x0); s_uy0 = std::min(s_uy0, y0); s_ux1 = std::max(s_ux1, x1); s_uy1 = std::max(s_uy1, y1);
+		}
+		if (s_left > 0)
+		{
+			s_left--;
+			Console.WriteLn("RRVTRACE n%llu %s FBP=%x FBW=%u PSM=%x FBMSK=%08x | TBP0=%x TBW=%u TPSM=%x TW=%u TH=%u TCC=%u TFX=%u CBP=%x CPSM=%x CSM=%u CSA=%u CLD=%u | "
+				"FST=%u ABE=%u ALPHA=%u%u%u%u FIX=%u PABE=%u COLCLAMP=%u DTHE=%u FBA=%u TEXA=%u/%u/%u | xy=%d,%d-%d,%d uv=%.1f,%.1f-%.1f,%.1f rgba=%d,%d,%d,%d-%d,%d,%d,%d verts=%u",
+				(unsigned long long)r.s_n, conv ? "CONV" : (comp ? "COMP" : "----"), RFRAME.Block(), RFRAME.FBW, RFRAME.PSM, RFRAME.FBMSK,
+				RTEX0.TBP0, RTEX0.TBW, RTEX0.PSM, RTEX0.TW, RTEX0.TH, RTEX0.TCC, RTEX0.TFX, RTEX0.CBP, RTEX0.CPSM, RTEX0.CSM, RTEX0.CSA, RTEX0.CLD,
+				RPRIM->FST, RPRIM->ABE, r.m_context->ALPHA.A, r.m_context->ALPHA.B, r.m_context->ALPHA.C, r.m_context->ALPHA.D, r.m_context->ALPHA.FIX,
+				r.m_draw_env->PABE.PABE, r.m_draw_env->COLCLAMP.CLAMP, r.m_draw_env->DTHE.DTHE, r.m_context->FBA.FBA,
+				r.m_draw_env->TEXA.TA0, r.m_draw_env->TEXA.TA1, r.m_draw_env->TEXA.AEM,
+				x0, y0, x1, y1, r.m_vt.m_min.t.x, r.m_vt.m_min.t.y, r.m_vt.m_max.t.x, r.m_vt.m_max.t.y,
+				r.m_vt.m_min.c.x, r.m_vt.m_min.c.y, r.m_vt.m_min.c.z, r.m_vt.m_min.c.w, r.m_vt.m_max.c.x, r.m_vt.m_max.c.y, r.m_vt.m_max.c.z, r.m_vt.m_max.c.w,
+				r.m_vertex->tail);
+		}
+	}
+
+	// Conversion: an 8-bit read of the frame into the scratch buffer, opaque, at most 192x32.
+	const bool conversion = RTEX0.PSM == PSMT8 && !RPRIM->ABE && RFRAME.FBW == 10 && RTEX0.TBW == 20 && r.m_vertex->tail >= 32 &&
+		w <= 64 && h <= 32 && x1 <= 192;
+	// Composition: a 64x32 sprite reading one of the scratch buffer's three columns.
+	const bool composition = s_rrv.scratch != 0xFFFFFFFFu && RTEX0.PSM == PSMCT32 && RTEX0.TBP0 >= s_rrv.scratch &&
+		RTEX0.TBP0 < s_rrv.scratch + 0x60 && r.m_vertex->tail == 2 && w <= 64 && h <= 32;
+
+	if (!conversion && !composition)
+	{
+		OI_RidgeRacerVFlush(r);
+		return true;
+	}
+
+	// Without the single-pass grade the game keeps its own draws (correct, slow).
+	if (!g_gs_device->SupportsChannelGrade())
+		return true;
+
+	if (conversion)
+	{
+		s_rrv.scratch = RFRAME.Block();
+		if (!s_rrv.pending)
+		{
+			// One palette for the three channels and every page of a frame (traced): take the first.
+			r.m_mem.m_clut.Read32(RTEX0, r.m_draw_env->TEXA);
+			std::memcpy(s_rrv.lut, static_cast<const u32*>(r.m_mem.m_clut), sizeof(s_rrv.lut));
+			s_rrv.pending = true;
+			s_rrv.rect = GSVector4i(INT_MAX, INT_MAX, INT_MIN, INT_MIN);
+		}
+		GL_INS("OI_RidgeRacerV: skip page conversion (%lld)", r.s_n);
+		return false;
+	}
+
+	// The composition's vertex colour is the row its column (= source channel) is mixed with.
+	const int column = std::clamp(static_cast<int>((RTEX0.TBP0 - s_rrv.scratch) / 0x20), 0, 2);
+	s_rrv.mat[column][0] = r.m_vt.m_min.c.x;
+	s_rrv.mat[column][1] = r.m_vt.m_min.c.y;
+	s_rrv.mat[column][2] = r.m_vt.m_min.c.z;
+	s_rrv.fbp = RFRAME.Block();
+	s_rrv.fbw = RFRAME.FBW;
+	s_rrv.rect = s_rrv.rect.runion(GSVector4i(x0, y0, x1, y1));
+	GL_INS("OI_RidgeRacerV: skip page composition (%lld)", r.s_n);
+	return false;
+}
+
+void GSHwHack::OI_RidgeRacerVFlush(GSRendererHW& r)
+{
+	if (!s_rrv.pending)
+		return;
+	s_rrv.pending = false;
+	if (s_rrv.rect.rempty())
+		return;
+
+	GSTextureCache::Target* rt = g_texture_cache->FindOverlappingTarget(s_rrv.fbp, s_rrv.fbw, PSMCT32, s_rrv.rect);
+	const bool ok = rt && rt->m_TEX0.TBP0 == s_rrv.fbp && rt->m_TEX0.TBW == s_rrv.fbw && rt->m_type == GSTextureCache::RenderTarget &&
+		g_gs_device->ChannelGrade(rt->GetTexture(), GSVector4i(GSVector4(s_rrv.rect) * GSVector4(rt->GetScale())), s_rrv.lut, s_rrv.mat);
+	if (!ok)
+	{
+		static bool s_warned = false;
+		if (!s_warned)
+			Console.Warning("OI_RidgeRacerV: no render target for the colour grade at %x; frame left ungraded", s_rrv.fbp);
+		s_warned = true;
+	}
+}
+
 #undef RPRIM
 #undef RCONTEXT
 
@@ -1514,6 +1678,7 @@ const GSHwHack::Entry<GSRendererHW::OI_Ptr> GSHwHack::s_before_draw_functions[] 
 	CRC_F(OI_ArTonelico2),
 	CRC_F(OI_BurnoutGames),
 	CRC_F(OI_SmashCourt),
+	CRC_F(OI_RidgeRacerV),
 };
 
 const GSHwHack::Entry<GSRendererHW::MV_Ptr> GSHwHack::s_move_handler_functions[] = {

@@ -643,6 +643,30 @@ void ps_yuv()
 }
 #endif
 
+#ifdef ps_channel_grade
+// OI_RidgeRacerV: each channel through the 256-entry palette, the three results modulated by their row
+// ((T * C) >> 7, saturated) and added with saturation, as the game's three page compositions do. Alpha kept.
+layout(binding = 1) uniform sampler2D GradeLut;
+uniform ivec4 GradeRow0;
+uniform ivec4 GradeRow1;
+uniform ivec4 GradeRow2;
+
+ivec3 grade_lut(int i)
+{
+	return ivec3(texelFetch(GradeLut, ivec2(i, 0), 0).rgb * 255.0f + 0.5f);
+}
+
+void main()
+{
+	vec4 src = texelFetch(TextureSampler, ivec2(gl_FragCoord.xy), 0);
+	ivec3 c = ivec3(src.rgb * 255.0f + 0.5f);
+	ivec3 o = min((grade_lut(c.r) * GradeRow0.xyz) >> 7, ivec3(255));
+	o = min(o + min((grade_lut(c.g) * GradeRow1.xyz) >> 7, ivec3(255)), ivec3(255));
+	o = min(o + min((grade_lut(c.b) * GradeRow2.xyz) >> 7, ivec3(255)), ivec3(255));
+	o_col0 = vec4(vec3(o) / 255.0f, src.a);
+}
+#endif
+
 #if defined(ps_primid_image_init_0) || defined(ps_primid_image_init_1) || defined(ps_primid_image_init_2) || defined(ps_primid_image_init_3)
 
 void main()

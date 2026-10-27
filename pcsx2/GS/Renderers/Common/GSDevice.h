@@ -1734,6 +1734,13 @@ public:
 
 	virtual void ClearSamplerCache() = 0;
 
+	/// Per-pixel colour grade, in place over `rect` of `rt`: each channel goes through the 256-entry RGBA8
+	/// palette `lut`, and the three results are mixed by `mat` (row k = the RGB modulation of channel k's
+	/// result, 128 = 1.0) the way the GS modulates and adds them, saturating at 255. Alpha is kept.
+	/// Backends without it return false. (Ridge Racer V's colour correction, OI_RidgeRacerV.)
+	virtual bool SupportsChannelGrade() const { return false; }
+	virtual bool ChannelGrade(GSTexture* rt, const GSVector4i& rect, const u32* lut, const int mat[3][3]) { return false; }
+
 	void ClearCurrent();
 	void Merge(GSTexture* sTex[3], GSVector4* sRect, GSVector4* dRect, const GSVector2i& fs, const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c);
 	void Interlace(const GSVector2i& ds, int field, int mode, float yoffset);

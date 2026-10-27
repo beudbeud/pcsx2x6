@@ -258,6 +258,11 @@ private:
 		GLProgram primid_ps[4];
 	} m_date;
 
+	// ChannelGrade: the program, its three matrix-row uniforms and the 256x1 palette texture.
+	GLProgram m_channel_grade;
+	int m_channel_grade_row[3] = {-1, -1, -1};
+	GSTexture* m_channel_grade_lut = nullptr;
+
 	struct
 	{
 		GLProgram ps;
@@ -400,6 +405,8 @@ public:
 	GSTexture* InitPrimDateTexture(GSTexture* rt, const GSVector4i& area, SetDATM datm);
 
 	void CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, u32 destX, u32 destY) override;
+	bool SupportsChannelGrade() const override { return m_channel_grade.IsValid(); }
+	bool ChannelGrade(GSTexture* rt, const GSVector4i& rect, const u32* lut, const int mat[3][3]) override;
 
 	void PushDebugGroup(const char* fmt, ...) override;
 	void PopDebugGroup() override;
