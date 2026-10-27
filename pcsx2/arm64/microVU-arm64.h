@@ -113,7 +113,8 @@
 //  29 — mVU: the flag queue reorder opens with the shuffle that fits (ARMSX2 a9bb7f2ae0)
 //  30 — mVU: the single-lane clamp writes its lane once (ARMSX2 aa3b569316)
 //  31 — mVU: the sign clamp loads its row's two bounds together (ARMSX2 2fbaa68522)
-static constexpr u32 kMvuCompilerAbiVersion = 31;
+//  32 — mVU: every clamped operand folds the copy in front of it (ARMSX2 a52c0a4529)
+static constexpr u32 kMvuCompilerAbiVersion = 32;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
