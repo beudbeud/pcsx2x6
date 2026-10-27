@@ -14,8 +14,6 @@
 #include "DEV9/ACCORE.h"
 #include "DEV9/ACUART.h"
 #include "IopHw.h"
-#include "IopThread/SharedWord.h"
-#include "IopThread/OwnerAsserts.h"
 
 uptr *psxMemWLUT = nullptr;
 const uptr *psxMemRLUT = nullptr;
@@ -103,6 +101,42 @@ void iopMemReset()
 	std::memset(iopMem, 0, sizeof(*iopMem));
 }
 
+#include "IopThread/SharedWord.h"
+#include "IopThread/OwnerAsserts.h"
+
+// ---- The SBUS registers, IOP side ---------------------------------------------------------------
+// The IOP's 0x1D000000 window onto the words the EE reaches at 0x1000F200. The words are the EE's, in
+// psHu, and the EE thread writes them too, so every access is one atomic operation (SharedWord.h). A
+// halfword access works on the low half of the word it falls in.
+
+// Write to the control register, 0x1D000040. Bits 4-7 of the value toggle together: if any of them is set
+// in the register all of them are cleared, otherwise all are set. A value with bit 5 or 7 first resets
+// bits 12-15 of the register and sets bit 13. One atomic step, so the EE's change to bit 8 cannot land
+// between the reset and the toggle, or be undone by them.
+static __fi void IopSbusWriteControl(u32 value)
+{
+	const u32 temp = value & 0xF0;
+	const bool reset = (value & 0x20) || (value & 0x80);
+	SharedWord::Update(psHu32(SBUS_F240), [temp, reset](u32 reg) {
+		if (reset)
+		{
+			reg &= ~0xF000;
+			reg |= 0x2000;
+		}
+		if (reg & temp)
+			reg &= ~temp;
+		else
+			reg |= temp;
+		return reg;
+	});
+}
+
+// Replace the low half of a register word, keeping the high half.
+static __fi void IopSbusWriteLow16(u32& reg, u16 value)
+{
+	SharedWord::Update(reg, [value](u32 old) { return (old & 0xFFFF0000u) | value; });
+}
+
 u8 iopMemRead8(u32 mem)
 {
 	mem &= 0x1fffffff;
@@ -155,20 +189,278 @@ u8 iopMemRead8(u32 mem)
 	}
 }
 
-#include "IopThread/SharedWord.h"
-
-// ---- The SBUS registers, IOP side ---------------------------------------------------------------
-// The IOP's 0x1D000000 window onto the words the EE reaches at 0x1000F200. The words are the EE's, in
-// psHu, and the EE thread writes them too, so every access is one atomic operation (SharedWord.h). A
-// halfword access works on the low half of the word it falls in.
-
-// Write to the control register, 0x1D000040. Bits 4-7 of the value toggle together: if any of them is set
-// in the register all of them are cleared, otherwise all are set. A value with bit 5 or 7 first resets
-// bits 12-15 of the register and sets bit 13. One atomic step, so the EE's change to bit 8 cannot land
-// between the reset and the toggle, or be undone by them.
-static __fi void IopSbusWriteControl(u32 value)
+u16 iopMemRead16(u32 mem)
 {
-	const IopSbusWriteControl(value);
+	u16 V;
+	mem &= 0x1fffffff;
+	u32 t = mem >> 16;
+
+	if (t == 0x1f80)
+	{
+		switch( mem & 0xf000 )
+		{
+			case 0x1000: return IopMemory::iopHwRead16_Page1(mem);
+			case 0x3000: return IopMemory::iopHwRead16_Page3(mem);
+			case 0x8000: return IopMemory::iopHwRead16_Page8(mem);
+
+			default:
+				return psxHu16(mem);
+		}
+	} else if (t == 0x1241) {
+		if (IS_ACUART_RANGE(mem)) {
+			V = ACUART::Read16(mem);
+    		//Console.Error("%-16s %08X:  %04X", "ACUART::Read16", mem, V);
+		} else {
+			V = ACCORE::Read16(mem);
+		}
+		return V;
+	} else if (t == ACJV_RANGE) {
+		V = ACJV::Read16(mem);
+    	// Console.Error("%-16s %08X:  %04X", "ACJV::read16", mem, V);
+		return V;
+	} else if (t == ACSRAM_RANGE) {
+		return ACSRAM::Read16(mem);
+	} else if ((t & 0xFF00) == ACRAM_RANGE) {
+		return ACRAM::Read16(mem);
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+		V = ACATA::read16(mem);
+		return V;
+	}
+	else
+	{
+		const u8* p = (const u8*)(psxMemRLUT[mem >> 16]);
+		if (p != NULL)
+		{
+			if (t == 0x1d00)
+			{
+				u16 ret;
+				switch(mem & 0xF0)
+				{
+				case 0x00:
+					ret = static_cast<u16>(SharedWord::LoadAcquire(psHu32(SBUS_F200)));
+					break;
+				case 0x10:
+					ret = static_cast<u16>(SharedWord::LoadAcquire(psHu32(SBUS_F210)));
+					break;
+				case 0x40:
+					ret = static_cast<u16>(SharedWord::LoadAcquire(psHu32(SBUS_F240))) | 0x0002;
+					break;
+				case 0x60:
+					ret = 0;
+					break;
+				default:
+					ret = psxHu16(mem);
+					break;
+				}
+				//SIF_LOG("Sif reg read %x value %x", mem, ret);
+				return ret;
+			}
+			return *(const u16 *)(p + (mem & 0xffff));
+		}
+		else
+		{
+			if (t == 0x1F90)
+				return SPU2read(mem);
+			if (t == 0x1000)
+				return DEV9read16(mem);
+			PSXMEM_LOG("err lh %8.8lx", mem);
+			return 0;
+		}
+	}
+}
+
+u32 iopMemRead32(u32 mem)
+{
+	mem &= 0x1fffffff;
+	u32 t = mem >> 16;
+
+	if (t == 0x1f80)
+	{
+		switch( mem & 0xf000 )
+		{
+			case 0x1000: return IopMemory::iopHwRead32_Page1(mem);
+			case 0x3000: return IopMemory::iopHwRead32_Page3(mem);
+			case 0x8000: return IopMemory::iopHwRead32_Page8(mem);
+
+			default:
+				return psxHu32(mem);
+		}
+	} else
+	{
+		//see also Hw.c
+		const u8* p = (const u8*)(psxMemRLUT[mem >> 16]);
+		if (p != NULL)
+		{
+			if (t == 0x1d00)
+			{
+				u32 ret;
+				switch(mem & 0x8F0)
+				{
+				case 0x00:
+					ret = SharedWord::LoadAcquire(psHu32(SBUS_F200));
+					break;
+				case 0x10:
+					ret = SharedWord::LoadAcquire(psHu32(SBUS_F210));
+					break;
+				case 0x20:
+					ret = SharedWord::LoadAcquire(psHu32(SBUS_F220));
+					break;
+				case 0x30:	// EE Side
+					ret = SharedWord::LoadAcquire(psHu32(SBUS_F230));
+					break;
+				case 0x40:
+					ret = SharedWord::LoadAcquire(psHu32(SBUS_F240)) | 0xF0000002;
+					break;
+				case 0x60:
+					ret = 0;
+					break;
+
+				default:
+					ret = psxHu32(mem);
+					break;
+				}
+				//SIF_LOG("Sif reg read %x value %x", mem, ret);
+				return ret;
+			}
+			return *(const u32 *)(p + (mem & 0xffff));
+		}
+		else
+		{
+			if (t == 0x1000)
+				return DEV9read32(mem);
+			return 0;
+		}
+	}
+}
+
+void iopMemWrite8(u32 mem, u8 value)
+{
+	IOP_SIDE_ASSERT();
+	mem &= 0x1fffffff;
+	u32 t = mem >> 16;
+
+	if (t == 0x1f80)
+	{
+		switch( mem & 0xf000 )
+		{
+			case 0x1000: IopMemory::iopHwWrite8_Page1(mem,value); break;
+			case 0x3000: IopMemory::iopHwWrite8_Page3(mem,value); break;
+			case 0x8000: IopMemory::iopHwWrite8_Page8(mem,value); break;
+
+			default:
+				psxHu8(mem) = value;
+			break;
+		}
+	}
+	else if (t == 0x1f40)
+	{
+		psxHw4Write8(mem, value);
+	}
+	else if ((t & 0xFF00) == ACRAM_RANGE)
+	{
+		u16 cur = ACRAM::Read16(mem & ~1);
+		if (mem & 1) cur = (cur & 0x00FF) | ((u16)value << 8);
+		else         cur = (cur & 0xFF00) | value;
+		ACRAM::Write16(mem & ~1, cur);
+	}
+	else if ((t & 0xFF00) == ACATA_RANGE)
+	{
+		u16 cur = ACATA::read16(mem & ~1);
+		if (mem & 1) cur = (cur & 0x00FF) | ((u16)value << 8);
+		else         cur = (cur & 0xFF00) | value;
+		ACATA::write16(mem & ~1, cur);
+	}
+	else if (t == ACJV_RANGE)
+	{
+		if (ACJV::enabled) ACJV::Write16(mem & ~1, value);
+	}
+	else if (t == 0x1241)
+	{
+		ACCORE::Write16(mem & ~1, value);
+	}
+	else
+	{
+		u8* p = (u8 *)(psxMemWLUT[mem >> 16]);
+		if (p != NULL && !(psxRegs.CP0.n.Status & 0x10000) )
+		{
+			*(u8  *)(p + (mem & 0xffff)) = value;
+			psxCpu->Clear(mem&~3, 1);
+		}
+		else
+		{
+			if (t == 0x1d00)
+			{
+				Console.WriteLn("sw8 [0x%08X]=0x%08X", mem, value);
+				psxSu8(mem) = value;
+				return;
+			}
+			if (t == 0x1000)
+			{
+				DEV9write8(mem, value); return;
+			}
+			PSXMEM_LOG("err sb %8.8lx = %x", mem, value);
+		}
+	}
+}
+
+void iopMemWrite16(u32 mem, u16 value)
+{
+	IOP_SIDE_ASSERT();
+	mem &= 0x1fffffff;
+	u32 t = mem >> 16;
+
+	if (t == 0x1f80)
+	{
+		switch( mem & 0xf000 )
+		{
+			case 0x1000: IopMemory::iopHwWrite16_Page1(mem,value); break;
+			case 0x3000: IopMemory::iopHwWrite16_Page3(mem,value); break;
+			case 0x8000: IopMemory::iopHwWrite16_Page8(mem,value); break;
+
+			default:
+				psxHu16(mem) = value;
+				break;
+		}
+	
+	} else if ((t & 0xFF00) == ACATA_RANGE) {
+		ACATA::write16(mem, value);
+	} else if (t == ACJV_RANGE) {
+		if (ACJV::enabled) {
+			ACJV::Write16(mem, value);
+		}
+	} else if ((t & 0xFF00) == ACRAM_RANGE) {
+		ACRAM::Write16(mem, value);
+	} else if (t == ACSRAM_RANGE) {
+		ACSRAM::Write16(mem, value);
+	} else if (t == 0x1241) {
+		if (IS_ACUART_RANGE(mem))
+			ACUART::Write16(mem, value);
+		else
+			ACCORE::Write16(mem, value);
+	} else if ((t & 0xFF00) == 0x1300) {
+		ACCORE::Interrupt(mem, value);
+	} else
+	{
+		u8* p = (u8 *)(psxMemWLUT[mem >> 16]);
+		if (p != NULL && !(psxRegs.CP0.n.Status & 0x10000) )
+		{
+			if( t==0x1D00 ) Console.WriteLn("sw16 [0x%08X]=0x%08X", mem, value);
+			*(u16 *)(p + (mem & 0xffff)) = value;
+			psxCpu->Clear(mem&~3, 1);
+		}
+		else
+		{
+			if (t == 0x1d00)
+			{
+				switch (mem & 0x8f0)
+				{
+					case 0x10:
+						// write to ps2 mem
+						IopSbusWriteLow16(psHu32(SBUS_F210), value);
+						return;
+					case 0x40:
+					{
+						IopSbusWriteControl(value);
 						return;
 					}
 					case 0x60:
@@ -193,6 +485,7 @@ static __fi void IopSbusWriteControl(u32 value)
 
 void iopMemWrite32(u32 mem, u32 value)
 {
+	IOP_SIDE_ASSERT();
 	mem &= 0x1fffffff;
 	u32 t = mem >> 16;
 
@@ -386,21 +679,18 @@ bool IOPMemoryInterface::ReadBytes(u32 address, void* dest, u32 size)
 
 bool IOPMemoryInterface::Write8(u32 address, u8 value)
 {
-	IOP_SIDE_ASSERT();
 	iopMemWrite8(address, value);
 	return true;
 }
 
 bool IOPMemoryInterface::Write16(u32 address, u16 value)
 {
-	IOP_SIDE_ASSERT();
 	iopMemWrite16(address, value);
 	return true;
 }
 
 bool IOPMemoryInterface::Write32(u32 address, u32 value)
 {
-	IOP_SIDE_ASSERT();
 	iopMemWrite32(address, value);
 	return true;
 }
@@ -417,7 +707,6 @@ bool IOPMemoryInterface::Write128(u32 address, u128 value)
 
 bool IOPMemoryInterface::WriteBytes(u32 address, void* src, u32 size)
 {
-	IOP_SIDE_ASSERT();
 	return iopMemSafeWriteBytes(address, src, size);
 }
 
