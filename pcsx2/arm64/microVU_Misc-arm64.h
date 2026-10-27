@@ -147,6 +147,10 @@ __fi static const void* mVUmacWeightVec(u32 keepMask, bool reverse, int shift)
 	return &mVUglob.macWeights.byMask[reverse ? 1 : 0][keepMask & 0xF][0];
 }
 
+// The lane a single-lane op writes, by index (X = 0).
+// A macro: mV / microVU are declared after this header.
+#define mVUssLane(mVU) (_X ? 0 : (_Y ? 1 : (_Z ? 2 : 3)))
+
 static const uint _Ibit_ = 1 << 31;
 static const uint _Ebit_ = 1 << 30;
 static const uint _Mbit_ = 1 << 29;
