@@ -66,6 +66,7 @@ protected:
 	int counter;
 	int neonWatermark; // see getNeonWatermark()
 	int index; // VU0 or VU1
+	bool neonCop2Mode; // SL-14: macro mode — q8-q15 unallocatable (EE pinned FPU consts and retained entries)
 
 	// The run of clone-write copies allocReg emitted at the end of the buffer,
 	// while they are still its final words: dst holds nothing but a copy of
@@ -324,6 +325,7 @@ public:
 		clearGPR(27);
 		gprMap[26].usable = !cop2mode;
 		gprMap[27].usable = !cop2mode;
+		neonCop2Mode = cop2mode;
 		for (int i = 0; i < neonAllocTotal; i++)
 			clearNeon(i);
 		for (int i = 0; i < gprAllocCount; i++)

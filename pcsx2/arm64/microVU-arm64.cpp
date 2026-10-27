@@ -1108,45 +1108,6 @@ static void mVUGenerateCycleBreak(mV)
 	armEndBlock();
 }
 
-EeFpuModelCallee mVUModelStubTarget(int stub, int vuIndex)
-{
-	using namespace EeFpuModelFrame;
-	switch (stub)
-	{
-		case mVUModelStubDivide:            return {reinterpret_cast<const void*>(&EeFpuModel::Divide), kVecNone};
-		case mVUModelStubSqrtBits:          return {reinterpret_cast<const void*>(&EeFpuModel::SqrtBits), kVecSqrt};
-		case mVUModelStubRecipSqrt:         return {reinterpret_cast<const void*>(&EeFpuModel::RecipSqrt), kVecSqrt};
-		case mVUModelStubMulShortTailBand:
-			return {reinterpret_cast<const void*>(
-				vuIndex ? &vuMulShortTailBandVu1 : &vuMulShortTailBandVu0), kVecNone};
-		case mVUModelStubEfuSum:            return {reinterpret_cast<const void*>(&VuEfuModel::Sum), kVecPoly};
-		case mVUModelStubEfuSquareSum:      return {reinterpret_cast<const void*>(&VuEfuModel::SquareSum), kVecPoly};
-		case mVUModelStubEfuRecipSquareSum: return {reinterpret_cast<const void*>(&VuEfuModel::RecipSquareSum), kVecPoly};
-		case mVUModelStubEfuLength:         return {reinterpret_cast<const void*>(&VuEfuModel::Length), kVecPoly};
-		case mVUModelStubEfuRecipLength:    return {reinterpret_cast<const void*>(&VuEfuModel::RecipLength), kVecPoly};
-		case mVUModelStubEfuRecip:          return {reinterpret_cast<const void*>(&VuEfuModel::Recip), kVecNone};
-		case mVUModelStubEfuSqrt:           return {reinterpret_cast<const void*>(&VuEfuModel::Sqrt), kVecSqrt};
-		case mVUModelStubEfuRecipSqrt:      return {reinterpret_cast<const void*>(&VuEfuModel::RecipSqrt), kVecSqrt};
-		case mVUModelStubEfuSin:            return {reinterpret_cast<const void*>(&VuEfuModel::Sin), kVecPoly};
-		case mVUModelStubEfuExp:            return {reinterpret_cast<const void*>(&VuEfuModel::Exp), kVecPoly};
-		case mVUModelStubEfuAtan:           return {reinterpret_cast<const void*>(&VuEfuModel::Atan), kVecPoly};
-		case mVUModelStubEfuAtanRatio:      return {reinterpret_cast<const void*>(&VuEfuModel::AtanRatio), kVecPoly};
-		default: break;
-	}
-	pxFail("unknown model stub");
-	return {nullptr, 8};
-}
-
-void mVUGenerateModelStubs(mV)
-{
-	for (int i = 0; i < mVUModelStubCount; i++)
-	{
-		mVU.modelStubs[i] = armStartBlock();
-		armDynGenEeFpuModelStub(mVUModelStubTarget(i, mVU.index));
-		armEndBlock();
-	}
-}
-
 // Resets Rec Data
 void mVUreset(microVU& mVU, bool resetReserve)
 {
@@ -1208,7 +1169,6 @@ void mVUreset(microVU& mVU, bool resetReserve)
 	mVUGenerateCopyPipelineState(mVU);
 	mVUGenerateEndProgramFlagsHelper(mVU);
 	mVUGenerateCycleBreak(mVU);
-	mVUGenerateModelStubs(mVU);
 
 	mVU.regs().nextBlockCycles = 0;
 	memset(&mVU.prog.lpState, 0, sizeof(mVU.prog.lpState));
