@@ -136,7 +136,8 @@
 //  52 — mVU: IBEQ/IBNE XOR the cached Is in place (ARMSX2 348bb28f21)
 //  53 — mVU: single-lane MOVE and MR32 insert into a cached destination (ARMSX2 fac807db26)
 //  54 — mVU: an E-bit conditional branch does not reorder flags for a successor (ARMSX2 86a94fa3ca)
-static constexpr u32 kMvuCompilerAbiVersion = 54;
+//  55 — mVU: a write with an empty destination field leaves a temp slot, not a clean copy (ARMSX2 eb205ba48b)
+static constexpr u32 kMvuCompilerAbiVersion = 55;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
