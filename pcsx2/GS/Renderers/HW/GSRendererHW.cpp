@@ -7012,6 +7012,10 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 	// We don't want to enable blend mix if we are doing a multi pass, it's useless.
 	blend_mix &= !(bmix1_multi_pass1 || bmix1_multi_pass2 || bmix3_multi_pass);
 
+	// The over-one blend-mix promotion (see the Basic case below), named here so the barrier
+	// strength it needs can be decided at emission time.
+	const bool blend_mix_alpha_over_one = blend_mix && (alpha_c0_high_max_one || alpha_c2_high_one);
+
 	const bool one_barrier = m_conf.require_one_barrier || blend_ad_alpha_masked;
 	// Condition 1: Require full sw blend for full barrier.
 	// Condition 2: One barrier is already enabled, prims don't overlap or is a channel shuffle so let's use sw blend instead.
@@ -7085,13 +7089,14 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 			// dual-source GPUs do not. Refuse them here too: an approximation with no upper bound
 			// on its error is not a blending-accuracy trade, it is a wrong picture.
 			//
-			// Deliberately not gated on (no_prim_overlap || barriers_supported) the way
-			// blend_requires_barrier is: force_sw_blending takes the no-dual-source GPUs down this
-			// same road with no such gate, and that is the arm measured correct on all six. A GPU
-			// with neither a barrier nor an in-tile read gets one pre-draw destination snapshot for
-			// the whole draw, so overlapping primitives composite one draw stale -- which is still
-			// bounded, where dropping the destination term is not.
-			sw_blending |= blend_mix && (alpha_c0_high_max_one || alpha_c2_high_one);
+			// A GPU with neither a barrier nor an in-tile read gets one pre-draw destination
+			// snapshot for the whole draw, so a draw whose own primitives overlap composites
+			// everything after the first primitive against colour the earlier ones already replaced.
+			// That error is not small (ARMSX2: 67 levels on Ace Combat 5's cloud sprites, against the
+			// 25 of the hardware mix it replaced), so exclude PRIM_OVERLAP_YES there and leave those
+			// draws the old approximation. UNKNOWN stays promoted, which is the point: force_sw_blending
+			// takes the no-dual-source GPUs down this same road with no gate at all.
+			sw_blending |= blend_mix_alpha_over_one && (barriers_supported || m_prim_overlap != PRIM_OVERLAP_YES);
 			// Do not run BLEND MIX if sw blending is already present, it's less accurate.
 			blend_mix &= !sw_blending;
 			sw_blending |= blend_mix;
@@ -7289,6 +7294,15 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		// TODO: We can expand pabe hw to Cd*(1 - Alpha) where alpha is As or Af and replace the formula with Cs + 0 when As < 128,
 		// but need to find test cases where it makes a difference,
 		// C 12 Final Resistance triggers it but there's no difference and it's a psx game.
+		// A draw promoted only by the over-one rule needs a destination read, but how strong a
+		// one depends on whether its own primitives overlap. When they do not, one pre-draw
+		// snapshot is the exact destination for every primitive, so a single barrier suffices;
+		// only a self-overlapping promoted draw needs the per-primitive full barrier. A draw whose
+		// overlap the cheap test cannot settle (UNKNOWN) keeps the full barrier.
+		const bool promoted_by_over_one_only = blend_mix_alpha_over_one && !blend_requires_barrier &&
+		                                       !prefer_sw_blend && !free_blend && !force_sw_blending;
+		const bool promoted_safe = promoted_by_over_one_only && no_prim_overlap;
+
 		if (sw_blending)
 		{
 			if (accumulation_blend && (blend.op != GSDevice::OP_REV_SUBTRACT))
@@ -7300,7 +7314,7 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 
 				m_conf.ps.pabe = 1;
 			}
-			else if (features.feedback_loops())
+			else if (features.feedback_loops() && !promoted_safe)
 			{
 				// PABE sw blend:
 				// Disable hw/sw mix and do pure sw blend with reading the framebuffer.
