@@ -10,14 +10,17 @@ ChdImage::~ChdImage()
     Close();
 }
 
-bool ChdImage::Open(const std::string& path)
+bool ChdImage::Open(const std::string& path, std::string* why)
 {
     Close();
 
     chd_error err = chd_open(path.c_str(), CHD_OPEN_READ, nullptr, &m_chd);
 
     if (err != CHDERR_NONE) {
-        Console.ErrorFmt("{} failed to open CHD: {}", __FUNCTION__, (int)err);
+        m_chd = nullptr;
+        Console.ErrorFmt("{} failed to open CHD: {}", __FUNCTION__, chd_error_string(err));
+        if (why)
+            *why = chd_error_string(err);
         return false;
     }
 
