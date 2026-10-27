@@ -46,6 +46,7 @@ namespace mVUPersist
 		kStubEndFlagsB,
 		kStubResumeXG,
 		kStubCopyPLStateResume,
+		kStubExitFunctEBit,
 		kStubCount,
 	};
 
@@ -281,6 +282,7 @@ namespace mVUPersist
 			case kStubEndFlagsB:    return mVU.endProgramFlagsB;
 			case kStubResumeXG:     return mVU.resumePtrXG;
 			case kStubCopyPLStateResume: return mVU.copyPLStateResume;
+			case kStubExitFunctEBit: return mVU.exitFunctEBit;
 			default:                return nullptr;
 		}
 	}

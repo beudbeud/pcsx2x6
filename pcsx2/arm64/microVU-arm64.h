@@ -105,7 +105,8 @@
 //  21 — mVU: ILW's lane offset is added at the address's own width (ARMSX2 fe5fa851cd)
 //  22 — VU: LQD and SQD step the address off a vi00 base too (ARMSX2 b83409ff56)
 //  23 — VU: ILW's dest field names one lane through a two-bit code (ARMSX2 30af63c447)
-static constexpr u32 kMvuCompilerAbiVersion = 23;
+//  24 — mVU: raise the E-bit interrupt in front of the exit path (ARMSX2 f6f8e0f021)
+static constexpr u32 kMvuCompilerAbiVersion = 24;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
@@ -556,6 +557,8 @@ struct microVU
 	// joins startFunct's post-lookup tail with x0 as the block to enter.
 	u8* startFunctResume;
 	u8* exitFunct;
+	// VU1 only: exitFunct with the E-bit interrupt raise in front of it.
+	u8* exitFunctEBit;
 	u8* startFunctXG;
 	u8* exitFunctXG;
 	u8* waitMTVU;
