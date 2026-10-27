@@ -2657,8 +2657,7 @@ StartRecomp:
 				break;
 
 			if (memcmp(&recRAMCopy[oldBlock->startpc], PSM(oldBlock->startpc),
-					// clamp because delay slot might extend past the end of memory
-					std::min(oldBlock->size * 4, Ps2MemSize::ExposedRam - oldBlock->startpc)))
+					oldBlock->size * 4))
 			{
 				recClear(startpc, (pc - startpc) / 4);
 				s_pCurBlockEx = recBlocks.Get(HWADDR(startpc));
