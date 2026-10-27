@@ -20,6 +20,18 @@ enum
 	preClampFrom = 2,
 };
 
+// What an arithmetic step reads in place of `to`. When the last word emitted is
+// the clone-write copy that filled `to`, the step reads the register it was
+// copied from and the copy goes: every step below writes all four lanes of
+// `to` (a scalar op zeroes lanes 1-3), so nothing the copy put there survives
+// it. A clamp of `to` emitted in between ends the copy's run, and then the
+// step reads `to` as before.
+static __fi a64::VRegister mVUstepSource(mV, const a64::VRegister& to)
+{
+	const int src = mVU.regAlloc->takeCloneSource(to.GetCode());
+	return (src >= 0) ? a64::VRegister(src, 128) : to;
+}
+
 // Both operands of one arithmetic step, so the clone-write copy in front of
 // each folds rather than only the last one made (mVUclampOperands). `from` is
 // the older allocation at every call site below: a body hands out Ft, or the
@@ -36,42 +48,42 @@ static __fi void mVUclampStepOperands(mV, const a64::VRegister& to, const a64::V
 static void NEON_ADDPS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
 {
 	mVUclampStepOperands(mVU, to, from, preClamped, _X_Y_Z_W);
-	armAsm->Fadd(to.V4S(), to.V4S(), from.V4S());
+	armAsm->Fadd(to.V4S(), mVUstepSource(mVU, to).V4S(), from.V4S());
 	mVUclamp4(mVU, to, RQSCRATCH3, _X_Y_Z_W);
 }
 
 static void NEON_SUBPS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
 {
 	mVUclampStepOperands(mVU, to, from, preClamped, _X_Y_Z_W);
-	armAsm->Fsub(to.V4S(), to.V4S(), from.V4S());
+	armAsm->Fsub(to.V4S(), mVUstepSource(mVU, to).V4S(), from.V4S());
 	mVUclamp4(mVU, to, RQSCRATCH3, _X_Y_Z_W);
 }
 
 static void NEON_MULPS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
 {
 	mVUclampStepOperands(mVU, to, from, preClamped, _X_Y_Z_W);
-	armAsm->Fmul(to.V4S(), to.V4S(), from.V4S());
+	armAsm->Fmul(to.V4S(), mVUstepSource(mVU, to).V4S(), from.V4S());
 	mVUclamp4(mVU, to, RQSCRATCH3, _X_Y_Z_W);
 }
 
 static void NEON_ADDSS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
 {
 	mVUclampStepOperands(mVU, to, from, preClamped, 0x8);
-	armAsm->Fadd(a64::SRegister(to.GetCode()), a64::SRegister(to.GetCode()), a64::SRegister(from.GetCode()));
+	armAsm->Fadd(a64::SRegister(to.GetCode()), a64::SRegister(mVUstepSource(mVU, to).GetCode()), a64::SRegister(from.GetCode()));
 	mVUclamp4(mVU, to, RQSCRATCH3, 0x8);
 }
 
 static void NEON_SUBSS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
 {
 	mVUclampStepOperands(mVU, to, from, preClamped, 0x8);
-	armAsm->Fsub(a64::SRegister(to.GetCode()), a64::SRegister(to.GetCode()), a64::SRegister(from.GetCode()));
+	armAsm->Fsub(a64::SRegister(to.GetCode()), a64::SRegister(mVUstepSource(mVU, to).GetCode()), a64::SRegister(from.GetCode()));
 	mVUclamp4(mVU, to, RQSCRATCH3, 0x8);
 }
 
 static void NEON_MULSS(mV, const a64::VRegister& to, const a64::VRegister& from, int preClamped = 0)
 {
 	mVUclampStepOperands(mVU, to, from, preClamped, 0x8);
-	armAsm->Fmul(a64::SRegister(to.GetCode()), a64::SRegister(to.GetCode()), a64::SRegister(from.GetCode()));
+	armAsm->Fmul(a64::SRegister(to.GetCode()), a64::SRegister(mVUstepSource(mVU, to).GetCode()), a64::SRegister(from.GetCode()));
 	mVUclamp4(mVU, to, RQSCRATCH3, 0x8);
 }
 
@@ -120,7 +132,7 @@ static void NEON_ADD2SS(mV, const a64::VRegister& to, const a64::VRegister& from
 	armAsm->Ins(from.V4S(), 0, gprT1.W());
 
 	armAsm->Bind(&case_end);
-	armAsm->Fadd(a64::SRegister(to.GetCode()), a64::SRegister(to.GetCode()), a64::SRegister(from.GetCode()));
+	armAsm->Fadd(a64::SRegister(to.GetCode()), a64::SRegister(mVUstepSource(mVU, to).GetCode()), a64::SRegister(from.GetCode()));
 }
 
 //------------------------------------------------------------------
@@ -443,7 +455,7 @@ static void mVU_FMACa(microVU& mVU, int recPass, int opCase, int opType, bool is
 		// the scalar .S() view: vixl's by-element emitter keys element size off
 		// vm's scalar format, and a V4S vm silently selects the half-precision
 		// opcode once Devel strips the VIXL_ASSERT.
-		if (bcLane >= 0)   armAsm->Fmul(Fs.V4S(), Fs.V4S(), Ft.S(), bcLane);
+		if (bcLane >= 0)   armAsm->Fmul(Fs.V4S(), mVUstepSource(mVU, Fs).V4S(), Ft.S(), bcLane);
 		else if (_XYZW_SS) NEON_SS[opType](mVU, Fs, Ft, 0);
 		else               NEON_PS[opType](mVU, Fs, Ft, 0);
 
@@ -506,7 +518,7 @@ static void mVU_FMACb(microVU& mVU, int recPass, int opCase, int opType, microOp
 		const bool prodClamped = (bcLane < 0) && !CHECK_VU_SIGN_OVERFLOW(mVU.index);
 
 		// Step 1: Multiply Fs * Ft
-		if (bcLane >= 0)   armAsm->Fmul(Fs.V4S(), Fs.V4S(), Ft.S(), bcLane); // AX-14 fold
+		if (bcLane >= 0)   armAsm->Fmul(Fs.V4S(), mVUstepSource(mVU, Fs).V4S(), Ft.S(), bcLane); // AX-14 fold
 		else if (_XYZW_SS) NEON_SS[2](mVU, Fs, Ft, 0);
 		else               NEON_PS[2](mVU, Fs, Ft, 0);
 
@@ -591,7 +603,7 @@ static void mVU_FMACc(microVU& mVU, int recPass, int opCase, microOpcode opEnum,
 		if (_XYZW_SS) { NEON_SS[2](mVU, Fs, Ft, 0); NEON_SS[0](mVU, Fs, ACC, prodClamped ? preClampTo : 0); }
 		else
 		{
-			if (bcLane >= 0) armAsm->Fmul(Fs.V4S(), Fs.V4S(), Ft.S(), bcLane); // AX-14 fold
+			if (bcLane >= 0) armAsm->Fmul(Fs.V4S(), mVUstepSource(mVU, Fs).V4S(), Ft.S(), bcLane); // AX-14 fold
 			else             NEON_PS[2](mVU, Fs, Ft, 0);
 			NEON_PS[0](mVU, Fs, ACC, prodClamped ? preClampTo : 0);
 		}
@@ -641,7 +653,7 @@ static void mVU_FMACd(microVU& mVU, int recPass, int opCase, microOpcode opEnum,
 		if (_XYZW_SS) { NEON_SS[2](mVU, Fs, Ft, 0); NEON_SS[1](mVU, Fd, Fs, prodClamped ? preClampFrom : 0); }
 		else
 		{
-			if (bcLane >= 0) armAsm->Fmul(Fs.V4S(), Fs.V4S(), Ft.S(), bcLane); // AX-14 fold
+			if (bcLane >= 0) armAsm->Fmul(Fs.V4S(), mVUstepSource(mVU, Fs).V4S(), Ft.S(), bcLane); // AX-14 fold
 			else             NEON_PS[2](mVU, Fs, Ft, 0);
 			NEON_PS[1](mVU, Fd, Fs, prodClamped ? preClampFrom : 0);
 		}

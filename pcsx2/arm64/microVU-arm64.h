@@ -118,7 +118,8 @@
 //  34 — mVU: the cycle-budget break is one shared stub (ARMSX2 5caa0c7d7b)
 //  35 — microVU: the full-width sign clamp reads the resident clamp bounds (ARMSX2 dda92c27a1)
 //  36 — mVU: a single-lane clone rotates straight out of the cached register (ARMSX2 b3ad0eb6b2)
-static constexpr u32 kMvuCompilerAbiVersion = 36;
+//  37 — mVU: the arithmetic step reads the register a clone was copied from (ARMSX2 b29cb14d7e)
+static constexpr u32 kMvuCompilerAbiVersion = 37;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
