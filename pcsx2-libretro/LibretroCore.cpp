@@ -369,6 +369,7 @@ bool LibretroHost::InitializeConfig()
 	EmuFolders::Resources = Path::Combine(s_system_dir, "resources");
 	EmuFolders::UserResources = EmuFolders::Resources;
 	EmuFolders::Settings = Path::Combine(s_system_dir, "inis");
+	EmuFolders::Cache = Path::Combine(s_system_dir, "cache"); // the VU program cache (vu_jit/) lives here
 
 	CrashHandler::SetWriteDirectory(EmuFolders::DataRoot);
 
@@ -647,6 +648,13 @@ void LibretroHost::RegisterCoreOptions()
 			"extra sync costs more than it saves. Applies on the fly.",
 			nullptr, "performance",
 			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
+		{"pcsx2_vu_aot", "VU1 Ahead-of-Time Compiler", nullptr,
+			"ARMSX2 vu-aot: VU1 programs that run often enough are recompiled whole, above microVU, "
+			"which stays the fallback at every block boundary. Compiles on a background thread and "
+			"keeps the code on disk (system/pcsx2/cache/vu_jit) for the next session. Applies at the "
+			"next settings reload.",
+			nullptr, "performance",
+			{{"disabled", "Disabled (Default)"}, {"enabled", nullptr}, {nullptr, nullptr}}, "disabled"},
 		{"pcsx2_iop_thread", "IOP Thread", nullptr,
 			"Runs the IOP (sound, disc, pad, arcade board I/O) on its own thread instead of inside the "
 			"EE's event test (ARMSX2). Lockstep: the two threads take strict turns, no concurrency in "
@@ -853,6 +861,8 @@ void LibretroHost::ReadCoreOptions(bool startup)
 		s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "iopThread", std::strcmp(iop, "disabled") != 0);
 		s_settings_interface.SetBoolValue("EmuCore/Speedhacks", "iopThreadLockstep", std::strcmp(iop, "lockstep") == 0);
 	}
+	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "EnableVUAot",
+		std::strcmp(get_option("pcsx2_vu_aot", "disabled"), "enabled") == 0);
 	s_settings_interface.SetBoolValue("EmuCore/CPU/Recompiler", "fpuGuardedAddSub",
 		std::strcmp(get_option("pcsx2_fpu_guarded_addsub", "enabled"), "enabled") == 0);
 	const bool perf_log_on = std::strcmp(get_option("pcsx2_perf_log", "disabled"), "enabled") == 0;
