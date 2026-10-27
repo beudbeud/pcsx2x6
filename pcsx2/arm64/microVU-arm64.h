@@ -111,7 +111,8 @@
 //  27 — mVU: block-start VF preloads load in pairs (ARMSX2 3c0e4b5faf)
 //  28 — mVU: a three-lane write keeps its own register (ARMSX2 9b13ef70c0)
 //  29 — mVU: the flag queue reorder opens with the shuffle that fits (ARMSX2 a9bb7f2ae0)
-static constexpr u32 kMvuCompilerAbiVersion = 29;
+//  30 — mVU: the single-lane clamp writes its lane once (ARMSX2 aa3b569316)
+static constexpr u32 kMvuCompilerAbiVersion = 30;
 
 // Hash/equality functors for XXH128_hash_t — let std::unordered_map<XXH128_hash_t, …>
 // work without a wrapping struct. low64 already carries the well-mixed half of
