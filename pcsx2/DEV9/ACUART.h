@@ -3,6 +3,8 @@
 #include "MemoryTypes.h"
 #include <memory>
 
+class StateWrapper;
+
 #define ACUART_BASE 0x12418000 // everything, both reg set and I/O is done in that little 0xFFF range
 #define IS_ACUART_RANGE(a) ((a & 0xFFFFF000) == ACUART_BASE)
 
@@ -10,6 +12,7 @@ namespace ACUART {
     bool SetupGameHandler(const std::string& S);
     u16 Read16(u32 addr);
     void Write16(u32 addr, u16 val);
+    bool DoState(StateWrapper& sw);
     extern std::unique_ptr<ACUARTDevice> s_device;
     extern u16 IER;
     extern u16 LCR;

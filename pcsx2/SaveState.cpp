@@ -577,6 +577,18 @@ public:
 	uint GetDataSize() const override { return sizeof(ACJV::coin); }
 };
 
+#include "DEV9/ACUART.h"
+class SavestateEntry_ACUART final : public BaseSavestateEntry
+{
+public:
+	~SavestateEntry_ACUART() override = default;
+
+	const char* GetFilename() const override { return "ACUART.bin"; }
+	bool FreezeIn(zip_file_t* zf) const override { return SysState_ComponentFreezeInNew(zf, "ACUART", &ACUART::DoState); }
+	bool FreezeOut(SaveStateBase& writer) const override { return SysState_ComponentFreezeOutNew(writer, "ACUART", 64, &ACUART::DoState); }
+	bool IsRequired() const override { return false; }
+};
+
 class SavestateEntry_HwRegs final : public MemorySavestateEntry
 {
 public:
@@ -736,6 +748,7 @@ static const std::unique_ptr<BaseSavestateEntry> SavestateEntries[] = {
 	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_ACRAM),
 	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_ACSRAM),
 	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_JVSSTATE),
+	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_ACUART),
 	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_HwRegs),
 	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_IopHwRegs),
 	std::unique_ptr<BaseSavestateEntry>(new SavestateEntry_Scratchpad),

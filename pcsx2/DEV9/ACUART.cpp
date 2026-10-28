@@ -2,6 +2,7 @@
 #include "ACUART.h"
 #include "ACJV.h"
 #include "ACCORE.h"
+#include "StateWrapper.h"
 #include "common/Console.h"
 #include <deque>
 #include <string>
@@ -85,7 +86,9 @@ u16 ACUART::Read16(u32 addr) {
 
 void ACUART::Write16(u32 addr, u16 val) {
 	const u32 reg = addr & 0xFFF;
-	
+	if (reg != 0x000)
+		ACUART_LOG("Write16 %03X=%04X", reg, val);
+
 	switch (reg) {
 	case 0x000: // THR or DLL
 		if (ACUART::LCR & 0x80)
@@ -120,3 +123,19 @@ void ACUART::Write16(u32 addr, u16 val) {
 	}
 }
 
+
+// The registers go in the savestate: a state loaded before the game's UART init (IER = 0) left RRV's
+// drive board silent -> MOTOR ERROR 20. A state from before this entry keeps the current registers.
+bool ACUART::DoState(StateWrapper& sw)
+{
+	if (!sw.DoMarker("ACUART"))
+		return true;
+	sw.Do(&IER);
+	sw.Do(&LCR);
+	sw.Do(&MCR);
+	sw.Do(&SCR);
+	sw.Do(&DLL);
+	sw.Do(&DLH);
+	sw.Do(&FCR_SHADOW);
+	return !sw.HasError();
+}
