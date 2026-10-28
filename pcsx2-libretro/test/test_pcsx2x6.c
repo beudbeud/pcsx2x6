@@ -48,6 +48,7 @@
  *   PCSX2X6_TEST_OPT_FILE   RetroArch .opt file (key = "value"), applied before OPTIONS
  *   PCSX2X6_TEST_STATE      RetroArch .state (#RZIPv1# and/or RASTATE, or raw)
  *   PCSX2X6_TEST_STATE_FRAME frame at which it is loaded (default 300)
+ *   PCSX2X6_TEST_SAVE       "frame:path" writes the core's raw state there (loadable as TEST_STATE)
  *   PCSX2X6_TEST_WINDOW     "a:b" frames of the STEADY window (default: 600 frames
  *                           after the state load to the end, else frames/4 to the end)
  *
@@ -73,7 +74,7 @@
 #define MAX_BUTTON_EVENTS 64
 #define MAX_JOYPAD_ID 16
 #define MAX_OPTIONS 128
-#define MAX_SHOTS 32
+#define MAX_SHOTS 1024
 
 struct ButtonEvent { int frame; unsigned id; };
 struct Option { char key[128]; char value[128]; };
@@ -107,6 +108,8 @@ static void (*core_unload_game)(void);
 static void (*core_run)(void);
 static void (*core_get_system_av_info)(struct retro_system_av_info *);
 static bool (*core_unserialize)(const void *, size_t);
+static size_t (*core_serialize_size)(void);
+static bool (*core_serialize)(void *, size_t);
 static void (*core_set_controller_port_device)(unsigned, unsigned);
 
 /* ------------------------------------------------------------------ capture */
@@ -466,6 +469,8 @@ int main(int argc, char **argv)
 	struct timespec t0, tNow, tLast, tWin0 = {0}, tWin1 = {0};
 	unsigned long lastFrames = 0, lastReport = 0;
 	int frames, stateFrame = 300, winStart, winEnd;
+	long saveFrame = -1;
+	const char *savePath = NULL;
 	unsigned char *stateFile = NULL, *stateRaw = NULL;
 	const unsigned char *statePayload = NULL;
 	size_t stateSize = 0;
@@ -522,6 +527,11 @@ int main(int argc, char **argv)
 			stateFrame = atoi(env);
 		fprintf(stderr, "[TEST] state: %zu byte payload, load at frame %d\n", stateSize, stateFrame);
 	}
+	if ((env = getenv("PCSX2X6_TEST_SAVE")) && *env && strchr(env, ':'))
+	{
+		saveFrame = atol(env);
+		savePath = strchr(env, ':') + 1;
+	}
 	winStart = statePayload ? stateFrame + 600 : frames / 4;
 	winEnd = frames;
 	if ((env = getenv("PCSX2X6_TEST_WINDOW")) && *env)
@@ -545,6 +555,8 @@ int main(int argc, char **argv)
 	SYM(run);
 	SYM(get_system_av_info);
 	SYM(unserialize);
+	SYM(serialize_size);
+	SYM(serialize);
 	SYM(set_controller_port_device);
 
 	core_set_environment(EnvironmentCb);
@@ -593,6 +605,19 @@ int main(int argc, char **argv)
 		}
 
 		core_run();
+
+		if (saveFrame >= 0 && (long)gFrames >= saveFrame)
+		{
+			const size_t n = core_serialize_size();
+			void *buf = malloc(n);
+			FILE *f = fopen(savePath, "wb");
+			const bool ok = buf && f && core_serialize(buf, n) && fwrite(buf, 1, n, f) == n;
+			if (f)
+				fclose(f);
+			free(buf);
+			fprintf(stderr, "[TEST] state save at frame %lu to %s: %s\n", gFrames, savePath, ok ? "ok" : "FAILED");
+			saveFrame = -1;
+		}
 
 		if (gFrames == lastFrames)
 			continue;
