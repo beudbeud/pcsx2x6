@@ -12,8 +12,6 @@ NM00001:
     halfPixelOffset: 2
     roundSprite: 1
     gpuPaletteConversion: 2
-    cpuSpriteRenderBW: 1
-    cpuSpriteRenderLevel: 1
     beforeDraw: OI_RidgeRacerV # Per-page in-place colour correction (~150 render passes per frame) replayed as one GPU pass.
   speedHacks:
     eeCycleSkip: 0
