@@ -176,7 +176,10 @@ private:
 	{
 		bool buggy_pbo              : 1; ///< Avoid PBOs and just use glTextureSubImage2D with immediate data
 		bool broken_blend_coherency : 1; ///< Issue on Nvidia GPUs where some blend modes don't seem to be properly coherent, see comment in RenderHW
+		bool upload_overtakes_draws : 1; ///< V3D: a texture upload can land before queued draws that sample the texture have run
 	} m_bugs;
+
+	u32 m_flush_epoch = 1; ///< Bumped by FlushBeforeUpload; a texture sampled in the current epoch has unsubmitted readers
 
 	bool m_disable_download_pbo = false;
 
@@ -363,6 +366,7 @@ public:
 	__fi u32 GetFBOWrite() const { return m_fbo_write; }
 	__fi GLStreamBuffer* GetTextureUploadBuffer() const { return m_texture_upload_buffer.get(); }
 	void CommitClear(GSTexture* t, bool use_write_fbo);
+	void FlushBeforeUpload(GSTextureOGL* t);
 
 	RenderAPI GetRenderAPI() const override;
 	bool HasSurface() const override;

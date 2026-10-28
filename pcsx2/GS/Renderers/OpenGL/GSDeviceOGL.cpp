@@ -939,6 +939,10 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.cpu_copy_image = renderer && std::strstr(renderer, "V3D");
 		if (m_features.cpu_copy_image)
 			Console.WriteLn("GL: V3D driver detected — copy-shaped StretchRects stay on the draw path.");
+		// RRV's car select flashed frames built from stale textures: an upload (PBO or direct) into a
+		// texture still sampled by queued, unsubmitted draws ran ahead of them. A glFlush before such
+		// an upload fixes it (glFinish per draw also did; Vulkan never showed it).
+		m_bugs.upload_overtakes_draws = m_features.cpu_copy_image;
 	}
 
 	m_features.provoking_vertex_last = true;
@@ -2660,11 +2664,23 @@ void GSDeviceOGL::IASetPrimitiveTopology(GLenum topology)
 	m_draw_topology = topology;
 }
 
+void GSDeviceOGL::FlushBeforeUpload(GSTextureOGL* t)
+{
+	// Only when a draw since the last flush sampled it: submitting those draws orders them before the write.
+	if (m_bugs.upload_overtakes_draws && t->m_sampled_epoch == m_flush_epoch)
+	{
+		glFlush();
+		m_flush_epoch++;
+	}
+}
+
 void GSDeviceOGL::PSSetShaderResource(int i, GSTexture* sr)
 {
 	pxAssert(i < static_cast<int>(std::size(GLState::tex_unit)));
 
 	const GLuint id = sr ?  static_cast<GSTextureOGL*>(sr)->GetID() : 0;
+	if (sr)
+		static_cast<GSTextureOGL*>(sr)->m_sampled_epoch = m_flush_epoch;
 	if (GLState::tex_unit[i] != id)
 	{
 		GLState::tex_unit[i] = id;

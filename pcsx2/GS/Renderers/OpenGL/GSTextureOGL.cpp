@@ -206,6 +206,7 @@ bool GSTextureOGL::Update(const GSVector4i& r, const void* data, int pitch, int 
 	// Data upload is rather small typically 64B or 1024B. So don't bother with PBO
 	// and directly send the data to the GL synchronously
 	GSDeviceOGL::GetInstance()->CommitClear(this, true);
+	GSDeviceOGL::GetInstance()->FlushBeforeUpload(this);
 
 	const u32 preferred_pitch = Common::AlignUpPow2(r.width() << m_int_shift, TEXTURE_UPLOAD_PITCH_ALIGNMENT);
 	const u32 map_size = r.height() * preferred_pitch;
@@ -309,6 +310,7 @@ void GSTextureOGL::Unmap()
 	if (m_type == Type::Texture || m_type == Type::RenderTarget)
 	{
 		GSDeviceOGL::GetInstance()->CommitClear(this, true);
+		GSDeviceOGL::GetInstance()->FlushBeforeUpload(this);
 
 		const u32 pitch = Common::AlignUpPow2(m_r_w << m_int_shift, TEXTURE_UPLOAD_PITCH_ALIGNMENT);
 		const u32 upload_size = pitch * m_r_h;

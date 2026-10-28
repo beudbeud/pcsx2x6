@@ -28,6 +28,8 @@ private:
 	u32 m_int_shift = 0;
 
 public:
+	u32 m_sampled_epoch = 0; // GSDeviceOGL::m_flush_epoch when a draw last sampled it
+
 	explicit GSTextureOGL(Type type, int width, int height, int levels, Format format);
 	~GSTextureOGL() override;
 
